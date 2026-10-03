@@ -1,14 +1,20 @@
 {
-  "name": "Cheese Thief",
-  "short_name": "Cheese Thief",
-  "description": "手機開房玩嘅秘密骰仔同角色牌",
+  "name": "桌遊盒",
+  "short_name": "桌遊盒",
+  "description": "手機變桌遊配件：開房、派牌、骰盅、計時、計分",
+  "lang": "zh-HK",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#14110c",
   "theme_color": "#14110c",
+  "categories": ["games"],
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

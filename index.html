@@ -6,276 +6,34 @@
 <meta name="theme-color" content="#14110c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="桌遊盒">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="Cheese Thief — 手機開房、秘密骰仔、私人角色牌">
-<title>🧀 Cheese Thief</title>
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="styles.css?v=202609190342">
+<meta name="description" content="桌遊盒 — 幾部手機變成一盒桌遊：開房、派牌、旁白、投票、計分">
+<title>🎲 桌遊盒</title>
+<link rel="manifest" href="manifest.webmanifest?v=1">
+<link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg?v=1">
+<link rel="stylesheet" href="css/base.css?v=1">
 </head>
 <body>
 
+<!-- Everything inside #app is built by js/main.js. This splash is what shows
+     while the modules download, and what is left if they never do. -->
 <div id="app">
-
-  <!-- ============ HOME ============ -->
-  <section class="screen" data-screen="home">
-    <div class="hero">
-      <div class="hero-cheese">🧀</div>
-      <h1>Cheese Thief</h1>
-      <p class="hero-sub">開個房，幾部手機一齊玩</p>
-    </div>
-
-    <div class="card">
-      <label class="field">
-        <span class="field-label">你個名</span>
-        <input id="home-name" type="text" maxlength="12" placeholder="例如：阿聰" autocomplete="nickname" enterkeyhint="done">
-      </label>
-    </div>
-
-    <div class="stack">
-      <button class="btn btn-primary btn-lg" id="btn-goto-create">
-        <span class="btn-icon">🏠</span> 創建房間
-      </button>
-      <button class="btn btn-ghost btn-lg" id="btn-goto-join">
-        <span class="btn-icon">🚪</span> 加入房間
-      </button>
-    </div>
-
-    <p class="fineprint">
-      唔使註冊、唔使裝 app。房主部手機就係 server —<br>玩緊嗰陣唔好熄屏或者切走個 browser。
-    </p>
-  </section>
-
-  <!-- ============ JOIN ============ -->
-  <section class="screen" data-screen="join">
-    <header class="topbar">
-      <button class="icon-btn" data-back="home" aria-label="返回">‹</button>
-      <h2>加入房間</h2>
-      <span class="spacer"></span>
-    </header>
-
-    <div class="card">
-      <span class="field-label">房間號碼 — 照住房主部機㩒</span>
-      <div class="code-frame" id="code-frame">
-        <div class="code-slots" id="code-slots" aria-label="已輸入嘅房間號碼"></div>
-      </div>
-      <div class="pad-hint" id="pad-hint">㩒下面啲骰仔 ↓</div>
-      <div class="dice-pad" id="dice-pad"></div>
-      <div class="pad-actions">
-        <button class="btn btn-ghost btn-sm" id="btn-code-back">⌫ 刪一粒</button>
-        <button class="btn btn-ghost btn-sm" id="btn-code-clear">✕ 清空</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <label class="field">
-        <span class="field-label">你個名</span>
-        <input id="join-name" type="text" maxlength="12" placeholder="例如：阿聰" autocomplete="nickname" enterkeyhint="go">
-      </label>
-    </div>
-
-    <button class="btn btn-primary btn-lg" id="btn-join">加入</button>
-    <p class="status" id="join-status"></p>
-  </section>
-
-  <!-- ============ CREATE ============ -->
-  <section class="screen" data-screen="create">
-    <header class="topbar">
-      <button class="icon-btn" data-back="home" aria-label="返回">‹</button>
-      <h2>創建房間</h2>
-      <span class="spacer"></span>
-    </header>
-
-    <div class="card">
-      <div class="field">
-        <span class="field-label">玩家人數</span>
-        <div class="stepper">
-          <button class="step-btn" id="pc-minus" aria-label="減少人數">−</button>
-          <output id="pc-value">5</output>
-          <button class="step-btn" id="pc-plus" aria-label="增加人數">+</button>
-        </div>
-      </div>
-
-      <label class="switch-row">
-        <span>
-          <strong>房主都要玩</strong>
-          <small>關咗嘅話房主做主持（法官），唔會攞角色牌</small>
-        </span>
-        <input type="checkbox" id="host-plays" checked>
-        <span class="switch"></span>
-      </label>
-      <p class="warn" id="hostplay-warn">
-        ⚠️ 房主部手機負責派牌，技術上開 devtools 可以偷睇全場角色。
-        自己friend玩梗係無所謂；要絕對公平就熄咗佢，房主淨係做主持。
-      </p>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h3>角色配置</h3>
-        <select id="preset-select" class="mini-select" aria-label="角色範本"></select>
-      </div>
-
-      <div id="role-list" class="role-list"></div>
-
-      <div class="role-total" id="role-total"></div>
-      <button class="btn btn-ghost btn-sm" id="btn-add-role">＋ 加一個角色</button>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h3>骰仔</h3></div>
-      <div class="field-row">
-        <label class="field flex1">
-          <span class="field-label">粒數</span>
-          <select id="dice-count" class="sel"></select>
-        </label>
-        <label class="field flex1">
-          <span class="field-label">面數</span>
-          <select id="dice-sides" class="sel"></select>
-        </label>
-      </div>
-      <label class="switch-row">
-        <span>
-          <strong>玩家可以自己搖骰</strong>
-          <small>關咗就淨係房主可以叫全體搖骰</small>
-        </span>
-        <input type="checkbox" id="dice-self" checked>
-        <span class="switch"></span>
-      </label>
-    </div>
-
-    <button class="btn btn-primary btn-lg" id="btn-create">開房 🧀</button>
-    <p class="status" id="create-status"></p>
-  </section>
-
-  <!-- ============ LOBBY ============ -->
-  <section class="screen" data-screen="lobby">
-    <header class="topbar">
-      <button class="icon-btn" id="btn-leave-lobby" aria-label="離開">‹</button>
-      <h2>等緊人入房</h2>
-      <button class="icon-btn sound-btn" aria-label="聲效開關">🔊</button>
-    </header>
-
-    <div class="card code-card">
-      <span class="field-label">房間號碼 — 講俾朋友聽</span>
-      <div class="big-code" id="lobby-code"></div>
-      <div class="code-actions">
-        <button class="btn btn-ghost btn-sm" id="btn-copy-link">📋 複製連結</button>
-        <button class="btn btn-ghost btn-sm" id="btn-toggle-qr">📱 QR Code</button>
-      </div>
-      <div class="qr-wrap hidden" id="qr-wrap"><div id="qr-canvas"></div></div>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h3>玩家</h3>
-        <span class="pill" id="lobby-count">0 / 0</span>
-      </div>
-      <ul class="player-list" id="lobby-players"></ul>
-    </div>
-
-    <div class="card" id="lobby-setup-summary"></div>
-
-    <button class="btn btn-primary btn-lg host-only" id="btn-start">開始遊戲</button>
-    <p class="status" id="lobby-status"></p>
-  </section>
-
-  <!-- ============ GAME ============ -->
-  <section class="screen" data-screen="game">
-    <header class="topbar">
-      <button class="icon-btn" id="btn-leave-game" aria-label="離開">‹</button>
-      <h2>第 <span id="game-round">1</span> 回合</h2>
-      <button class="icon-btn sound-btn" aria-label="聲效開關">🔊</button>
-      <span class="pill" id="game-code"></span>
-    </header>
-
-    <!-- dice cup sits above the role card: you shake it far more often -->
-    <div class="card" id="dice-card">
-      <div class="card-head"><h3>骰盅</h3><small class="hint" id="dice-hint">㩒住掀起個盅</small></div>
-      <div class="cover-card dice-cover" id="dice-cover" role="button" tabindex="0" aria-label="㩒住睇骰仔">
-        <div class="cover-face cover-back">
-          <svg class="cup-art" viewBox="0 0 120 108" aria-hidden="true">
-            <defs>
-              <linearGradient id="cupBody" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0"    stop-color="#5c341a"/>
-                <stop offset="0.30" stop-color="#b0702f"/>
-                <stop offset="0.58" stop-color="#8a5223"/>
-                <stop offset="1"    stop-color="#4e2c15"/>
-              </linearGradient>
-            </defs>
-            <ellipse cx="60" cy="97" rx="40" ry="7" fill="rgba(0,0,0,.25)"/>
-            <path d="M42 16 h36 l14 72 h-64 z" fill="url(#cupBody)"/>
-            <ellipse cx="60" cy="16" rx="18" ry="6" fill="#c9853f"/>
-            <ellipse cx="60" cy="16" rx="11" ry="3.4" fill="#7a4720"/>
-            <rect x="33" y="58" width="54" height="7" fill="rgba(0,0,0,.18)"/>
-            <ellipse cx="60" cy="90" rx="32" ry="9" fill="#341d0e"/>
-            <ellipse cx="60" cy="87" rx="32" ry="9" fill="#b0702f"/>
-          </svg>
-          <span>㩒住掀起</span>
-        </div>
-        <div class="cover-face cover-front">
-          <div class="dice-row" id="dice-row"></div>
-          <div class="dice-sum" id="dice-sum"></div>
-        </div>
-      </div>
-      <div class="grid2 tight">
-        <button class="btn btn-ghost" id="btn-roll">🎲 搖我嘅骰</button>
-        <button class="btn btn-ghost" id="btn-lock-dice">🔓 鎖定骰盅</button>
-      </div>
-      <button class="btn btn-ghost btn-shake hidden" id="btn-shake">📳 開啟搖骰</button>
-      <p class="shake-note" id="shake-note"></p>
-    </div>
-
-    <!-- my role card -->
-    <div class="card" id="my-role-card">
-      <div class="card-head"><h3>我嘅角色牌</h3><small class="hint">㩒住先睇到，放手即刻冚返</small></div>
-      <div class="cover-card" id="role-cover" role="button" tabindex="0" aria-label="㩒住睇角色">
-        <div class="cover-face cover-back">
-          <div class="cover-back-art">🧀</div>
-          <span>㩒住睇</span>
-        </div>
-        <div class="cover-face cover-front" id="role-front">
-          <div class="role-emoji" id="role-emoji">?</div>
-          <div class="role-name" id="role-name">未派牌</div>
-          <div class="role-desc" id="role-desc"></div>
-        </div>
-      </div>
-      <button class="btn btn-ghost" id="btn-lock-role">🔓 鎖定角色牌</button>
-    </div>
-
-    <!-- players -->
-    <div class="card">
-      <div class="card-head"><h3>場上玩家</h3><span class="pill" id="game-count">0</span></div>
-      <ul class="player-list" id="game-players"></ul>
-    </div>
-
-    <!-- host controls -->
-    <div class="card host-only" id="host-panel">
-      <div class="card-head"><h3>主持控制</h3></div>
-      <div class="grid2">
-        <button class="btn btn-ghost" id="btn-deal">🃏 重新派牌</button>
-        <button class="btn btn-ghost" id="btn-roll-all">🎲 全體搖骰</button>
-        <button class="btn btn-ghost" id="btn-unlock-dice">🔓 解鎖骰盅</button>
-        <button class="btn btn-ghost" id="btn-reveal-dice">👁 開晒啲骰</button>
-      </div>
-      <button class="btn btn-danger" id="btn-reveal-roles">🔓 開晒角色</button>
-      <button class="btn btn-primary" id="btn-next-round">➡️ 下一回合（重新派牌）</button>
-    </div>
-
-    <!-- log -->
-    <div class="card">
-      <div class="card-head"><h3>記錄</h3></div>
-      <ul class="log" id="game-log"></ul>
-    </div>
-  </section>
-
+  <div class="boot" id="boot">
+    <div class="boot-emoji">🎲</div>
+    <div>桌遊盒載入緊…</div>
+  </div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<div class="netbar hidden" id="netbar"></div>
+<div class="netbar hidden" id="netbar" role="alert"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script type="module" src="js/app.js?v=202609190342"></script>
+<!-- PeerJS signalling client (multi-phone rooms). async, so a slow or blocked CDN
+     never delays the first paint or one-phone play; the shell waits for it
+     (sh.whenPeer) only when someone taps 開房 / 入房. -->
+<script id="peerjs" src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js" async
+        onload="this.dataset.s='ok'" onerror="this.dataset.s='fail'"></script>
+<script type="module" src="js/main.js?v=1"></script>
 </body>
 </html>

@@ -1,0 +1,151 @@
+/* ============================================================
+   芝士大盜 — game styles. Everything is prefixed .ct- and leans on the
+   shared tokens in css/base.css (--surface, --line, --accent …).
+
+   Night layout rule: every phone draws the SAME boxes at every night step
+   (header, info card, seat grid, one big button). The card and the button
+   have fixed minimum sizes so a sleeper's decoy and an awake player's live
+   screen are the same shape.
+   ============================================================ */
+
+.ct { display: block; }
+.ct-screen { display: flex; flex-direction: column; gap: .75rem; }
+.ct.is-paused .ct-screen { opacity: .55; pointer-events: none; }
+
+.ct-lead { margin: 0; font-size: .875rem; line-height: 1.7; color: var(--text-dim); text-align: center; }
+.ct-lead.strong { color: var(--text); font-weight: 700; font-size: 1rem; }
+.ct-count { margin: 0; text-align: center; font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ct-h { margin: 0 0 .5rem; font-size: .9375rem; }
+
+.ct-banner {
+  text-align: center; font-size: 1.125rem; font-weight: 800; padding: .875rem 1rem;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(245,197,24,.2), rgba(245,197,24,.06));
+  border: 1px solid rgba(245,197,24,.35); color: var(--cheese-2);
+}
+.ct-banner.big { font-size: 1.5rem; padding: 1.125rem 1rem; }
+.ct-over.won .ct-banner { background: linear-gradient(180deg, rgba(78,201,122,.28), rgba(78,201,122,.08)); border-color: rgba(78,201,122,.5); color: #8fe3ad; }
+
+.ct-badge {
+  text-align: center; font-size: .8125rem; font-weight: 600; line-height: 1.6;
+  padding: .625rem .875rem; border-radius: var(--radius);
+  background: rgba(228,87,61,.12); border: 1px solid rgba(228,87,61,.4); color: #ffb3a1;
+}
+
+/* ---------- roll ---------- */
+
+.ct-choose { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: .875rem; }
+.ct-choose-hint { margin: 0 0 .625rem; font-size: .8125rem; color: var(--text-dim); line-height: 1.6; text-align: center; }
+
+.ct-tip { font-size: .8125rem; color: var(--text-dim); background: var(--bg-2); border-radius: var(--radius); padding: .625rem .875rem; }
+.ct-tip summary { cursor: pointer; font-weight: 600; color: var(--text); }
+.ct-tip p { margin: .5rem 0 0; line-height: 1.7; }
+
+/* ---------- night ---------- */
+
+.ct-night { gap: .625rem; min-height: calc(100dvh - 8.5rem); -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.ct-n-head { display: flex; align-items: center; justify-content: center; gap: .625rem; padding-top: .25rem; }
+.ct-n-icon { font-size: 1.75rem; line-height: 1; }
+.ct-n-title { font-size: 1.5rem; letter-spacing: .12em; }
+
+.ct-bar { height: .375rem; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.ct-bar i { display: block; height: 100%; width: 100%; background: var(--accent, var(--cheese)); transform-origin: left center; transform: scaleX(1); }
+.ct-bar.is-wait i { opacity: .35; animation: ct-pulse 1.6s ease-in-out infinite; }
+@keyframes ct-pulse { 0%, 100% { opacity: .15; } 50% { opacity: .5; } }
+
+.ct-panel {
+  min-height: 10.5rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  padding: .875rem 1rem;
+  display: flex; flex-direction: column; gap: .5rem;
+}
+.ct-night.is-awake .ct-panel { border-color: rgba(245,197,24,.45); }
+.ct-lines { display: flex; flex-direction: column; gap: .375rem; }
+.ct-line { margin: 0; font-size: .875rem; line-height: 1.6; }
+.ct-line.head { font-size: 1.125rem; font-weight: 800; }
+.ct-line.sub, .ct-line.note { color: var(--text-dim); font-size: .8125rem; }
+.ct-line.with { color: var(--text); }
+.ct-line.cheese { color: var(--cheese-2); }
+.ct-line.cheese.hot { color: #ffb3a1; font-weight: 700; }
+.ct-line.role { color: #bfe9cf; background: rgba(78,201,122,.08); border-radius: .625rem; padding: .5rem .625rem; }
+
+.ct-peekwrap .c-cover { aspect-ratio: 3 / 1; margin-bottom: 0; }
+.ct-peekfront { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem; height: 100%; padding: .25rem; }
+.ct-peekfront .die { width: 2.5rem; height: 2.5rem; border-radius: .625rem; font-size: 1.25rem; padding: .3125rem; }
+.ct-peeklabel { font-size: .8125rem; font-weight: 700; color: var(--cheese-2); }
+
+.ct-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; align-content: start; }
+.ct-chip {
+  display: flex; align-items: center; gap: .5rem; min-height: 2.75rem;
+  padding: .375rem .75rem; border-radius: .75rem;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text-dim);
+  font-size: .875rem; font-family: inherit; cursor: pointer; text-align: left;
+}
+.ct-chip .dot { background: var(--seat, var(--cheese)); }
+.ct-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-chip[disabled] { opacity: .5; cursor: default; }
+.ct-chip.live { color: var(--text); border-color: rgba(245,197,24,.4); opacity: 1; }
+.ct-chip.on { background: rgba(245,197,24,.18); border-color: var(--cheese); color: var(--cheese-2); font-weight: 700; }
+
+.ct-ack {
+  flex: 1; min-height: 7.5rem;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem;
+  border-radius: var(--radius-lg); border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--text); font-family: inherit;
+  cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none;
+  padding: .75rem 1rem; text-align: center;
+}
+.ct-ack:active { transform: scale(.985); background: var(--surface); }
+.ct-ack-main { font-size: 1.375rem; font-weight: 800; }
+.ct-ack-sub { font-size: .75rem; color: var(--text-dim); line-height: 1.5; }
+.ct-ack.is-done { border-color: rgba(78,201,122,.35); }
+.ct-ack.is-action { background: linear-gradient(180deg, var(--cheese-2), var(--cheese)); border-color: var(--cheese-dk); color: #1a1508; }
+.ct-ack.is-action .ct-ack-sub { color: rgba(26,21,8,.7); }
+.ct-help { margin: 0; text-align: center; font-size: .6875rem; color: var(--text-dim); line-height: 1.6; }
+
+/* ---------- day / reveal / over ---------- */
+
+.ct-recapwrap { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: .875rem; }
+.ct-recapwrap .c-cover { aspect-ratio: 5 / 3; margin-bottom: 0; }
+.ct-recap { width: 100%; height: 100%; overflow: auto; padding: .625rem .75rem; font-size: .8125rem; line-height: 1.65; }
+.ct-recap ul { margin: 0; padding-left: 1.125rem; display: flex; flex-direction: column; gap: .375rem; }
+
+.ct-revealed { display: flex; flex-wrap: wrap; gap: .625rem; justify-content: center; }
+.ct-rcard {
+  min-width: 8rem; text-align: center; padding: .875rem 1rem; border-radius: var(--radius-lg);
+  background: var(--surface); border: 2px solid var(--line);
+}
+.ct-rcard.role-thief { border-color: var(--danger); background: rgba(228,87,61,.12); }
+.ct-rcard.role-sleepyhead { border-color: var(--ok); background: rgba(78,201,122,.1); }
+.ct-rcard.role-fall-mouse { border-color: #c084fc; background: rgba(192,132,252,.12); }
+.ct-rcard-name { font-size: .875rem; color: var(--text-dim); }
+.ct-rcard-role { font-size: 1.25rem; font-weight: 800; margin-top: .25rem; }
+
+.ct-debrief { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .375rem; }
+.ct-debrief li {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  background: var(--bg-2); border-radius: .75rem; padding: .5625rem .75rem; font-size: .8125rem;
+}
+.ct-debrief li.is-thief { border: 1px solid rgba(228,87,61,.5); }
+.ct-debrief .nm { font-weight: 700; flex: 1; min-width: 5rem; }
+.ct-debrief .rl { color: var(--text-dim); }
+.ct-debrief .dice-mini { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+.ct-table-title { margin: .5rem 0 0; text-align: center; font-size: 1.5rem; }
+.ct-table .ct-lead { font-size: 1rem; }
+.ct-timer { display: block; }
+
+/* ---------- compact covers: card + cup + ready must fit one phone screen ---------- */
+
+.ct-roll .c-rolecard .c-cover, .ct-day .c-rolecard .c-cover { aspect-ratio: 16 / 9; margin-bottom: .5rem; }
+.ct-roll .c-dicecup .c-cover, .ct-day .c-dicecup .c-cover { aspect-ratio: 2.2 / 1; margin-bottom: .5rem; }
+.ct-roll .c-rolecard-front .role-desc, .ct-day .c-rolecard-front .role-desc { -webkit-line-clamp: 4; font-size: .75rem; }
+.ct-roll .c-rolecard-front .role-emoji, .ct-day .c-rolecard-front .role-emoji { font-size: 2.25rem; }
+
+.ct-roll .dice-sum, .ct-day .dice-sum { display: none; }
+
+/* the day screen is long: keep the clock modest and the recap short so 夠鐘投票 stays near the top */
+.ct-day .ct-banner { padding: .625rem .875rem; font-size: 1rem; }
+.ct-day .c-timer { padding: 0; }
+.ct-day .c-timer-clock { font-size: 2.25rem; line-height: 1.1; }
+.ct-recapwrap .c-cover { aspect-ratio: 2.4 / 1; }

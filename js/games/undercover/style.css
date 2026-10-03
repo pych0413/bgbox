@@ -1,0 +1,135 @@
+/* ============================================================
+   誰是臥底 — game screens. Everything is namespaced .uc-*; the shared
+   look (buttons, cards, tokens, --accent) comes from css/base.css.
+   ============================================================ */
+
+.uc { display: grid; gap: .75rem; }
+
+/* ---------- header: role counts + who is still in ---------- */
+.uc-counts {
+  margin: 0; text-align: center; color: var(--text-dim); font-size: .8125rem; letter-spacing: .02em;
+}
+.uc-seats { display: flex; flex-wrap: wrap; gap: .375rem; justify-content: center; }
+.uc-seat {
+  display: inline-flex; align-items: center; gap: .375rem;
+  padding: .25rem .625rem .25rem .5rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface);
+  font-size: .8125rem; line-height: 1.3; transition: border-color .15s, opacity .15s, box-shadow .15s;
+}
+.uc-seat .uc-dot { width: .625rem; height: .625rem; }
+.uc-seat em { font-style: normal; font-size: .9375rem; }
+.uc-seat.is-me { border-color: var(--text-dim); }
+.uc-seat.is-spoke { opacity: .55; }
+.uc-seat.is-turn {
+  opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 .1875rem color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.uc-seat.is-out { opacity: .5; }
+.uc-seat.is-out > span { text-decoration: line-through; text-decoration-color: var(--text-dim); }
+
+.uc-dot {
+  flex: none; display: inline-block; width: .75rem; height: .75rem; border-radius: 50%;
+  background: var(--seat, var(--accent));
+}
+
+/* ---------- screens ---------- */
+.uc-screen {
+  display: grid; gap: .75rem; padding: 1rem; margin: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  animation: uc-in .18s ease-out;
+}
+@keyframes uc-in { from { opacity: 0; transform: translateY(.375rem); } to { opacity: 1; transform: none; } }
+
+.uc-title { margin: 0; font-size: 1.25rem; font-weight: 800; text-align: center; }
+.uc-lead { margin: 0; text-align: center; line-height: 1.55; }
+.uc-sub { margin: 0; text-align: center; color: var(--text-dim); font-size: .875rem; }
+.uc-note { margin: 0; text-align: center; color: var(--text-dim); font-size: .8125rem; line-height: 1.5; }
+.uc-status { margin: 0; text-align: center; color: var(--text-dim); font-size: .8125rem; }
+.uc-done { margin: 0; text-align: center; color: var(--ok); font-weight: 700; }
+.uc-action { display: grid; gap: .5rem; }
+.uc-action:empty { display: none; }
+.uc-cardslot { display: grid; justify-items: center; }
+.uc-timer { display: grid; justify-items: center; }
+.uc .c-timer { padding: 0; }
+.uc .c-timer-clock { font-size: 2rem; line-height: 1.1; }
+.uc-panel { min-width: 0; }
+
+/* ---------- speaking ---------- */
+.uc-who {
+  display: flex; align-items: center; justify-content: center; gap: .625rem;
+  padding: 1rem .75rem; border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); border: 1px solid var(--line);
+  font-size: 1.5rem; line-height: 1.2; text-align: center;
+}
+.uc-who .uc-dot { width: 1rem; height: 1rem; }
+.uc-who.is-me { border-color: var(--accent); animation: uc-pulse 1.4s ease-in-out infinite; }
+@keyframes uc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 .5rem transparent; }
+}
+
+.uc-order { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; counter-reset: uc; }
+.uc-order-item {
+  counter-increment: uc; display: flex; align-items: center; gap: .5rem;
+  padding: .375rem .625rem; border-radius: var(--radius); background: var(--bg-2); border: 1px solid transparent;
+  font-size: .9375rem;
+}
+.uc-order-item::before { content: counter(uc); width: 1.25rem; text-align: center; color: var(--text-dim); font-size: .75rem; }
+.uc-order-name { flex: 1; }
+.uc-order-item.is-done { opacity: .5; }
+.uc-order-item.is-now { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg-2)); font-weight: 700; }
+.uc-order-item.is-me .uc-order-name::after { content: '（你）'; color: var(--text-dim); font-weight: 400; font-size: .75rem; }
+.uc-order-tick { color: var(--ok); }
+
+/* ---------- result of the vote ---------- */
+.uc-verdict { display: grid; gap: .5rem; justify-items: center; }
+.uc-out { display: flex; align-items: center; gap: .5rem; font-size: 1.25rem; text-align: center; }
+.uc-role {
+  display: inline-flex; align-items: center; gap: .25rem; padding: .1875rem .625rem; border-radius: 999px;
+  font-size: .875rem; font-weight: 700; border: 1px solid var(--line); background: var(--bg-2);
+}
+.uc-role-civilian { color: #8fe3ae; border-color: rgba(78, 201, 122, .5); }
+.uc-role-undercover { color: #ff9b86; border-color: rgba(228, 87, 61, .55); }
+.uc-role-blank { color: var(--text); border-color: var(--text-dim); }
+.uc-role-hidden { color: var(--text-dim); font-weight: 500; }
+
+.uc-guess { display: grid; gap: .625rem; }
+/* .uc prefix: base.css styles input[type=text] with higher specificity; 16px+ keeps iOS from zooming */
+.uc .uc-guess-input {
+  width: 100%; height: 3.5rem; padding: 0 .875rem; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font-family: inherit; font-size: max(16px, 1.25rem); text-align: center;
+}
+.uc .uc-guess-input:focus { outline: none; border-color: var(--accent); }
+.uc-guess-result { margin: 0; text-align: center; font-size: 1.375rem; font-weight: 800; }
+.uc-guess-result.is-right { color: var(--ok); }
+.uc-guess-result.is-wrong { color: var(--danger); }
+
+/* ---------- game over ---------- */
+.uc-banner { margin: 0; text-align: center; font-size: 1.625rem; font-weight: 800; }
+.uc-banner.is-civ { color: #8fe3ae; }
+.uc-banner.is-inf { color: #ff9b86; }
+.uc-words { display: flex; gap: .625rem; justify-content: center; flex-wrap: wrap; }
+.uc-word-pill {
+  display: grid; justify-items: center; gap: .125rem; min-width: 7rem; padding: .625rem 1rem;
+  border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line);
+}
+.uc-word-pill small { color: var(--text-dim); font-size: .75rem; }
+.uc-word-pill strong { font-size: 1.375rem; }
+.uc-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+.uc-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: .125rem .5rem; align-items: center;
+  padding: .5rem .625rem; border-radius: var(--radius); background: var(--bg-2); border: 1px solid transparent;
+}
+.uc-row.is-me { border-color: var(--text-dim); }
+.uc-row-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.uc-row-word { grid-column: 1 / 3; color: var(--text-dim); font-size: .8125rem; padding-left: 1.25rem; }
+.uc-row-out { grid-column: 3; justify-self: end; color: var(--text-dim); font-size: .75rem; }
+.uc-row.is-out .uc-row-name { opacity: .75; }
+
+/* ---------- 睇返我個詞 ---------- */
+.uc-word { display: grid; gap: .625rem; justify-items: center; }
+.uc-wordtoggle { width: 100%; }
+.uc-wordinner { width: 100%; display: grid; justify-items: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .uc-screen, .uc-who.is-me { animation: none; }
+}

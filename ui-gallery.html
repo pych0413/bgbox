@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14110c">
+<title>🧩 UI Gallery</title>
+<link rel="stylesheet" href="css/base.css?v=1">
+<style>
+  /* gallery-only chrome */
+  .g-note { color: var(--text-dim); font-size: .75rem; margin: 0 0 .75rem; }
+  .g-log { font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--text-dim); background: var(--bg-2); border-radius: .5rem; padding: .5rem .625rem; margin-top: .75rem; max-height: 7rem; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .g-row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+  .g-row .btn { width: auto; flex: 1; min-width: 7rem; }
+  .g-nav { display: flex; flex-wrap: wrap; gap: .375rem; margin-bottom: 1rem; }
+  .g-nav a { font-size: .75rem; padding: .25rem .625rem; border-radius: 99px; background: var(--surface-2); color: var(--text-dim); text-decoration: none; }
+  h1.g-title { font-size: 1.375rem; margin: 0 0 .5rem; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1 class="g-title">🧩 UI Gallery</h1>
+  <p class="g-note">Every shared component with sample props. Dev page only — not linked from the app. Open on a phone for the real feel.</p>
+  <nav class="g-nav" id="nav"></nav>
+  <div id="sections"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module">
+import { el, dieFace, toast } from './js/ui/dom.js?v=1';
+import {
+  Cover, RoleCard, DiceCup, PlayerPicker, VotePanel, Timer, Canvas, RulesSheet, NarratorBar,
+  PassGate, SeatEditor, Scoreboard, ConfigForm,
+} from './js/ui/components/index.js?v=1';
+import { setMuted, isMuted, primeAudio } from './js/core/sfx.js?v=1';
+
+const sections = document.getElementById('sections');
+const nav = document.getElementById('nav');
+
+/** A titled card; returns { body, log(text) }. */
+function section(id, title, note) {
+  const logBox = el('div', { class: 'g-log', text: '(events appear here)' });
+  let lines = [];
+  const body = el('div');
+  const card = el('div', { class: 'card', id }, el('div', { class: 'card-head' }, el('h3', { text: title })),
+    note ? el('p', { class: 'g-note', text: note }) : null, body, logBox);
+  sections.append(card);
+  nav.append(el('a', { href: `#${id}`, text: title }));
+  return {
+    body,
+    log(text) {
+      lines = [`${new Date().toLocaleTimeString('en-GB')} ${text}`, ...lines].slice(0, 8);
+      logBox.textContent = lines.join('\n');
+    },
+  };
+}
+const btn = (label, fn, cls = 'btn btn-ghost') => el('button', { class: cls, type: 'button', onclick: fn }, label);
+
+// ---------- sample data ----------
+const COLORS = ['#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6'];
+const NAMES = ['阿明', '阿聰', '小美', '大熊', 'Kelly', '阿B'];
+let players = NAMES.map((name, i) => ({
+  id: `p${i + 1}`, name, seat: i, color: COLORS[i], connected: i !== 4, isHost: i === 0, spectator: false,
+}));
+
+// ---------- sound ----------
+{
+  const s = section('sound', '🔊 Sound', 'Web Audio needs one real tap first.');
+  const b = btn(isMuted() ? '🔇 muted' : '🔊 on', () => {
+    setMuted(!isMuted());
+    primeAudio();
+    b.textContent = isMuted() ? '🔇 muted' : '🔊 on';
+  });
+  s.body.append(b);
+}
+
+// ---------- dom helpers ----------
+{
+  const s = section('dice', '🎲 dieFace', 'dieFace(value, sides)');
+  s.body.append(
+    el('div', { class: 'dice-row' }, [1, 2, 3, 4, 5, 6].map((v) => dieFace(v))),
+    el('div', { class: 'dice-row', style: { marginTop: '.75rem' } }, [dieFace(13, 20), dieFace(7, 8), dieFace(4, 4)]));
+}
+
+// ---------- Cover ----------
+{
+  const s = section('cover', 'Cover', 'Hold to peek. The lock toggle shows both lock modes.');
+  let locked = false;
+  let mode = 'peek';
+  const front = el('div', {}, el('div', { class: 'role-emoji', text: '🕵️' }), el('div', { class: 'role-name', text: '臥底' }));
+  const c = Cover({ front, backArt: '🧀', backLabel: '㩒住睇', onOpen: (o) => s.log(`onOpen(${o})`) });
+  const paint = () => c.update({ front, backArt: '🧀', backLabel: '㩒住睇', lockMode: mode, locked, onOpen: (o) => s.log(`onOpen(${o})`) });
+  paint();
+  s.body.append(c.el, el('div', { class: 'g-row' },
+    btn('toggle locked', () => { locked = !locked; paint(); s.log(`locked=${locked}`); }),
+    btn('lockMode: peek / none', (e) => { mode = mode === 'peek' ? 'none' : 'peek'; paint(); e.target.textContent = `lockMode: ${mode}`; })));
+}
+
+// ---------- RoleCard ----------
+{
+  const s = section('rolecard', 'RoleCard');
+  const roles = [
+    { emoji: '🐺', name: '狼人', team: 'wolf', text: '夜晚同拍檔一齊殺一個人，白天扮好人。' },
+    { emoji: '🔮', name: '預言家', team: 'good', text: '每晚查一個人嘅身份。' },
+    { emoji: '🦝', name: '強盜', team: 'neutral', text: '夜晚同另一個人換牌，再睇自己新身份。' },
+    null,
+  ];
+  let i = 0;
+  let locked = false;
+  const rc = RoleCard({});
+  const paint = () => rc.update({
+    role: roles[i], locked, hint: undefined,
+    onLockToggle: () => { locked = !locked; paint(); s.log(`onLockToggle → locked=${locked}`); },
+    onOpen: (o) => s.log(`onOpen(${o})`),
+  });
+  paint();
+  s.body.append(rc.el, el('div', { class: 'g-row' }, btn('next role', () => { i = (i + 1) % roles.length; paint(); })));
+}
+
+// ---------- DiceCup ----------
+{
+  const s = section('dicecup', 'DiceCup', 'Roll button + shake (phone) + lock. "host rolls for me" bumps rollSeq without a local tap, which should chime.');
+  let dice = null, seq = 0, lockedRoll = false, sides = 6, count = 1;
+  const roll = () => Array.from({ length: count }, () => 1 + Math.floor(Math.random() * sides));
+  const cup = DiceCup({});
+  const paint = () => cup.update({
+    dice, sides, rollSeq: seq, canRoll: true, lockedRoll, shakeToRoll: true,
+    onRoll: () => { dice = roll(); seq++; paint(); s.log(`onRoll → [${dice}] seq=${seq}`); },
+    onLock: () => { lockedRoll = true; paint(); s.log('onLock'); },
+  });
+  paint();
+  s.body.append(cup.el, el('div', { class: 'g-row' },
+    btn('host rolls for me', () => { dice = roll(); seq++; paint(); s.log(`remote roll seq=${seq}`); }),
+    btn('host unlocks', () => { lockedRoll = false; paint(); }),
+    btn('2 × d20', () => { count = 2; sides = 20; dice = null; paint(); }),
+    btn('1 × d6', () => { count = 1; sides = 6; dice = null; paint(); })));
+}
+
+// ---------- PlayerPicker ----------
+{
+  const s = section('picker', 'PlayerPicker', 'Pick 1, then pick 2 (阿B excluded, you are 阿聰).');
+  const mk = (count, exclude) => {
+    let selected = [];
+    const pk = PlayerPicker({});
+    const paint = () => pk.update({
+      players, me: 'p2', count, exclude, selected, confirmLabel: `確定（${count}）`,
+      onChange: (sel) => { selected = sel; s.log(`onChange ${JSON.stringify(sel)}`); },
+      onConfirm: (sel) => s.log(`onConfirm ${JSON.stringify(sel)}`),
+    });
+    paint();
+    return pk.el;
+  };
+  s.body.append(mk(1, []), el('hr', { style: { border: 0, borderTop: '1px solid var(--line)', margin: '1rem 0' } }), mk(2, ['p6']));
+}
+
+// ---------- VotePanel ----------
+{
+  const s = section('vote', 'VotePanel', 'Secret vote → reveal.');
+  let myVote, done = 2, reveal = null;
+  const vp = VotePanel({});
+  const paint = () => vp.update({
+    players, candidates: players.map((p) => p.id), me: 'p1', myVote, allowAbstain: true,
+    progress: { done, total: players.length }, reveal,
+    onVote: (v) => { myVote = v; done = Math.min(players.length, done + 1); paint(); s.log(`onVote(${v})`); },
+  });
+  paint();
+  s.body.append(vp.el, el('div', { class: 'g-row' },
+    btn('reveal', () => {
+      reveal = { counts: { p3: 3, p2: 2, p5: 1 }, top: ['p3'], votes: { p1: 'p3', p2: 'p5', p3: 'p2', p4: 'p3', p5: 'p2', p6: 'p3' } };
+      paint();
+    }),
+    btn('reset', () => { myVote = undefined; done = 2; reveal = null; paint(); })));
+}
+
+// ---------- Timer ----------
+{
+  const s = section('timer', 'Timer', 'Warnings at 60 s and 10 s, ticks in the last 5 s, a chime at zero. Pause freezes the display.');
+  let deadline = Date.now() + 15 * 1000, paused = false;
+  const t = Timer({});
+  const paint = () => t.update({
+    deadline, now: () => Date.now(), label: '討論時間', paused, warnAt: [60, 10],
+    onExtend: () => { deadline += 60000; paint(); s.log('+60 s'); },
+    onTogglePause: () => { paused = !paused; paint(); s.log(`paused=${paused}`); },
+  });
+  paint();
+  s.body.append(t.el, el('div', { class: 'g-row' },
+    btn('15 s', () => { deadline = Date.now() + 15000; paused = false; paint(); }),
+    btn('70 s', () => { deadline = Date.now() + 70000; paused = false; paint(); }),
+    btn('no deadline', () => { deadline = null; paint(); })));
+}
+
+// ---------- RulesSheet ----------
+const sampleGame = {
+  meta: { id: 'demo', name: '狼人殺', emoji: '🐺', accent: '#e4573d', blurb: '天黑請閉眼，狼人殺人、好人搵狼。' },
+  rules: {
+    quick: ['每人一張秘密身份牌。', '夜晚狼人叫醒，揀一個人殺。', '天光後大家討論，投票放逐一個人。', '狼人死晒好人贏；好人少過狼人，狼人贏。'],
+    roles: [
+      { id: 'wolf', name: '狼人', emoji: '🐺', team: 'wolf', text: '夜晚殺人。' },
+      { id: 'seer', name: '預言家', emoji: '🔮', team: 'good', text: '每晚查一個人。' },
+      { id: 'witch', name: '女巫', emoji: '🧪', team: 'good', text: '一瓶解藥、一瓶毒藥。' },
+      { id: 'tanner', name: '皮匠', emoji: '🧵', team: 'neutral', text: '被投出局先贏。' },
+    ],
+    sections: [
+      { title: '勝利條件', body: '好人：所有狼人出局。\n狼人：狼人數量不少於好人。' },
+      { title: '平票點算', body: '平票嘅人再發言一次，然後重投；再平票就冇人出局。' },
+    ],
+  },
+};
+{
+  const s = section('rules', 'RulesSheet');
+  s.body.append(btn('RulesSheet.open(game)', () => RulesSheet.open(sampleGame)));
+}
+
+// ---------- NarratorBar ----------
+{
+  const s = section('narrator', 'NarratorBar');
+  let mode = 'voice', paused = false, n = 0;
+  const lines = ['各位玩家請閉上眼睛。', '狼人請張開眼睛，互相確認身份。', null];
+  const bar = NarratorBar({});
+  const paint = () => bar.update({
+    cue: lines[n] ? { id: `c${n}`, text: lines[n] } : null, mode, paused,
+    onReplay: () => s.log('onReplay'),
+    onNext: () => { n = (n + 1) % lines.length; paint(); s.log('onNext'); },
+    onPause: () => { paused = !paused; paint(); },
+    onMode: (m) => { mode = m; paint(); s.log(`onMode(${m})`); },
+  });
+  paint();
+  // The real bar is position: fixed. In the gallery keep it in flow so it can be inspected.
+  bar.el.style.position = 'static';
+  bar.el.style.borderRadius = '1rem';
+  s.body.append(bar.el);
+}
+
+// ---------- PassGate ----------
+{
+  const s = section('gate', 'PassGate');
+  s.body.append(el('div', { class: 'g-row' },
+    btn('交俾 阿明', async () => { await PassGate.show({ title: '交俾 阿明', subtitle: '其他人唔好望' }); s.log('阿明 tapped'); }),
+    btn('anonymous', async () => { await PassGate.show({ title: '預言家請拎起部手機', subtitle: '其他人閉埋眼，唔好望' }); s.log('anonymous tapped'); })));
+}
+
+// ---------- SeatEditor ----------
+{
+  const s = section('seats', 'SeatEditor', 'Host view (reorder with ▲▼ or drag ⠿; tap a colour dot). The second editor is a non-host phone.');
+  const se = SeatEditor({});
+  const ro = SeatEditor({});
+  const paint = () => {
+    se.update({
+      players, me: 'p1', mySeats: ['p1', 'p6'], isHost: true,
+      onMove: (pid, index) => {
+        const from = players.findIndex((p) => p.id === pid);
+        const next = players.slice();
+        const [p] = next.splice(from, 1);
+        next.splice(index, 0, p);
+        players = next.map((x, i) => ({ ...x, seat: i }));
+        s.log(`onMove(${pid}, ${index})`);
+        paint();
+      },
+      onColor: (pid, c) => { players = players.map((p) => (p.id === pid ? { ...p, color: c } : p)); s.log(`onColor(${pid}, ${c})`); paint(); },
+      onKick: (pid) => { players = players.filter((p) => p.id !== pid).map((x, i) => ({ ...x, seat: i })); s.log(`onKick(${pid})`); paint(); },
+    });
+    ro.update({ players, me: 'p3', mySeats: ['p3'], isHost: false, onColor: (pid, c) => { players = players.map((p) => (p.id === pid ? { ...p, color: c } : p)); paint(); } });
+  };
+  paint();
+  s.body.append(se.el, el('hr', { style: { border: 0, borderTop: '1px solid var(--line)', margin: '1rem 0' } }), ro.el);
+}
+
+// ---------- Scoreboard ----------
+{
+  const s = section('score', 'Scoreboard');
+  const sb = Scoreboard({});
+  sb.update({
+    players,
+    scoreboard: { p1: { played: 3, wins: 2, points: 7 }, p2: { played: 3, wins: 1, points: 4 }, p3: { played: 3, wins: 1, points: 4 }, p4: { played: 3, wins: 0, points: 1 }, p5: { played: 2, wins: 0, points: 0 }, p6: { played: 3, wins: 1, points: 2 } },
+    history: [
+      { gameId: 'werewolf', winners: ['p1', 'p4'], summary: '狼人屠邊，兩狼勝出' },
+      { gameId: 'spyfall', winners: ['p2'], summary: '間諜估中地點：大使館' },
+      { gameId: 'cheese-thief', winners: [], summary: '平票，冇人贏' },
+    ],
+    games: { werewolf: { emoji: '🐺', name: '狼人殺' }, spyfall: { emoji: '🛰️', name: '間諜' }, 'cheese-thief': { emoji: '🧀', name: '芝士大盜' } },
+    me: 'p2',
+  });
+  s.body.append(sb.el);
+}
+
+// ---------- ConfigForm ----------
+{
+  const s = section('config', 'ConfigForm', 'One of every field type. The JSON under the form is the config the host would store.');
+  let value = {
+    players: 6, bool: true, kind: 'b', secs: 90, mins: 300,
+    roles: [
+      { id: 'r1', name: '狼人', emoji: '🐺', count: 2 },
+      { id: 'r2', name: '預言家', emoji: '🔮', count: 1 },
+      { id: 'r3', name: '平民', emoji: '🧑', count: 0, filler: true },
+    ],
+    counts: { wolf: 2, seer: 1 },
+    words: { cats: ['food'], levels: [1] },
+  };
+  const fields = [
+    { key: 'players', label: '遊戲人數', type: 'int', min: 3, max: 12, help: '包括房主' },
+    { key: 'bool', label: '房主一齊玩', type: 'bool', help: '熄咗 = 房主做主持。' },
+    { key: 'kind', label: '玩法', type: 'select', options: [{ value: 'a', label: '標準' }, { value: 'b', label: '快速' }, { value: 'c', label: '瘋狂' }] },
+    { key: 'secs', label: '討論時間', type: 'seconds', min: 30, max: 180 },
+    { key: 'mins', label: '全場上限', type: 'seconds', min: 60, max: 900 },
+    { key: 'roles', label: '角色牌', type: 'roles', min: 0, max: 6, help: '5 / 6 個，仲差 1 個。' },
+    { key: 'counts', label: '固定角色', type: 'roles', min: 0, max: 4, options: [{ id: 'wolf', name: '狼人', emoji: '🐺' }, { id: 'seer', name: '預言家', emoji: '🔮', max: 1 }, { id: 'villager', name: '平民', emoji: '🧑', auto: true }] },
+    { key: 'words', label: '詞庫', type: 'categories', options: [{ value: 'food', label: '食物' }, { value: 'animal', label: '動物' }, { value: 'place', label: '地方' }], levels: [{ value: 1, label: '易' }, { value: 2, label: '中' }, { value: 3, label: '難' }], stats: { used: 37, total: 1243 } },
+  ];
+  const out = el('div', { class: 'g-log', style: { maxHeight: '12rem' } });
+  const cf = ConfigForm({});
+  const paint = () => {
+    cf.update({ fields, value, onChange: (cfg) => { value = cfg; paint(); } });
+    out.textContent = JSON.stringify(value, null, 1);
+  };
+  paint();
+  s.body.append(cf.el, out);
+}
+
+// ---------- Canvas ----------
+{
+  const s = section('canvas', 'Canvas (batch 2 stub)');
+  const c = Canvas({ mode: 'view' });
+  s.body.append(c.el);
+}
+
+// ---------- toast ----------
+{
+  const s = section('toast', 'toast');
+  s.body.append(btn('toast("你好")', () => toast('你好，呢個係 toast')));
+}
+</script>
+</body>
+</html>
