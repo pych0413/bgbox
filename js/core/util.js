@@ -102,23 +102,46 @@ export function makeStore(storage) {
     setRaw(key, json) {
       try { rawSet(key, String(json)); return true; } catch { return false; }
     },
+    /** Is anything stored under `key`? (Cheap: never parses a big snapshot.) */
+    has(key) { try { return rawGet(key) != null; } catch { return false; } },
     del(key) { try { rawDel(key); } catch { /* ignore */ } },
   };
 }
 
 // ---------- screen wake lock (stops the host's phone from killing the room) ----------
+//
+// Several places ask for it (core on entering a room and on every return to the foreground,
+// the shell when the screen changes), often in the same tick. Every call only records what is
+// WANTED; one worker at a time reconciles that with the real lock. Two overlapping requests
+// used to create two sentinels and lose track of one, which then kept the screen on after
+// the room was left.
 let wakeLock = null;
-export async function keepAwake(on) {
-  try {
-    if (on) {
-      if (wakeLock || !('wakeLock' in navigator)) return;
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => { wakeLock = null; });
-    } else if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-    }
-  } catch { wakeLock = null; }
+let wakeWanted = false;
+let wakeWork = null;
+
+export function keepAwake(on) {
+  wakeWanted = !!on;
+  if (wakeWork) return wakeWork;          // the running worker re-reads wakeWanted before it stops
+  wakeWork = (async () => {
+    await null;                           // let `wakeWork` be assigned before `finally` can clear it
+    try {
+      for (let guard = 0; guard < 4; guard++) {
+        if (wakeWanted && !wakeLock) {
+          const wl = globalThis.navigator?.wakeLock;
+          if (!wl || globalThis.document?.hidden) break;     // unsupported, or a hidden page (the request would fail)
+          const lock = await wl.request('screen');
+          lock.addEventListener?.('release', () => { if (wakeLock === lock) wakeLock = null; });
+          wakeLock = lock;
+        } else if (!wakeWanted && wakeLock) {
+          const lock = wakeLock;
+          wakeLock = null;
+          await lock.release();
+        } else break;
+      }
+    } catch { /* refused: low battery, no permission, page hidden meanwhile */ }
+    finally { wakeWork = null; }
+  })();
+  return wakeWork;
 }
 export function wakeLockActive() { return !!wakeLock; }
 

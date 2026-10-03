@@ -366,6 +366,30 @@ export class Session {
     }, false);
   }
   deadline() { return typeof this.state?.deadline === 'number' ? this.state.deadline : null; }
+  /**
+   * Extra host buttons the game offers right now (engine.hostActions?(state) → [{ label, action }]), sanitised:
+   * at most 6, labels ≤ 24 chars, actions plain objects with a string `type`. Dispatched as HOST.
+   */
+  hostActions() {
+    if (this.stopped || typeof this.engine.hostActions !== 'function') return [];
+    const list = this.#query(() => this.engine.hostActions(this.state), []);
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (const x of list) {
+      const label = typeof x?.label === 'string' ? x.label.trim().slice(0, 24) : '';
+      const action = x?.action;
+      if (!label || !action || typeof action !== 'object' || Array.isArray(action) || typeof action.type !== 'string') continue;
+      out.push({ label, action: jsonClone(action) });
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
+
+  /** May this seat ink right now (engine.canInk)? False for games without a canvas, and while paused or over. */
+  canInk(pid) {
+    if (this.stopped || this.paused || typeof this.engine.canInk !== 'function') return false;
+    return !!this.#query(() => this.engine.canInk(this.state, pid), false);
+  }
 
   // ---------- shared drawing ----------
 

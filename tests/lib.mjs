@@ -33,6 +33,7 @@ export function makePlayers(n) {
 /**
  * In-memory content bag with the same contract as js/core/bag.js:
  *   draw(bankId, filter?) → entry | null   (without replacement; refills when the filtered pool runs out)
+ *   release(bankId, key) → bool          (put an offered-but-unused entry back)
  *   stats(bankId, filter?) → { used, total }
  * `banks` = { bankId: entries[] }  (draw-words should be passed already flattened to {w, alt, level, cat}).
  */
@@ -50,6 +51,13 @@ export function makeBag(banks = {}, rng = mulberry32(99)) {
       u.add(key(e));
       return clone(e);
     },
+    /** Put an entry back by its key (draw-guess: the word `w`), as core bag.release does. */
+    release(bankId, k) {
+      const u = used[bankId];
+      if (!u || typeof k !== 'string') return false;
+      const hit = [...u].find((s) => s === k || JSON.parse(s)?.w === k);
+      return hit !== undefined && u.delete(hit);
+    },
     stats(bankId, filter = () => true) {
       const all = (banks[bankId] || []).filter(filter);
       const u = used[bankId] || new Set();
@@ -62,19 +70,21 @@ export function makeBag(banks = {}, rng = mulberry32(99)) {
 export class Sim {
   /**
    * @param game  pure game module { meta, config, engine }
-   * @param opts  { n, seed=1, config?, banks?, now?, hostPid='p1', carry? }
+   * @param opts  { n, seed=1, config?, banks?, now?, hostPid='p1', carry?, singleDevice=false }
    *              hostPid is the seat on the host phone, as the Room passes it to setup (G1);
    *              pass null to test an engine without one.
    *              carry is the previous game's result().carry (the Room hands it over per game id).
+   *              singleDevice: defaults come from config.defaults(n, undefined, { singleDevice }), the
+   *              same three arguments the Room passes (one phone holding every seat → pass-the-phone defaults).
    */
-  constructor(game, { n, seed = 1, config, banks = {}, now = 1_000_000, hostPid = 'p1', carry } = {}) {
+  constructor(game, { n, seed = 1, config, banks = {}, now = 1_000_000, hostPid = 'p1', carry, singleDevice = false } = {}) {
     this.game = game;
     this.engine = game.engine;
     this.rng = mulberry32(seed);
     this.now = now;
     this.players = makePlayers(n);
     this.hostPid = hostPid;
-    this.config = config ?? game.config.defaults(n);
+    this.config = config ?? game.config.defaults(n, undefined, { singleDevice: !!singleDevice });
     const v = game.config.validate(this.config, n);
     if (!v.ok) throw new Error(`invalid config for n=${n}: ${v.message}`);
     this.bag = makeBag(banks, mulberry32(seed + 7));

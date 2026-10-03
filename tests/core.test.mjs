@@ -658,7 +658,8 @@ test('room: a device can hold several seats; its views carry exactly those seats
   assert.equal(pick(room, 'dev_x', 'p2', 1), true);
   assert.equal(pick(room, 'dev_x', 'p3', 2), true);
   assert.equal(pick(room, 'dev_x', 'p1', 3), false, 'but not the host\'s seat');
-  assert.deepEqual(lastTo(sent, 'dev_x', 'views').focus, null, 'both seats done → no focus left on this device');
+  assert.deepEqual(lastTo(sent, 'dev_x', 'views').focus, { pids: [], anonymous: '輪到你' },
+    'both seats done → none of its seats is called, but an anonymous step still shows as one (same gate either way)');
 });
 
 test('room: addSeat (shared phone), names must be unique, kick, leave and colours', async () => {
@@ -1558,7 +1559,7 @@ test('registry: lists all ten games with inline meta; load() is lazy', async () 
     assert.ok(m.batch === 1 || m.batch === 2, `${g.id}: batch`);
     assert.equal(typeof g.load, 'function');
   }
-  assert.deepEqual(GAMES.filter((g) => g.meta.batch === 2).map((g) => g.id), ['fake-artist', 'draw-guess', '9upper']);
+  assert.deepEqual(GAMES.filter((g) => g.meta.batch === 2).map((g) => g.id), [], 'batch 2 is released: every game is offered without probing');
 });
 
 test('util.makeStore: Web Storage, Map and nothing all behave the same and never throw', () => {
@@ -2522,4 +2523,257 @@ test('room: stall detection only flags a dead phone the game is really waiting o
     assert.equal(t.room.autoAct('p2'), true);
     assert.equal(t.room.phase, 'results', `${label}: 代佢做 unblocks it`);
   }
+});
+
+// ============================================================
+// seam review (pass 3): shared-phone night gate, keepsake pictures, resumeInfo under ?as=,
+// entry points cancelled mid-await
+// ============================================================
+
+/** A night step whose called role may be in the centre (seer === null): focus still names the step. */
+function makeCentreGame() {
+  const g = makeNightGame({ focus: true });
+  g.engine.setup = ({ players, config }) => ({ phase: 'night', seats: players.map((p) => p.id), seer: config.centre ? null : players[1].id, taps: {} });
+  g.engine.focus = (st) => (st.phase === 'night' ? { pids: st.seer ? [st.seer] : [], anonymous: '預言家請拎起部手機' } : null);
+  g.engine.view = (st) => ({ phase: st.phase, night: st.phase === 'night' });
+  g.config.defaults = () => ({ centre: false });
+  return g;
+}
+
+test('room: an anonymous step reaches every seated device as { pids: [], anonymous } — present, elsewhere or in the centre', async () => {
+  for (const centre of [false, true]) {
+    const t = setup({ games: { night: makeCentreGame() } });
+    hello(t.room, 'peer_a', 'dev_a', '阿花');               // p2: the seer, unless the role is in the centre
+    hello(t.room, 'peer_x', 'dev_x', '甲', '乙');           // p3 + p4: a shared phone, never the seer
+    assert.equal((await t.room.selectGame('night')).ok, true);
+    t.room.setConfig({ centre });
+    assert.equal(t.room.start().ok, true);
+    hello(t.room, 'peer_s', 'dev_s', '遲到');               // mid-game: a spectator only
+    assert.equal(t.room.act('dev_x', 'p3', { type: 'tap' }), true);   // a decoy tap: fresh views for everyone
+    const focusOf = (dev) => lastTo(t.sent, dev, 'views').focus;
+    const prompt = '預言家請拎起部手機';
+    assert.deepEqual(focusOf('dev_x'), { pids: [], anonymous: prompt }, `centre=${centre}: the shared phone gets the same thing either way`);
+    assert.deepEqual(focusOf('dev_host'), { pids: [], anonymous: prompt });
+    assert.deepEqual(focusOf('dev_a'), { pids: centre ? [] : ['p2'], anonymous: prompt }, 'only the seer\'s own phone learns its seat is called');
+    assert.equal(focusOf('dev_s'), null, 'a device without a playing seat gets nothing');
+  }
+});
+
+test('room: a named (not anonymous) focus is still only sent to the devices it names', async () => {
+  const g = makeCentreGame();
+  g.engine.focus = (st) => (st.phase === 'night' ? { pids: [st.seer] } : null);
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  hello(t.room, 'peer_b', 'dev_b', '阿強');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  assert.deepEqual(lastTo(t.sent, 'dev_a', 'views').focus, { pids: ['p2'] });
+  assert.equal(lastTo(t.sent, 'dev_b', 'views').focus, null);
+  assert.equal(lastTo(t.sent, 'dev_host', 'views').focus, null);
+});
+
+test('app: keepsake — earlier pictures are kept as the epoch moves on, all of them reach results, a new game starts empty', async () => {
+  const f = await hostAndTwo();
+  const { host, a, b } = f;
+  await host.lobby.selectGame('fake');
+  host.lobby.start();
+  await settle();
+  // p2 (阿花, device a) is the artist of the fake game
+  a.ink('p2', { stroke: 's1', pts: [[10, 10], [20, 20]], end: true, color: '#e4573d' });
+  await settle();
+  await a.act('p2', { type: 'newpic' });                     // the engine bumps inkEpoch: a fresh picture
+  await settle();
+  for (const app of [host, a, b]) {
+    assert.equal(app.state.ink.strokes.length, 0, 'everyone is on the new blank picture');
+    assert.equal(app.state.pictures.length, 1, 'the first picture was kept');
+    assert.deepEqual(app.state.pictures[0].strokes[0].pts, [[10, 10], [20, 20]]);
+  }
+  a.ink('p2', { stroke: 's2', pts: [[500, 500], [600, 600]], end: true });
+  await settle();
+  await host.act('p1', { type: 'pick', n: 2 });
+  await a.act('p2', { type: 'pick', n: 2 });
+  await b.act('p3', { type: 'pick', n: 2 });
+  f.clock.advance(1500);
+  await settle();
+  assert.equal(b.state.room.phase, 'results');
+  const pics = b.keepsake();
+  assert.equal(pics.length, 2, 'results: the earlier picture and the last one');
+  assert.equal(pics[0].strokes[0].color, '#e4573d', 'strokes keep their style');
+  assert.deepEqual(pics[1].strokes[0].pts, [[500, 500], [600, 600]]);
+  pics[1].strokes[0].pts.push([0, 0]);
+  assert.equal(b.keepsake()[1].strokes[0].pts.length, 2, 'keepsake() hands out copies');
+
+  host.results.again();                                       // a new game: its blank drawing arrives before the phase
+  await settle();
+  for (const app of [host, a, b]) {
+    assert.equal(app.state.room.phase, 'playing');
+    assert.deepEqual(app.keepsake(), [], 'the last game\'s pictures are gone');
+  }
+  host.results.toLobby();
+  await settle();
+  assert.deepEqual(a.state.pictures, []);
+});
+
+test('app: resumeInfo / forgetResume read this app\'s own store — a ?as= identity never sees the plain one', async () => {
+  const f = appFixture();
+  const ls = new Map();
+  /** what main.js does for ?as=<name>: a prefixed view of the same localStorage */
+  const ns = (prefix) => ({
+    getItem: (k) => (ls.has(prefix + k) ? ls.get(prefix + k) : null),
+    setItem: (k, v) => { ls.set(prefix + k, String(v)); },
+    removeItem: (k) => { ls.delete(prefix + k); },
+  });
+  const plain = createApp({ ...f.common, storage: ns('') });
+  const tester = createApp({ ...f.common, storage: ns('as:bob:') });
+  assert.equal(plain.resumeInfo(), null, 'nothing saved yet');
+  plain.local({ names: ['甲', '乙'] });
+  await plain.lobby.selectGame('fake');
+  assert.equal(plain.resumeInfo(), null, 'nothing to resume while in a room');
+  plain.lobby.start();
+  await settle();
+  const fresh = createApp({ ...f.common, storage: ns('') });
+  assert.deepEqual(
+    { ...fresh.resumeInfo(), savedAt: 0 },
+    { mode: 'local', code: null, savedAt: 0, gameId: 'fake', phase: 'playing' },
+    'the breadcrumb says which game and where',
+  );
+  assert.equal(tester.resumeInfo(), null, 'the ?as= tab has its own (empty) identity');
+  tester.prefs.set('ct:name', '阿Bob');
+  assert.equal(tester.prefs.get('ct:name'), '阿Bob');
+  assert.equal(fresh.prefs.get('ct:name', ''), '', 'prefs are per identity too');
+
+  assert.equal(fresh.forgetResume(), true);
+  assert.equal(fresh.resumeInfo(), null);
+  assert.equal(ls.has('bgb:host:local'), false, 'the snapshot nobody can reach any more is deleted with it');
+  assert.equal(await fresh.resume(), false);
+
+  // a stale breadcrumb (older than a night) or one whose snapshot is gone offers nothing
+  ls.set('bgb:resume', JSON.stringify({ mode: 'host', code: '1352', savedAt: f.clock.now() }));
+  assert.equal(fresh.resumeInfo(), null, 'no snapshot behind it');
+  ls.set('bgb:host:1352', JSON.stringify({ v: 2 }));
+  assert.equal(fresh.resumeInfo()?.code, '1352');
+  ls.set('bgb:resume', JSON.stringify({ mode: 'host', code: '1352', savedAt: f.clock.now() - 9 * 3600_000 }));
+  assert.equal(fresh.resumeInfo(), null, 'too old');
+  ls.set('bgb:resume', JSON.stringify({ mode: 'client', code: '1352', savedAt: f.clock.now() }));
+  assert.equal(fresh.resumeInfo(), null, 'a client breadcrumb without seat tokens');
+  ls.set('bgb:seats:1352', JSON.stringify([{ id: 'p2', name: '阿花', token: 't_x' }]));
+  assert.equal(fresh.resumeInfo()?.mode, 'client');
+  fresh.forgetResume();
+  assert.equal(ls.has('bgb:seats:1352'), true, 'a client keeps its seat tokens: the same name gets the seat back later');
+});
+
+test('app: leaving while host() / resume() / join() still awaits the network leaves no zombie room, claimed code or hijack', async () => {
+  const f = appFixture();
+  const p = f.host.host({ names: ['阿明'] });
+  f.host.leave();
+  assert.equal(await p, null, 'host() says it was cancelled');
+  f.clock.advance(1000);
+  await settle();
+  assert.equal(f.host.state.mode, null);
+  assert.equal(f.host._room, null);
+  assert.equal(f.loop.hosts.size, 0, 'the room code was released');
+
+  // resume of a host snapshot, cancelled while it is restoring
+  const storage = new Map();
+  const g = appFixture({ storage });
+  const code = await g.host.host({ names: ['阿明'] });
+  await g.host.lobby.selectGame('fake');
+  g.loop.hosts.get(code).close();
+  const again = createApp({ ...g.common, storage });
+  const q = again.resume();
+  again.leave();
+  assert.equal(await q, null, 'resume() says it was cancelled (not "nothing to resume")');
+  assert.equal(again.state.mode, null);
+  assert.equal(again._room, null);
+  assert.equal(g.loop.hosts.size, 0);
+
+  // a client that gives up on a join and plays on one phone instead: the abandoned join cannot take over
+  const h = await hostAndTwo();
+  const c = h.client();
+  const joining = c.join(h.code, { names: ['阿細'] });
+  c.local({ names: ['甲', '乙'] });
+  await quietly(() => assert.rejects(joining));
+  await settle();
+  assert.equal(c.state.mode, 'local', 'the late welcome of the abandoned join did not hijack local play');
+  assert.deepEqual(c.state.mySeats, ['p1', 'p2']);
+});
+
+test('room: result.void scores nothing and marks the history line; result.spectators are not counted as having played', async () => {
+  const g = makeGame();
+  const realResult = g.engine.result;
+  let extra = {};
+  g.engine.result = (st) => { const r = realResult(st); return r ? { ...r, ...extra } : null; };
+  const t = await started3({ game: g });
+  const finishRound = () => { pick(t.room, 'dev_a', 'p2', 2); pick(t.room, 'dev_b', 'p3', 3); pick(t.room, 'dev_host', 'p1', 1); t.clock.advance(1500); };
+
+  extra = { void: true };
+  finishRound();
+  assert.equal(t.room.phase, 'results');
+  const r1 = roomOf(t.sent, 'dev_a');
+  assert.deepEqual(r1.scoreboard.p3, { played: 0, wins: 0, points: 0 }, 'a void game changes nothing on the scoreboard');
+  assert.equal(r1.lastResult.void, true);
+  assert.deepEqual(r1.lastResult.winners, []);
+  assert.equal(r1.history.at(-1).void, true, 'the history line says 唔計');
+
+  extra = { spectators: ['p1'] };                        // p1 was the human moderator
+  assert.equal(t.room.again().ok, true);
+  finishRound();
+  const r2 = roomOf(t.sent, 'dev_a');
+  assert.deepEqual(r2.scoreboard.p1, { played: 0, wins: 0, points: 0 }, 'the moderator did not play');
+  assert.deepEqual(r2.scoreboard.p3, { played: 1, wins: 1, points: 3 });
+  assert.equal(r2.history.at(-1).void, undefined);
+});
+
+test('room: views tell each device which of ITS seats may draw now (engine.canInk), nobody else\'s', async () => {
+  const t = await started3();
+  assert.deepEqual(lastTo(t.sent, 'dev_a', 'views').canInk, ['p2'], 'p2 is the artist of the fake game');
+  assert.deepEqual(lastTo(t.sent, 'dev_b', 'views').canInk, []);
+  assert.deepEqual(lastTo(t.sent, 'dev_host', 'views').canInk, []);
+  t.room.pause();
+  t.room.resume();
+  pick(t.room, 'dev_a', 'p2', 2); pick(t.room, 'dev_b', 'p3', 3); pick(t.room, 'dev_host', 'p1', 1);
+  assert.deepEqual(lastTo(t.sent, 'dev_a', 'views').canInk, [], 'the drawing phase is over');
+});
+
+test('room: engine.hostActions become host-only buttons — labels to the host device, dispatched as @host, stale taps refused', async () => {
+  const g = makeGame();
+  const act = g.engine.act;
+  g.engine.hostActions = (st) => (st.phase === 'pick'
+    ? [{ label: '＋30 秒', action: { type: '@add', ms: 30_000 } }, { label: '', action: { type: 'x' } }, { label: '壞', action: 'nope' }]
+    : []);
+  g.engine.act = (st, a, c) => {
+    if (a.action.type === '@add') return a.pid === HOST && st.phase === 'pick' ? { ...st, deadline: st.deadline + a.action.ms } : undefined;
+    return act(st, a, c);
+  };
+  const t = await started3({ game: g });
+  assert.deepEqual(lastTo(t.sent, 'dev_host', 'views').hostActions, [{ i: 0, label: '＋30 秒' }], 'sanitised: no empty labels, no non-object actions');
+  assert.equal('hostActions' in lastTo(t.sent, 'dev_a', 'views'), false, 'other phones never hear about them');
+  const before = t.room.session.state.deadline;
+  assert.equal(t.room.hostAction(0, '另一個'), false, 'a list that changed under the finger fires nothing');
+  assert.equal(t.room.act('dev_a', 'p2', { type: '@add', ms: 30_000 }), false, 'a seat cannot send it');
+  assert.equal(t.room.hostAction(0, '＋30 秒'), true);
+  assert.equal(t.room.session.state.deadline, before + 30_000);
+  pick(t.room, 'dev_a', 'p2', 2); pick(t.room, 'dev_b', 'p3', 3); pick(t.room, 'dev_host', 'p1', 1);
+  assert.deepEqual(lastTo(t.sent, 'dev_host', 'views').hostActions, [], 'gone once the game moved on');
+  assert.equal(t.room.hostAction(0), false);
+});
+
+test('room: meta.narrationDefault picks a quiet game\'s mode while it is selected; other games keep the host\'s own choice', async () => {
+  const quiet = makeGame();
+  quiet.meta = { ...quiet.meta, id: 'quiet', narrationDefault: 'silent' };
+  const t = setup({ games: { fake: makeGame(), quiet }, narrationMode: 'voice' });
+  await t.room.selectGame('quiet');
+  assert.equal(roomOf(t.sent, 'dev_host').narration.mode, 'silent');
+  await t.room.selectGame('fake');
+  assert.equal(roomOf(t.sent, 'dev_host').narration.mode, 'voice', 'back to the host\'s choice');
+  t.room.setNarrationMode('read');
+  await t.room.selectGame('quiet');
+  assert.equal(roomOf(t.sent, 'dev_host').narration.mode, 'silent');
+  const snap = t.room.snapshot();
+  await t.room.selectGame('fake');
+  assert.equal(roomOf(t.sent, 'dev_host').narration.mode, 'read', 'an explicit choice is the new preference');
+  const back = await Room.restore(snap, { ...t.deps, loadGame: async (id) => t.games[id] });
+  await back.selectGame('fake');
+  assert.equal(back.narration.mode, 'read', 'the preference survives a host refresh');
+  back.dispose();
 });

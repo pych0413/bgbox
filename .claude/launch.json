@@ -70,6 +70,28 @@
         "5288"
       ],
       "port": 5288
+    },
+    {
+      "name": "bgbox-preview-snap",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5299",
+        "--directory",
+        "../bgbox-preview"
+      ],
+      "port": 5299
+    },
+    {
+      "name": "framework-seams",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5311"
+      ],
+      "port": 5311
     }
   ]
 }

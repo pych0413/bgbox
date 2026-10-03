@@ -44,6 +44,7 @@ export function mountPlay(sh) {
   let gateToken = 0;
   let gateKind = null;        // 'auto' (focus) | 'switch' (player chose)
   let gatedFor = null;        // focus signature we already opened a gate for
+  let anonShown = null;       // the eyes-closed prompt a gate was already shown for (one decoy per step)
   let menuEl = null;
   let menuKind = null;
   let menuHtml = '';          // what the open menu currently shows (see refreshMenu)
@@ -100,6 +101,18 @@ export function mountPlay(sh) {
     let game;
     try { game = sh.cached(id) ?? await sh.loadGame(id); } catch (err) { console.error(err); toast('載入唔到提示'); return; }
     hints.open(game, viewFor(app.state));
+  }
+
+  /** 🗑️ 呢輪作廢 — `@void-round` for a round a dead phone (or a mix-up) spoilt. Engines opt in. */
+  function voidRound() {
+    const st = app.state;
+    if (!st.isHost) return;
+    if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return; }
+    if (!sh.confirm('呢輪作廢、重新嚟過？\n（有人部手機死咗、或者搞錯咗先用）')) return;
+    let ok = false;
+    try { ok = app.hostCtl?.voidRound?.() === true; } catch (err) { console.error(err); }
+    // (no narrator.cancel() here: the app already stopped the old line and may be saying the new one)
+    toast(ok ? '🗑️ 呢輪作廢咗，重新嚟過' : '呢個遊戲唔支援', 2200);
   }
 
   function togglePause() {
@@ -183,6 +196,11 @@ export function mountPlay(sh) {
   }
 
   // ---------- pass gate ----------
+  /**
+   * kind: 'auto' (focus names a seat here) · 'decoy' (an eyes-closed step calls nobody on this phone —
+   * the same gate, so a shared phone never shows whether the role is here, elsewhere or in the centre;
+   * tapping it changes nothing) · 'switch' (the player chose another seat).
+   */
   async function openGate(kind, target, text) {
     const token = ++gateToken;
     gateKind = kind;
@@ -191,12 +209,13 @@ export function mountPlay(sh) {
     await PassGate.show(text);
     if (token !== gateToken) return;                   // replaced or cancelled meanwhile
     gateKind = null;
+    if (!target) return;                               // the decoy: nobody to switch to
     if (kind === 'auto' && !focusWants(app.state, target)) return;
     app.setActiveSeat(target);
   }
 
   function closeAutoGate() {
-    if (gateKind === 'auto' && PassGate.isOpen()) { gateToken++; gateKind = null; PassGate.hide(); }
+    if ((gateKind === 'auto' || gateKind === 'decoy') && PassGate.isOpen()) { gateToken++; gateKind = null; PassGate.hide(); }
   }
 
   /** Seats named by focus that live on THIS device, in seat order. */
@@ -208,20 +227,38 @@ export function mountPlay(sh) {
 
   const focusWants = (st, target) => focusSeatsHere(st)[0] === target && currentSeat(st) !== target;
 
+  /**
+   * A shared phone (2+ seats) hands itself over when focus names one of its seats.
+   * Eyes-closed (anonymous) steps are stricter: the gate shows the role prompt for EVERY such step —
+   * also when the active seat is already the one called, when the role sits on another phone, and when
+   * it is in the centre (the core sends { pids: [], anonymous } then) — once per step, so how the shared
+   * phone behaves never depends on who holds the role. Only the receiver's tap reveals anything.
+   */
   function evaluateFocusGate(st) {
-    if ((st.mySeats?.length ?? 0) < 2) { gatedFor = null; return; }   // a gate only makes sense when phones are shared
+    if ((st.mySeats?.length ?? 0) < 2) { gatedFor = null; anonShown = null; return; }   // a gate only makes sense when phones are shared
     const here = focusSeatsHere(st);
     const seat = currentSeat(st);
+    const anon = st.focus?.anonymous || '';
+
+    if (anon) {
+      const target = here[0] ?? null;
+      const sig = `${target ?? '-'}|${anon}`;
+      if (gatedFor === sig) return;                    // already asked (and maybe answered) for this
+      // the decoy opens once per step; a real seat of this phone gets its own gate as the walk reaches it
+      if (!target && anonShown === anon) return;
+      gatedFor = sig;
+      anonShown = anon;
+      openGate(target ? 'auto' : 'decoy', target, { title: anon, subtitle: '其他人閉埋眼，唔好望' });
+      return;
+    }
+    anonShown = null;
     if (!here.length || here.includes(seat)) { gatedFor = null; closeAutoGate(); return; }
 
     const target = here[0];
-    const anon = st.focus?.anonymous || '';
-    const sig = `${target}|${anon}`;
-    if (gatedFor === sig) return;                      // already asked (and maybe answered) for this
+    const sig = `${target}|`;
+    if (gatedFor === sig) return;
     gatedFor = sig;
-    openGate('auto', target, anon
-      ? { title: anon, subtitle: '其他人閉埋眼，唔好望' }
-      : { title: `交俾 ${nameOf(st, target)}`, subtitle: '其他人唔好望' });
+    openGate('auto', target, { title: `交俾 ${nameOf(st, target)}`, subtitle: '其他人唔好望' });
   }
 
   function switchSeat(pid) {
@@ -299,6 +336,16 @@ export function mountPlay(sh) {
     if (st.isHost) {
       list.push(menuBtnRow(room.paused ? '▶ 繼續' : '⏸ 暫停', () => { togglePause(); closeMenu(); }));
       list.push(menuBtnRow('⏭ 下一步（跳過今個步驟）', () => { narrator.cancel(); app.hostCtl.next(); closeMenu(); }));
+      list.push(menuBtnRow('🗑️ 呢輪作廢', () => { closeMenu(); voidRound(); }));
+      // the game's own host buttons (engine.hostActions), e.g. 你畫我猜 ＋30 秒 / 呢題作廢
+      for (const h of st.hostActions ?? []) {
+        list.push(menuBtnRow(`🎛️ ${h.label}`, () => {
+          closeMenu();
+          let ok = false;
+          try { ok = app.hostCtl?.hostAction?.(h.i, h.label) === true; } catch (err) { console.error(err); }
+          if (!ok) toast('而家做唔到', 1800);
+        }));
+      }
       if (sh.timer.available()) list.push(menuBtnRow('⏱️ 計時', () => { closeMenu(); sh.timer.open(); }));
 
       if (meta.narration && meta.narration !== 'none') {
@@ -372,6 +419,7 @@ export function mountPlay(sh) {
         rows.push(el('div', { class: 'banner err' },
           el('span', { class: 'grow', text: `⚠️ ${nameOf(st, s.pid)} 斷咗線，成個遊戲等緊佢` }),
           el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => app.hostCtl.autoAct(s.pid) }, '代佢做'),
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => voidRound() }, '呢鋪唔計'),
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => { dismissedStalled.add(key); paintBanners(app.state); } }, '再等')));
       }
     }
@@ -379,18 +427,24 @@ export function mountPlay(sh) {
   }
 
   // ---------- narration ----------
-  function paintNarrator(st) {
+  function paintNarrator(st, view) {
     const room = st.room;
     const meta = sh.gameMeta(room.gameId) ?? {};
     const mode = room.narration?.mode ?? 'voice';
     const wanted = st.isHost && meta.narration !== 'none' && (!!st.cue || mode !== 'silent');
+    // this phone's seat is drawing: fold the bar to one line so it never covers the sheet
+    // (engine.canInk via the core; view.canDraw / view.draw.canDraw for a core without it)
+    const seat = playsAs(st);
+    const compact = !!seat && !!(st.canInk?.includes(seat) || view?.canDraw || view?.draw?.canDraw);
     root.classList.toggle('has-narrator', wanted);
+    root.classList.toggle('narrator-compact', wanted && compact);
     // #1 watchdog: the app reports narration = { status: 'idle' | 'speaking' | 'stalled', line }
     const stalled = st.narration?.status === 'stalled';
     const line = (stalled && st.narration?.line) || st.cue?.text || '';
     const nar = app.narration ?? {};
     narratorBar.update({
       hidden: !wanted,
+      compact,
       cue: st.cue ?? null,
       mode,
       stalled,
@@ -478,11 +532,11 @@ export function mountPlay(sh) {
       paintTools(st);
       chimeForTurn(st, view, seat);
       paintBanners(st);
-      paintNarrator(st);
+      paintNarrator(st, view);
 
       // dark and silent between this seat's own steps (decoys stay tappable underneath)
       const inFocus = !!seat && !!st.focus?.pids?.includes(seat);
-      sh.sound.night(!!seat && !!view?.night && !inFocus);
+      sh.sound.night(!!seat && !!view?.night && !inFocus, { opaque: (st.mySeats?.length ?? 0) > 1 });
 
       const key = `${room.gameId}|${seat ?? 'table'}`;
       if (key !== uiKey && view) {

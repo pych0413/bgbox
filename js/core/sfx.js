@@ -169,6 +169,12 @@ const SOUNDS = {
               } },
   // one soft tick per second in the last few seconds of the table timer
   tick(t)   { clack(t, { freq: 3600, q: 8, gain: 0.08, dur: 0.025 }); },
+  // a right answer (你畫我猜): one bright bell
+  ding(t)   { tone(t, { freq: 1568, dur: 0.5, gain: 0.14 });
+              tone(t, { freq: 2349.3, dur: 0.35, gain: 0.05 }); },
+  // a hint was revealed: a soft rising pair, quieter than 'turn'
+  hint(t)   { tone(t, { freq: 784, dur: 0.12, type: 'triangle', gain: 0.1 });
+              tone(t + 0.1, { freq: 1046.5, dur: 0.16, type: 'triangle', gain: 0.09 }); },
 };
 
 /** Names of every sound sfx() knows. */

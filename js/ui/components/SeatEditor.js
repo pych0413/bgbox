@@ -6,7 +6,8 @@
 //     → { el, update(props), destroy() }
 //
 // Optional extras: `mySeats` ([pid], every seat on THIS device; default [me]),
-// `palette` ([css colour]).
+// `palette` ([css colour]), `orderHint` (a string: the selected game takes turns in seat
+// order — shown to everyone, emphasised, instead of the host-only default hint).
 //
 // Who may do what:
 //   reorder         host only            (▲ ▼ buttons, or drag the ⠿ handle)
@@ -22,6 +23,8 @@
 import { el, sig } from '../dom.js?v=20261003090241';
 import { sfx } from '../../core/sfx.js?v=20261003090241';
 
+const DEFAULT_HINT = '跟返你哋真實坐位次序排，咁輪流嗰陣先唔會亂。';
+
 export const SEAT_PALETTE = [
   '#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6', '#2dd4bf', '#facc15',
   '#a3e635', '#fb923c', '#60a5fa', '#e879f9', '#94a3b8', '#fda4af', '#86efac', '#fde68a',
@@ -35,7 +38,7 @@ export function SeatEditor(props = {}) {
   let deferred = null;
 
   const list = el('ul', { class: 'c-seateditor-list' });
-  const hint = el('p', { class: 'c-seateditor-hint', text: '跟返你哋真實坐位次序排，咁輪流嗰陣先唔會亂。' });
+  const hint = el('p', { class: 'c-seateditor-hint', text: DEFAULT_HINT });
   const root = el('div', { class: 'c-seateditor' }, list, hint);
 
   const mySeats = () => p.mySeats ?? (p.me ? [p.me] : []);
@@ -147,7 +150,7 @@ export function SeatEditor(props = {}) {
   }
 
   function paint(force = false) {
-    const key = sig([p.players, p.me, p.isHost, p.mySeats, openColorFor, !!p.onMove, !!p.onColor, !!p.onKick]);
+    const key = sig([p.players, p.me, p.isHost, p.mySeats, openColorFor, !!p.onMove, !!p.onColor, !!p.onKick, p.orderHint ?? null]);
     if (!force && key === shownKey) return;
     shownKey = key;
 
@@ -161,7 +164,10 @@ export function SeatEditor(props = {}) {
     });
     if (!players.length) rows.push(el('li', { class: 'empty', text: '仲未有人…' }));
     list.replaceChildren(...rows);
-    hint.hidden = !canMove() || players.length < 2;
+    const order = typeof p.orderHint === 'string' && p.orderHint ? p.orderHint : '';
+    hint.textContent = order || DEFAULT_HINT;
+    hint.classList.toggle('strong', !!order);
+    hint.hidden = players.length < 2 || (!order && !canMove());
   }
 
   const api = {

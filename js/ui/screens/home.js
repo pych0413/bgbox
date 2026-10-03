@@ -2,10 +2,11 @@
 // screens/home.js — home, one-phone setup, and the "connecting" waiting room.
 // ============================================================
 
-import { el, toast, restartAnim } from '../dom.js?v=20261003090241';
-import { primeAudio } from '../../core/sfx.js?v=20261003090241';
-import { isRoomCode } from '../../core/util.js?v=20261003090241';
-import { inAppNotice, peerLooksDown } from '../status.js?v=20261003090241';
+import { el, toast, restartAnim } from '../dom.js?v=1';
+import { primeAudio } from '../../core/sfx.js?v=1';
+import { isRoomCode } from '../../core/util.js?v=1';
+import { inAppNotice, peerLooksDown } from '../status.js?v=1';
+import { savedGroupNames } from '../logic.js?v=1';
 
 const NAME_MAX = 12;
 const TILES = [
@@ -56,6 +57,12 @@ export function mountHome(sh) {
   const netNote = el('p', { class: 'warn net-note', text: '📡 多部手機玩要上網。而家冇網？揀「📱 一部手機玩」，唔使網絡都玩到。' });
   const paintNet = () => { netNote.hidden = !peerLooksDown(); };
   const peerTag = document.getElementById('peerjs');
+  // BACKLOG #12: the service worker has the whole app cached → it opens (and one phone plays) with no signal
+  const offlineBadge = el('div', { class: 'offline-badge', role: 'note' },
+    el('b', { text: '✅ 可離線玩' }),
+    el('span', { text: '冇網都開到；一部手機玩唔使網絡，多部手機一齊玩先要上網。' }));
+  const sw = globalThis.navigator?.serviceWorker ?? null;
+  const paintOffline = () => { offlineBadge.hidden = !sw?.controller; };
 
   const currentName = () => name.value.trim().slice(0, NAME_MAX);
   const needName = () => {
@@ -102,13 +109,20 @@ export function mountHome(sh) {
     sh.drafts.homeError = '';
   }
 
+  let resumeKey = null;
   function paintResume() {
-    const r = sh.readResume();
-    if (!r || busy) { resumeSlot.replaceChildren(); return; }
+    const r = busy ? null : sh.readResume();
+    const key = r ? JSON.stringify([r.mode, r.code, r.gameId, r.phase]) : null;
+    if (key === resumeKey) return;                 // update() runs on every change: keep the card (and a finger on it)
+    resumeKey = key;
+    if (!r) { resumeSlot.replaceChildren(); return; }
     const where = r.mode === 'host' ? '你之前開緊房' : r.mode === 'local' ? '你之前有一局一部手機玩' : '你之前喺房';
+    const meta = r.gameId ? sh.gameMeta(r.gameId) : null;
+    const what = meta ? `${meta.emoji ?? ''} ${meta.name ?? ''}${r.phase === 'playing' ? '（玩緊）' : ''}`.trim() : '';
     resumeSlot.replaceChildren(el('div', { class: 'card resume-card' },
       el('div', { class: 'setup-line' }, el('span', { text: where }),
         r.code ? el('strong', { text: r.code.split('').join(' ') }) : null),
+      what ? el('div', { class: 'hint resume-what', text: what }) : null,
       el('div', { class: 'btns' },
         el('button', {
           class: 'btn btn-primary btn-sm', type: 'button',
@@ -117,22 +131,27 @@ export function mountHome(sh) {
             setBusy(true, '返緊去…');
             let failed = '';
             try {
-              if (r.mode !== 'local' && !(await sh.whenPeer())) throw new Error(sh.peerMissing);
-              const ok = await app.resume();
-              if (ok === false) { sh.clearResume(); toast('揾唔返上一局'); }
+              if (r.mode !== 'local' && !(await sh.whenPeer())) {
+                // no network yet: keep the card (and a host's snapshot) so 返去 works once it is back
+                failed = '❌ ' + sh.peerMissing;
+              } else {
+                const ok = await app.resume();   // false: nothing there any more · null: 取消 meanwhile
+                if (ok === false) { sh.clearResume(); toast('揾唔返上一局'); }
+              }
             } catch (err) {
               console.error(err);
-              sh.clearResume();
+              if (err?.code !== 'no-peer') sh.clearResume();   // a missing network is worth a retry later
               failed = '❌ ' + friendlyError(err, '返唔到去。');
             }
             setBusy(false, failed);
             if (failed) status.className = 'status err';
+            resumeKey = null;
             paintResume();
           },
         }, '↩︎ 返去'),
         el('button', {
           class: 'btn btn-ghost btn-sm', type: 'button',
-          onclick: () => { sh.clearResume(); paintResume(); },
+          onclick: () => { sh.clearResume(); resumeKey = null; paintResume(); },
         }, '✕ 唔要'))));
   }
 
@@ -144,7 +163,8 @@ export function mountHome(sh) {
         ['🎲', '🧀', '🐺', '🕵️', '🎨'].map((e, i) => el('span', { style: { '--i': String(i) }, text: e }))),
       el('h1', { class: 'hub-title', 'aria-label': '桌遊盒' },
         TILES.map((t) => el('span', { style: { '--t': t.color, '--r': t.rot }, text: t.ch }))),
-      el('p', { class: 'hub-sub', text: '幾部手機，變成一盒桌遊' })),
+      el('p', { class: 'hub-sub', text: '幾部手機，變成一盒桌遊' }),
+      offlineBadge),
     el('div', { class: 'card' },
       el('label', { class: 'field' }, el('span', { class: 'field-label', text: '你個名' }), name)),
     el('div', { class: 'stack' }, hostBtn, joinBtn, localBtn),
@@ -157,19 +177,22 @@ export function mountHome(sh) {
   paintResume();
   showHomeError();
   paintNet();
+  paintOffline();
   window.addEventListener('online', paintNet);
   window.addEventListener('offline', paintNet);
   peerTag?.addEventListener('error', paintNet);
   peerTag?.addEventListener('load', paintNet);
+  sw?.addEventListener?.('controllerchange', paintOffline);
 
   return {
     el: root,
-    update() { showHomeError(); paintResume(); paintNet(); },
+    update() { showHomeError(); paintResume(); paintNet(); paintOffline(); },
     destroy() {
       window.removeEventListener('online', paintNet);
       window.removeEventListener('offline', paintNet);
       peerTag?.removeEventListener('error', paintNet);
       peerTag?.removeEventListener('load', paintNet);
+      sw?.removeEventListener?.('controllerchange', paintOffline);
     },
   };
 }
@@ -181,8 +204,7 @@ export function mountLocalSetup(sh) {
   const MIN = 2;
   const MAX = 16;
   // #9: the group that played last time on this phone, in their seat order
-  const saved = sh.savedGroup?.() ?? null;
-  const savedNames = (saved?.order ?? saved?.names ?? []).filter((n) => typeof n === 'string' && n).slice(0, MAX);
+  const savedNames = (savedGroupNames(sh.savedGroup?.() ?? null) ?? []).slice(0, MAX);
   let prefilled = false;
   if (!sh.drafts.localNames && savedNames.length >= MIN) {
     sh.drafts.localNames = savedNames.slice();
@@ -203,8 +225,12 @@ export function mountLocalSetup(sh) {
   const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '＋ 加一個人');
   const startBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '開始');
   const status = el('p', { class: 'status' });
+  // smoke test 2026-10-03: the 「玩家 N」 placeholders looked like defaults — so they are: every row is a player
+  const blankNote = el('p', { class: 'hint', style: { margin: '.5rem 0 0' }, text: '唔填名就叫「玩家 1」、「玩家 2」… 多咗嘅位㩒 ✕ 移走。' });
 
   const save = () => { sh.drafts.localNames = names.slice(); };
+  /** Every row is a seat; a blank one is called by its placeholder. */
+  const finalNames = () => names.map((n, i) => n.trim().slice(0, NAME_MAX) || `玩家 ${i + 1}`);
 
   function paint() {
     list.replaceChildren(...names.map((n, i) => {
@@ -223,6 +249,7 @@ export function mountLocalSetup(sh) {
           : null);
     }));
     addBtn.hidden = names.length >= MAX;
+    startBtn.textContent = `開始（${names.length} 人）`;
   }
 
   addBtn.addEventListener('click', () => {
@@ -234,10 +261,10 @@ export function mountLocalSetup(sh) {
 
   startBtn.addEventListener('click', () => {
     primeAudio();
-    const filled = names.map((n) => n.trim().slice(0, NAME_MAX)).filter(Boolean);
+    const filled = finalNames();
     if (filled.length < MIN) { toast(`最少要 ${MIN} 個人`); return; }
     if (new Set(filled).size !== filled.length) { toast('有兩個人同名，改一改啦'); return; }
-    sh.saveName(filled[0]);
+    if (names[0]?.trim()) sh.saveName(filled[0]);
     try {
       app.local({ names: filled });
     } catch (err) {
@@ -254,8 +281,9 @@ export function mountLocalSetup(sh) {
       el('span', { class: 'spacer' })),
     el('div', { class: 'card' },
       el('div', { class: 'card-head' }, el('h3', { text: '邊個玩？' }), el('span', { class: 'hint', text: '按坐位次序填' })),
-      savedNote, list, addBtn),
+      savedNote, list, blankNote, addBtn),
     el('p', { class: 'fineprint', text: '一部手機傳嚟傳去玩，唔使上網。夜晚、秘密行動會叫你交俾指定嗰個人。' }),
+    el('p', { class: 'hint local-note', text: '📡 想每人用自己部手機玩？就要有網絡 — 返去揀「🏠 開房」。' }),
     startBtn, status);
 
   paint();
@@ -269,7 +297,8 @@ export function mountConnecting(sh) {
   const label = el('div', { class: 'status' });
   const cancel = el('button', {
     class: 'btn btn-ghost btn-sm', type: 'button', style: { margin: '1rem auto 0' },
-    onclick: () => { sh.clearResume(); try { sh.app.leave(); } catch (e) { console.error(e); } sh.go('home'); },
+    // leave() forgets this room's resume data itself (forgetResume() refuses while a room is live)
+    onclick: () => { try { sh.app.leave(); } catch (e) { console.error(e); } sh.go('home'); },
   }, '取消');
   const root = el('section', { class: 'screen connecting', 'data-screen': 'connecting' },
     el('div', { class: 'spin', text: '🎲' }), title, label, cancel);

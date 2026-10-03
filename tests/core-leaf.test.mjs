@@ -132,7 +132,7 @@ test('sfx: setSuppressed is independent of setMuted; force rings through suppres
     setSuppressed(false);
     assert.equal(isMuted(), true, 'a muted user stays muted after a night');
     assert.equal(audible({ force: true }), false, 'force never beats the user\'s mute');
-    for (const n of ['alarm', 'tick', 'warn', 'zero', 'tap', 'turn']) assert.ok(SOUND_NAMES.includes(n), `sound ${n}`);
+    for (const n of ['alarm', 'tick', 'warn', 'zero', 'tap', 'turn', 'ding', 'hint']) assert.ok(SOUND_NAMES.includes(n), `sound ${n}`);
     sfx('alarm'); sfx('alarm', { force: true }); sfx('nope');   // Node: no window, no AudioContext — never throws
   } finally { setMuted(false); setSuppressed(false); }
 });
@@ -349,4 +349,48 @@ test('bag: an exhausted pool reshuffles with a friendly notice carrying { kind, 
     for (let i = 0; i < 3; i++) assert.ok(loud.draw('mini'), 'a throwing listener never stops the draw');
   } finally { console.error = quiet; }
   assert.equal(clone(notices).length, 1);
+});
+
+test('bag.release: an offered-but-unused entry goes back into the pool (draw-guess calls it for the 2 words not chosen)', async () => {
+  const entries = [{ w: '蘋果' }, { w: '香蕉' }, { w: '橙' }];
+  const store = new Map();
+  const bag = createBag({ storage: store, rng: mulberry32(9), banks: { words: { load: async () => entries, key: (e) => e.w } } });
+  await bag.load('words');
+  const offered = [bag.draw('words'), bag.draw('words')];
+  assert.deepEqual(bag.stats('words'), { used: 2, total: 3 });
+  assert.equal(bag.release('words', offered[1].w), true);
+  assert.deepEqual(bag.stats('words'), { used: 1, total: 3 }, 'released');
+  assert.equal(bag.release('words', offered[1].w), false, 'twice: nothing to release');
+  assert.equal(bag.release('words', 42), false, 'keys are strings');
+  assert.deepEqual(JSON.parse(store.get('bgb:bag:words')), [offered[0].w], 'persisted');
+  assert.throws(() => bag.release('nope', 'x'), /unknown bank/);
+});
+
+test('util.keepAwake: overlapping requests hold ONE wake lock, and turning it off releases that one', async () => {
+  const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const made = [];
+  const fake = {
+    wakeLock: {
+      async request() {
+        await Promise.resolve();
+        const lock = { released: false, async release() { this.released = true; }, addEventListener() {} };
+        made.push(lock);
+        return lock;
+      },
+    },
+  };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, get: () => fake });
+  try {
+    await Promise.all([util.keepAwake(true), util.keepAwake(true), util.keepAwake(true)]);
+    assert.equal(made.length, 1, 'three callers in one tick, one lock');
+    assert.equal(util.wakeLockActive(), true);
+    util.keepAwake(true);
+    util.keepAwake(false);                          // on → off before the worker even ran
+    await util.keepAwake(false);
+    assert.equal(made.length, 1);
+    assert.equal(made[0].released, true, 'the lock we hold is the one released');
+    assert.equal(util.wakeLockActive(), false);
+  } finally {
+    if (desc) Object.defineProperty(globalThis, 'navigator', desc); else delete globalThis.navigator;
+  }
 });

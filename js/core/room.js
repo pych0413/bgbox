@@ -24,7 +24,9 @@
 //                   ping   { c }   (not `t`: that is the message type)      bye {}
 //   host → client   welcome { v, build, device, seats: [{ id, name, token }], room, views }   (re-sent when the seat list changes)
 //                   room    { room }                              public room view; `stalled`, `claims`, `versionMismatch` only for the host
-//                   views   { rev, hostNow, bySeat, table, focus }   this device's seats only; `cue` for the host device
+//                   views   { rev, hostNow, bySeat, table, focus, canInk }   this device's seats only (canInk: those
+//                           of its seats engine.canInk allows to draw now); `cue` and `hostActions`
+//                           ([{ i, label }] from engine.hostActions) for the host device
 //                   ack     { id, ok }   ok = the action changed the game (false = refused, e.g. wrong phase)
 //                   claimWait { pid, name }   the claim is waiting for the host's approval
 //                   ink { pid, stroke, pts, ... } / inkSync { ink: { epoch, strokes } }
@@ -70,13 +72,20 @@ const V1_REASON = '呢間房用緊新版本嘅桌遊盒 — 請重新整理個�
 const fail = (message) => ({ ok: false, message });
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
-/** Only the seats this device owns may learn who is "in focus", and never anyone else's. */
-function filterFocus(focus, seatIds) {
+/**
+ * What one device may learn about who is "in focus": its OWN seats only, never anyone else's.
+ * An anonymous (eyes-closed) step stays `{ pids: [], anonymous }` for every device that holds a
+ * seat, even when none of its seats is called — so a shared phone shows the very same pass gate
+ * whether the called role is on it, on another phone, or in the centre (BACKLOG build:onuw).
+ * The prompt itself is public: the narrator says it out loud.
+ */
+export function filterFocus(focus, seatIds) {
   if (!isObj(focus) || !Array.isArray(focus.pids)) return null;
   const mine = focus.pids.filter((id) => seatIds.includes(id));
-  if (!mine.length) return null;
+  const anonymous = focus.anonymous ? String(focus.anonymous) : '';
+  if (!mine.length && !(anonymous && seatIds.length)) return null;
   const out = { pids: mine };
-  if (focus.anonymous) out.anonymous = String(focus.anonymous);
+  if (anonymous) out.anonymous = anonymous;
   return out;
 }
 
@@ -155,6 +164,7 @@ export class Room {
       this.history = snap.history ?? [];
       this.lastResult = snap.lastResult ?? null;
       this.narration = { mode: snap.narration?.mode ?? 'voice' };
+      this.narrationPref = NARRATION_MODES.includes(snap.narrationPref) ? snap.narrationPref : this.narration.mode;
       this.rev = snap.rev ?? 0;
       this.banned = new Set(snap.banned ?? []);
       this.carries = isObj(snap.carries) ? snap.carries : {};
@@ -179,6 +189,7 @@ export class Room {
       this.history = [];
       this.lastResult = null;
       this.narration = { mode: NARRATION_MODES.includes(o.narrationMode) ? o.narrationMode : 'voice' };
+      this.narrationPref = this.narration.mode;   // the host's own choice; a game's meta.narrationDefault overrides it while selected
       this.rev = 0;
       this.banned = new Set();
       this.carries = {};          // gameId → the last result().carry of that game (anti-streak); host only, never sent
@@ -320,6 +331,7 @@ export class Room {
       config: clone(this.config),
       configSummary: summary,
       configValid: this.#configStatus(),
+      singleDevice: this.#singleDevice(),   // the env games get as config.*(…, { singleDevice })
       scoreboard: clone(this.scoreboard),
       history: clone(this.history),
       narration: { mode: this.narration.mode },
@@ -360,18 +372,23 @@ export class Room {
 
   #viewsFor(dev, cache, hostNow, isHost) {
     const s = this.session;
-    const out = { rev: this.rev, hostNow, bySeat: {}, table: null, focus: null };
+    const out = { rev: this.rev, hostNow, bySeat: {}, table: null, focus: null, canInk: [] };
     if (s) {
       const seats = this.#seatsOf(dev.id);
       cache.table ??= s.table();
       cache.focus ??= s.focus();
       out.table = dev.local ? clone(cache.table) : cache.table;
-      for (const p of seats) if (!p.spectator) out.bySeat[p.id] = s.view(p.id);
-      out.focus = filterFocus(cache.focus, seats.map((p) => p.id));
+      const playing = seats.filter((p) => !p.spectator);
+      for (const p of playing) out.bySeat[p.id] = s.view(p.id);
+      out.focus = filterFocus(cache.focus, playing.map((p) => p.id));
+      // which of THIS device's seats may draw now (engine.canInk) — the shell folds the narrator bar for them
+      out.canInk = playing.filter((p) => s.canInk(p.id)).map((p) => p.id);
     }
     if (isHost) {
       const cue = s && this.phase === 'playing' ? s.cue() : null;
       out.cue = cue ? { id: cue.id, text: cue.text } : null;
+      // the game's own host buttons (engine.hostActions) — the host device only; labels for the ⋯ menu
+      out.hostActions = s && this.phase === 'playing' ? s.hostActions().map((a, i) => ({ i, label: a.label })) : [];
     }
     return out;
   }
@@ -722,6 +739,9 @@ export class Room {
       const prev = this.lastConfigs[id] ?? this.deps.store?.get(`bgb:cfg:${id}`) ?? null;
       this.game = game;
       this.gameId = id;
+      // meta.narrationDefault: a typed / quiet game starts on its own mode; any other game on the host's choice
+      const nd = game.meta?.narrationDefault;
+      this.narration.mode = NARRATION_MODES.includes(nd) ? nd : this.narrationPref;
       this.config = this.#defaults(this.#seated().length, prev);
       this.configDirty = false;
       this.loading = null;
@@ -778,7 +798,7 @@ export class Room {
     if (n < min) return { ok: false, message: `最少要 ${min} 個人（而家 ${n}）`, warnings };
     if (n > max) return { ok: false, message: `最多 ${max} 個人（而家 ${n}）`, warnings };
     let v;
-    try { v = this.game.config.validate(clone(this.config), n); } catch (e) {
+    try { v = this.game.config.validate(clone(this.config), n, { singleDevice: this.#singleDevice() }); } catch (e) {
       console.error('[room] config.validate threw', e);
       v = { ok: false, message: '設定有問題' };
     }
@@ -1049,23 +1069,34 @@ export class Room {
     });
   }
 
+  /**
+   * The game is over. `result.void === true` (呢鋪唔計) changes nothing on the scoreboard and marks the
+   * history line; `result.spectators: [pid]` names seats that did not play (a human moderator) — they are
+   * not counted as having played.
+   */
   #finish(res) {
     if (res.carry !== undefined) this.carries[this.gameId] = clone(res.carry);   // for the next game of the same kind; never in lastResult
-    const winners = Array.isArray(res.winners) ? res.winners.map(String) : [];
-    const points = isObj(res.points) ? res.points : {};
+    const voided = res.void === true;
+    const winners = !voided && Array.isArray(res.winners) ? res.winners.map(String) : [];
+    const points = !voided && isObj(res.points) ? res.points : {};
+    const sitOut = new Set(Array.isArray(res.spectators) ? res.spectators.map(String) : []);
     this.session.stop();
     this.phase = 'results';
-    for (const p of this.#seated()) {
-      const sb = (this.scoreboard[p.id] ??= { played: 0, wins: 0, points: 0 });
-      sb.played += 1;
-      if (winners.includes(p.id)) sb.wins += 1;
-      sb.points += Number(points[p.id]) || 0;
+    if (!voided) {
+      for (const p of this.#seated()) {
+        if (sitOut.has(p.id)) continue;
+        const sb = (this.scoreboard[p.id] ??= { played: 0, wins: 0, points: 0 });
+        sb.played += 1;
+        if (winners.includes(p.id)) sb.wins += 1;
+        sb.points += Number(points[p.id]) || 0;
+      }
     }
     this.lastResult = {
       gameId: this.gameId, winners, summary: String(res.summary ?? ''),
       lines: Array.isArray(res.lines) ? clone(res.lines) : [], points: clone(points),
+      ...(voided ? { void: true } : {}),
     };
-    this.history.push({ gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary });
+    this.history.push({ gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary, ...(voided ? { void: true } : {}) });
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
     this.waiting.clear();
     this.#mark();
@@ -1164,6 +1195,17 @@ export class Room {
     return this.#batch(() => this.session.dispatch(HOST, { type: ACT.VOID_ROUND }));
   }
 
+  /**
+   * One of the game's own host buttons (engine.hostActions), by its index in the list the host was shown.
+   * `label` (optional) must still match, so a list that changed under the finger never fires the wrong one.
+   */
+  hostAction(index, label) {
+    if (this.phase !== 'playing' || !this.session) return false;
+    const a = this.session.hostActions()[Number(index)];
+    if (!a || (label !== undefined && a.label !== label)) return false;
+    return this.#batch(() => this.session.dispatch(HOST, a.action));
+  }
+
   /** 代佢做: act for a seat that is not answering. */
   autoAct(pid) {
     const p = this.#byId(pid);
@@ -1175,6 +1217,7 @@ export class Room {
     if (!NARRATION_MODES.includes(mode)) return false;
     return this.#batch(() => {
       this.narration.mode = mode;
+      this.narrationPref = mode;
       this.session?.setNarrationMode(mode);
       this.#mark();
       return true;
@@ -1418,6 +1461,7 @@ export class Room {
       history: clone(this.history),
       lastResult: this.lastResult ? clone(this.lastResult) : null,
       narration: { mode: this.narration.mode },
+      narrationPref: this.narrationPref,
       rev: this.rev,
       banned: [...this.banned],
       carries: clone(this.carries),

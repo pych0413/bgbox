@@ -112,11 +112,75 @@ export function savedGroupNames(group) {
   return names.length >= 2 ? names : null;
 }
 
+/**
+ * Games where the seat order IS the order people take turns (speaking, drawing, leading a team),
+ * so the lobby tells the host to arrange the seats first. A game may say so itself with
+ * `meta.turnOrder: true | false`; the list covers the games that do not (yet).
+ */
+export const TURN_ORDER_GAMES = Object.freeze(['undercover', 'spyfall', '9upper', 'avalon', 'werewolf', 'fake-artist', 'draw-guess']);
+export function turnOrderMatters(id, meta) {
+  if (typeof meta?.turnOrder === 'boolean') return meta.turnOrder;
+  return TURN_ORDER_GAMES.includes(id);
+}
+
 /** Is a one-tap config preset (`config.presets(n)` entry's cfg) what the config holds now? */
 export function presetMatches(cfg, presetCfg) {
   if (!presetCfg || typeof presetCfg !== 'object') return false;
   const same = (a, b) => { try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; } };
   return Object.keys(presetCfg).every((k) => same(cfg?.[k], presetCfg[k]));
+}
+
+// ---------- results (BACKLOG build:avalon / build:onuw) ----------
+
+const HEAD_RE = /^──\s+/;
+
+/** One result line as display text: strings as they are, { text } objects by their text. */
+function lineText(l) {
+  if (typeof l === 'string') return l;
+  if (l && typeof l === 'object' && typeof l.text === 'string') return l.text;
+  return l == null ? '' : String(l);
+}
+
+/** A section heading, or null: `{ h: '標題' }`, or a string '── 標題 ──' (the dashes are trimmed). */
+export function headingOf(l) {
+  if (l && typeof l === 'object' && typeof l.h === 'string') return l.h.trim() || null;
+  if (typeof l === 'string' && HEAD_RE.test(l)) return l.replace(HEAD_RE, '').replace(/\s*─+\s*$/, '').trim() || null;
+  return null;
+}
+
+/**
+ * result.lines → [{ title, lines: [string] }]. Lines before the first heading form an untitled first
+ * section; a heading with nothing under it is dropped; empty lines are skipped.
+ */
+export function resultSections(lines) {
+  const out = [];
+  let cur = { title: null, lines: [] };
+  for (const l of Array.isArray(lines) ? lines : []) {
+    const h = headingOf(l);
+    if (h !== null) {
+      if (cur.lines.length) out.push(cur);
+      cur = { title: h, lines: [] };
+      continue;
+    }
+    const text = lineText(l).trim();
+    if (text) cur.lines.push(text);
+  }
+  if (cur.lines.length) out.push(cur);
+  return out;
+}
+
+/** Which sections start open: all of a short recap; only the first of a long one (> longOver lines). */
+export function sectionsOpen(sections, longOver = 8) {
+  const total = (sections ?? []).reduce((n, s) => n + s.lines.length, 0);
+  return (sections ?? []).map((_, i) => total <= longOver || i === 0);
+}
+
+/** 「假畫家-2026-10-03-2.png」 — a file name for a keepsake picture (no characters iOS / Windows dislike). */
+export function pictureFileName(gameName, index, date = new Date()) {
+  const safe = String(gameName ?? '').replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 24) || '桌遊盒';
+  const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date(0);
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${safe}-${ymd}${index > 0 ? `-${index + 1}` : ''}.png`;
 }
 
 // ---------- table timer (BACKLOG T1) ----------

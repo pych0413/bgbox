@@ -10,7 +10,7 @@
 // copy below exists only so the picker needs no module; tests/core.test.mjs
 // fails if a field here drifts from game.js. Mirrored fields:
 //   name, emoji, players, minutes, blurb, singleDevice, narration
-// (`batch` lives only here: 1 = shipped, 2 = probed before it is offered.)
+// (`batch` lives only here: 1 = shipped, 2 = probed before it is offered. All ten shipped 2026-10-03.)
 // ============================================================
 
 export const GAMES = [
@@ -58,14 +58,14 @@ export const GAMES = [
   },
   {
     id: 'fake-artist',
-    meta: { name: '假畫家', emoji: '🎨', players: [3, 10], minutes: [15, 25], batch: 2,
+    meta: { name: '假畫家', emoji: '🎨', players: [3, 10], minutes: [15, 25], batch: 1,
       singleDevice: 'full', narration: 'optional',
       blurb: '大家輪流落一筆畫同一幅畫，但有個人唔知畫乜。' },
     load: () => import('./fake-artist/index.js?v=20261003090241'),
   },
   {
     id: 'draw-guess',
-    meta: { name: '你畫我猜', emoji: '✏️', players: [3, 12], minutes: [15, 30], batch: 2,
+    meta: { name: '你畫我猜', emoji: '✏️', players: [3, 12], minutes: [15, 30], batch: 1,
       singleDevice: 'partial', narration: 'optional',
       blurb: '一個人畫，其他人搶住估，畫得越快越高分。' },
     load: () => import('./draw-guess/index.js?v=20261003090241'),
