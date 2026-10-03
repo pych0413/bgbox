@@ -279,6 +279,9 @@ Two people can share a phone (someone's battery died); one phone can hold every 
   taps to open. Private covers (hold-to-peek) still apply behind it.
 - When `focus` names seats on this device, the device walks through them in seat order,
   gating each one. With `anonymous`, the gate shows the role prompt instead of a name.
+  The gate only moves on when `focus` gets **smaller**: an engine with several seats awake in one step must
+  drop a seat from `focus` once it is done (cheese-thief: a `{ type: 'done' }` action, sent by the UI only when
+  another awake seat shares the phone), or the second and third awake seats on a shared phone never get it.
 - **Anonymous (eyes-closed) steps gate the same way whoever holds the role.** The room sends
   `{ pids: [], anonymous }` to every device with a playing seat (§4), and `play.js` opens the role-prompt gate
   (subtitle 「其他人閉埋眼，唔好望」) on **every shared phone (2+ seats) once per step** — also when the called

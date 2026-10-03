@@ -480,7 +480,8 @@ export function mountPlay(sh) {
     emojiEl.textContent = meta.emoji ?? '🎲';
     titleEl.textContent = view?.title ?? meta.name ?? '';
 
-    const myTurn = !!seat && !!st.focus?.pids?.includes(seat);
+    // no bright 輪到你 pill at night: it is the brightest thing on a lit phone across a dark table (qa:cheese-thief)
+    const myTurn = !!seat && !!st.focus?.pids?.includes(seat) && !view?.night;
     subEl.replaceChildren(...[
       view?.subtitle || null,
       myTurn ? el('span', { class: 'turn-badge', style: { marginLeft: view?.subtitle ? '.5rem' : '0' }, text: '輪到你' }) : null,

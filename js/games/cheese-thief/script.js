@@ -40,7 +40,7 @@ export function stepTitle(step) {
 export function narrate(step, n) {
   switch (step.k) {
     case 'begin':
-      return '天黑喇，請大家閉眼。手機放喺面前，唔好偷望。';
+      return '天黑喇，請大家閉眼。手機放喺面前唔好鎖，唔好偷望。';
     case 'open':
       return n === 4
         ? `而家${CLOCK[step.h]}點鐘。醒鐘係${CLOCK[step.h]}點嘅老鼠，請睜開眼。`
@@ -92,11 +92,13 @@ export function cueMinMs(text) {
 
 // ---------- head-count notes (lobby: why this set-up) ----------
 
-/** One line per head-count: what is different and why it is worth knowing. */
-export function headCountNote(n) {
+/** One line per head-count: what is different and why it is worth knowing. `opts.pick5`: the 5p 家規. */
+export function headCountNote(n, opts = {}) {
   switch (n) {
     case 4: return '4 人：官方兩粒骰變體 — 大盜醒兩次、冇共犯、唔可以偷睇，平票算大盜贏。';
-    case 5: return '5 人：共犯靠撞 — 大盜偷芝士嗰陣有人一齊醒先有，大盜一個醒就冇。';
+    case 5: return opts.pick5
+      ? '5 人（家規）：實有共犯 — 夜尾大盜揀 1 位，兩個互相認得，好似 6 人局。'
+      : '5 人：共犯靠撞 — 大盜偷芝士嗰陣有人一齊醒先有，大盜一個醒就冇（家規可改做夜尾揀）。';
     case 6: return '6 人：最啱新手 — 夜尾大盜揀 1 位共犯，兩個互相認得。';
     case 7: return '7 人：推理最多 — 2 位共犯互相認得，但唔知大盜係邊個。';
     case 8: return '8 人：最熱鬧 — 2 位共犯同大盜三個互相認得。';
@@ -122,11 +124,9 @@ export const HINT = {
     recruit: '揀共犯：㩒名再㩒大掣；唔揀，時間到會幫你隨機揀。',
     meet: '記住你嘅隊友，天光幫大盜脫身。',
   },
+  // one line for every seat (the 💡 sheet is not covered: a per-role line would show who is a follower)
   day: {
-    thief: '扮貪瞓鼠：講一個講得通嘅醒鐘，唔好畀人投中。',
-    follower: '幫大盜：引大家投第二個，自己畀人投都唔緊要。',
-    fallMouse: '你想畀人投中：扮可疑啲，引人投你。',
-    sleepyhead: '講你幾點醒、見到邊個，搵出邊個講大話。',
+    all: '再㩒住身份牌睇一次，然後講你幾點醒、見到邊個。',
   },
   vote: '揀一個你覺得係大盜嘅人，再㩒確定。唔可以投自己。',
   voted: '投咗喇，等其他人；投晒之前仲可以改。',

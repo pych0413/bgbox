@@ -8,7 +8,8 @@
 // Shape of a game
 //   roll   everyone looks at their card, rolls their die (4p: two) under the cup
 //   night  hour 1..6 are called in order (every hour, every time, same length),
-//          then — 6, 7, 8 players only — the thief picks followers; then dawn
+//          then — 6, 7, 8 players (and 5 with the 家規 pick5) — the thief picks
+//          followers; then dawn
 //   day    free discussion
 //   vote   simultaneous secret vote
 //   reveal the top-voted cards turn over (a few seconds, so the tally lands)
@@ -43,7 +44,7 @@ export const rules = {
     '1 個芝士大盜，其餘係貪瞓鼠；每人暗擲一粒骰（4 人局兩粒）。',
     '天黑後手機由一點報到六點：擲到幾點，就喺嗰個點鐘睜眼。',
     '大盜喺自己個鐘偷走芝士 — 同佢一齊醒嘅人會見到係邊個。',
-    '貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰（4 人局唔得）。',
+    '貪瞓鼠淨係得自己醒，可以喺自己部機偷睇一粒骰（4 人局唔得）。',
     '5–8 人：大盜會拉人做共犯，共犯幫大盜。',
     '天光討論完一齊投票：大盜喺最高票 → 貪瞓鼠贏，否則大盜隊贏。',
   ],
@@ -55,7 +56,7 @@ export const rules = {
     },
     {
       id: 'sleepyhead', name: '貪瞓鼠', emoji: '🐭', team: 'sleepyhead',
-      text: '做乜：喺你嗰個點鐘睜眼；如果淨係得你醒，可以偷睇一個人粒骰（4 人局唔得）。點贏：大盜喺最高票（平票都算）。',
+      text: '做乜：喺你嗰個點鐘睜眼；淨係得你醒，可以喺自己部機揀一個人偷睇佢粒骰（4 人局唔得）。點贏：大盜喺最高票（平票都算）。',
     },
     {
       id: 'follower', name: '共犯', emoji: '🤝', team: 'thief',
@@ -73,11 +74,11 @@ export const rules = {
     },
     {
       title: '夜晚',
-      body: '手機由一點報到六點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長（官方每個鐘 10 秒）。擲到嗰個點嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜醒嗰陣一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰，睇完要冚返，之後唔可以再睇（4 人局唔得）。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
+      body: '手機由一點報到六點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長（官方每個鐘 10 秒）。擲到嗰個點嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜醒嗰陣一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰：喺自己部手機㩒佢個名再㩒大掣，結果喺你部機度出（唔使掂人哋部機 — 夜晚其他人部機係黑嘅），睇完要冚返，之後唔可以再睇（4 人局唔得）。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
     },
     {
       title: '共犯點產生',
-      body: '4 人：冇共犯。\n5 人：大盜偷芝士嗰陣，如果有貪瞓鼠一齊醒，嗰位就成為共犯；有幾位一齊醒，大盜指一位；大盜自己一個醒就冇共犯。\n6 人：夜晚尾，大盜揀 1 位共犯（邊個都得），兩個人互相認得。\n7 人：夜晚尾，大盜揀 2 位共犯，佢哋互相認得，但唔知大盜係邊個（除非佢夜晚親眼見到大盜偷芝士）。\n8 人：夜晚尾，大盜揀 2 位共犯，三個人互相認得。\n共犯夜晚唔可以傳遞任何骰仔資料。',
+      body: '4 人：冇共犯。\n5 人：大盜偷芝士嗰陣，如果有貪瞓鼠一齊醒，嗰位就成為共犯；有幾位一齊醒，大盜指一位；大盜自己一個醒就冇共犯。\n6 人：夜晚尾，大盜揀 1 位共犯（邊個都得），兩個人互相認得。\n7 人：夜晚尾，大盜揀 2 位共犯，佢哋互相認得，但唔知大盜係邊個（除非佢夜晚親眼見到大盜偷芝士）。\n8 人：夜晚尾，大盜揀 2 位共犯，三個人互相認得。\n家規（5 人可選）：唔靠撞，改做夜晚尾由大盜揀 1 位共犯，好似 6 人局咁兩個互相認得。\n共犯夜晚唔可以傳遞任何骰仔資料。天光嗰陣大家都會被提醒再睇一次身份牌：畀大盜揀中嘅人，張牌會變咗「共犯」。',
     },
     {
       title: '日頭同投票',
@@ -108,12 +109,15 @@ export const rules = {
 
 // ---------- config ----------
 
-const DEFAULTS = { fallMouse: false, peek4: false, reroll: false, hourSec: 10, discussSec: 300, recap: true };
+const DEFAULTS = { fallMouse: false, peek4: false, pick5: false, reroll: false, hourSec: 10, discussSec: 300, recap: true };
+/** One phone passed around needs longer hours: pick it up, tap the gate, read, act, hand it on. */
+const SHARED_HOUR_SEC = 15;
 
 function normalise(cfg, n) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   c.fallMouse = !!c.fallMouse && n >= 6 && n <= 8;
   c.peek4 = !!c.peek4;
+  c.pick5 = !!c.pick5 && n === 5;     // 家規: 5p thief picks one follower at night end (6p style)
   c.reroll = !!c.reroll;
   c.recap = c.recap !== false;
   c.hourSec = clampInt(c.hourSec, 5, 30, DEFAULTS.hourSec);
@@ -128,13 +132,24 @@ function clampInt(v, lo, hi, dflt) {
 }
 
 export const config = {
-  defaults(n, prev) {
+  defaults(n, prev, env) {
     const d = { ...DEFAULTS };
+    // one shared phone: the hour also has to cover picking the phone up and handing it on
+    if (env?.singleDevice) d.hourSec = SHARED_HOUR_SEC;
     if (prev) {
-      for (const k of ['hourSec', 'discussSec', 'recap', 'reroll', 'peek4']) if (prev[k] !== undefined) d[k] = prev[k];
+      for (const k of ['hourSec', 'discussSec', 'recap', 'reroll', 'peek4', 'pick5']) if (prev[k] !== undefined) d[k] = prev[k];
       if (n >= 6 && n <= 8 && prev.fallMouse) d.fallMouse = true;
     }
     return normalise(d, n);
+  },
+
+  /** 5 players: the official witness rule, or the 家規 "thief picks one at night end". */
+  presets(n) {
+    if (n !== 5) return [];
+    return [
+      { id: 'official', label: '官方：共犯靠撞', reason: '偷芝士嗰陣有貪瞓鼠一齊醒先有共犯；大盜一個醒就冇', cfg: { pick5: false } },
+      { id: 'pick5', label: '家規：夜尾揀共犯', reason: '好似 6 人局：六點之後大盜揀 1 位，實有共犯，兩個互相認得', cfg: { pick5: true } },
+    ];
   },
 
   validate(cfg, n) {
@@ -149,7 +164,11 @@ export const config = {
     const ds = c.discussSec ?? DEFAULTS.discussSec;
     if (!Number.isFinite(ds) || ds < 0 || ds > 1800) return { ok: false, message: '討論時間 0–1800 秒（0 = 唔計時）', warnings };
     if (n === 4) warnings.push('4 人局係官方變體：每人兩粒骰，大盜醒兩次，冇共犯，唔可以偷睇。');
-    if (n === 5) warnings.push('5 人局：大盜偷芝士時有貪瞓鼠一齊醒，嗰位先會變共犯。');
+    if (n === 5) {
+      warnings.push(c.pick5
+        ? '家規：5 人局夜晚尾由大盜揀 1 位共犯（官方係偷芝士嗰陣一齊醒嘅貪瞓鼠先做共犯）。'
+        : '5 人局：大盜偷芝士時有貪瞓鼠一齊醒，嗰位先會變共犯（可能冇）。想實有共犯，可以開家規「夜尾揀共犯」。');
+    }
     if (c.fallMouse) warnings.push('背鍋鼠想畀人投中 — 討論會更亂，建議玩熟先加。');
     if (n === 4 && c.peek4) warnings.push('家規：4 人局都可以偷睇骰（官方唔畀）。');
     if (c.reroll) warnings.push('家規：可以重擲骰（官方擲一次就定案）。');
@@ -164,7 +183,10 @@ export const config = {
     if (n === 4) {
       f.push({ key: 'peek4', label: '家規：4 人局都可以偷睇骰', type: 'bool', help: '官方規則係唔可以：4 人局淨係得你醒都唔准睇。開咗就係家規。' });
     }
-    f.push({ key: 'hourSec', label: '每個點鐘幾長', type: 'seconds', min: 5, max: 30, help: '官方係 10 秒。每個點鐘一樣長，冇人擲到都照行。' });
+    if (n === 5) {
+      f.push({ key: 'pick5', label: '家規：5 人都喺夜晚尾由大盜揀 1 個共犯', type: 'bool', help: '官方 5 人局：偷芝士嗰陣有貪瞓鼠一齊醒先有共犯，大盜一個醒就冇。開咗就好似 6 人局：六點之後大盜揀 1 位，兩個互相認得。' });
+    }
+    f.push({ key: 'hourSec', label: '每個點鐘幾長', type: 'seconds', min: 5, max: 30, help: '官方係 10 秒。每個點鐘一樣長，冇人擲到都照行。一部手機輪流玩建議 15 秒（要交嚟交去）。' });
     f.push({ key: 'discussSec', label: '討論時間', type: 'seconds', min: 0, max: 1800, help: '0 = 唔計時，全部人㩒「夠鐘投票」就投。' });
     f.push({ key: 'reroll', label: '家規：擲骰可以重擲', type: 'bool', help: '官方規則：擲一次就定案。開咗就可以搖到㩒「鎖定」為止。' });
     f.push({ key: 'recap', label: '日頭顯示夜晚記錄', type: 'bool', help: '只有你自己睇到你夜晚見過嘅嘢，等你唔使靠記性。' });
@@ -177,14 +199,15 @@ export const config = {
     const fm = c.fallMouse ? 1 : 0;
     lines.push(`🧀 1 大盜 · 🐭 ${n - 1 - fm} 貪瞓鼠${fm ? ' · 🎭 1 背鍋鼠' : ''}`);
     lines.push(n === 4 ? '🎲 每人 2 粒骰（大盜醒兩次）· 冇共犯'
-      : n === 5 ? '🎲 每人 1 粒骰 · 共犯：偷芝士時喺度嘅貪瞓鼠'
+      : n === 5 ? (c.pick5 ? '🎲 每人 1 粒骰 · 夜尾大盜揀 1 位共犯（家規）' : '🎲 每人 1 粒骰 · 共犯：偷芝士時喺度嘅貪瞓鼠')
       : n === 6 ? '🎲 每人 1 粒骰 · 夜尾大盜揀 1 位共犯'
       : n === 7 ? '🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（唔識大盜）'
       : '🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（三人互認）');
-    const note = headCountNote(n);
+    const note = headCountNote(n, { pick5: c.pick5 });
     if (note) lines.push(`💬 ${note}`);
     lines.push(`⏱ 每個點鐘 ${c.hourSec} 秒 · 討論 ${c.discussSec ? Math.round(c.discussSec / 60 * 10) / 10 + ' 分鐘' : '唔計時'}`);
     if (n === 4 && c.peek4) lines.push('👁 家規：4 人局都可以偷睇骰');
+    if (n === 5 && c.pick5) lines.push('🤝 家規：5 人局夜晚尾由大盜揀 1 個共犯（官方係靠撞）');
     if (c.reroll) lines.push('🔓 家規：擲骰可重擲，鎖定先定案');
     return lines;
   },
@@ -209,11 +232,22 @@ const hasDice = (s, pid) => Array.isArray(s.dice[pid]);
 const nm = (s, pid) => s.names[pid] ?? '?';
 const count = (obj) => Object.values(obj).filter(Boolean).length;
 const isStr = (x) => typeof x === 'string';
+/** Seats that finished their awake turn in this window (a shared phone walks on to the next one). */
+const doneOf = (s) => s.done ?? [];
 
-function buildSteps(n) {
+/** 5p official: a witness of the theft becomes the follower at the thief's hour. */
+const witnessRule = (s) => s.n === 5 && !s.cfg.pick5;
+/** The follower step after hour six: 6-8p, and 5p with the 家規 pick5. */
+const hasRecruitStep = (n, cfg) => n >= 6 || (n === 5 && !!cfg?.pick5);
+/** Followers the thief picks at the night-end step. */
+const recruitCount = (s) => (s.n >= 7 ? 2 : 1);
+/** The head-count whose follower script applies (5p with the 家規 plays the 6p one). */
+const scriptN = (s) => (s.n === 5 && s.cfg.pick5 ? 6 : s.n);
+
+function buildSteps(n, cfg) {
   const steps = [{ k: 'begin' }];
   for (let h = 1; h <= 6; h++) steps.push({ k: 'open', h }, { k: 'close', h });
-  if (n >= 6) {
+  if (hasRecruitStep(n, cfg)) {
     steps.push({ k: 'rec-pick' });
     if (n === 7) steps.push({ k: 'rec-tclose' });
     steps.push({ k: 'rec-meet' }, { k: 'rec-close' });
@@ -260,6 +294,16 @@ function awakeNow(s) {
 
 function markAck(s, pid) { if (!s.acked.includes(pid)) s.acked.push(pid); }
 
+/**
+ * May `pid` say "I'm done for this step" (hand a shared phone on)? Only an awake seat in a
+ * window, once, and never while it still owes a follower pick.
+ */
+function canFinish(s, pid) {
+  if (s.phase !== 'night' || s.stage !== 'window') return false;
+  if (!awakeNow(s).includes(pid) || doneOf(s).includes(pid)) return false;
+  return !(s.pending && s.pending.by === pid);
+}
+
 // ---------- engine ----------
 
 export const engine = {
@@ -293,6 +337,7 @@ export const engine = {
       wake: {},                     // PRIVATE: pid → hours this seat opens its eyes (set at night start)
       steps: [], ix: -1, stage: 'cue',
       acked: [],                    // seats that tapped something during the current step
+      done: [],                     // PRIVATE: awake seats that finished this window (they leave focus)
       cheese: { gone: false, by: null, hour: null },   // PRIVATE (by, hour)
       followers: [],                // PRIVATE
       informed: [],                 // followers who have been told (their own phones only)
@@ -335,7 +380,7 @@ export const engine = {
 
   cue(s) {
     if (s.phase === 'night' && s.stage === 'cue') {
-      const text = narrate(stepOf(s), s.n);
+      const text = narrate(stepOf(s), scriptN(s));
       return text ? { id: cueIdOf(s), text, minMs: cueMinMs(text) } : null;
     }
     if (s.phase === 'vote' && s.voteCue) {
@@ -355,8 +400,11 @@ export const engine = {
         const st = stepOf(s);
         if (!['open', 'rec-pick', 'rec-meet'].includes(st.k)) return null;
         // An empty hour still returns the prompt (pids: []) so a shared phone
-        // looks the same whether or not anyone is awake.
-        return { pids: awakeNow(s), anonymous: anonymousPrompt(st, s.n) };
+        // looks the same whether or not anyone is awake. A seat that tapped
+        // 「交畀下一位」 (`done`) leaves focus, so a shared phone walks on to the
+        // next awake seat on it instead of staying with the first one all hour.
+        const done = doneOf(s);
+        return { pids: awakeNow(s).filter((p) => !done.includes(p)), anonymous: anonymousPrompt(st, scriptN(s)) };
       }
       case 'vote': {
         const pids = s.order.filter((p) => s.votes[p] === undefined);
@@ -402,6 +450,7 @@ export const engine = {
         if (s.pending && s.pending.by === pid && s.stage === 'window') {
           for (const targets of combos(s.pending.among, s.pending.count)) out.push({ type: 'recruit', targets });
         }
+        if (canFinish(s, pid)) out.push({ type: 'done' });
         break;
       }
       case 'day':
@@ -485,10 +534,11 @@ function rollAct(s, pid, a, ctx) {
 function startNight(s) {
   s.phase = 'night';
   for (const pid of s.order) s.wake[pid] = wakeHours(s, pid);
-  s.steps = buildSteps(s.n);
+  s.steps = buildSteps(s.n, s.cfg);
   s.ix = 0;
   s.stage = 'cue';
   s.acked = [];
+  s.done = [];
   s.deadline = null;
   s.timerLabel = null;
   return s;
@@ -511,7 +561,7 @@ function enterWindow(s, ctx) {
   if (st.k === 'open') openWindow(s, st, ctx);
   else if (st.k === 'rec-pick') {
     const thief = thiefOf(s);
-    s.pending = { by: thief, among: othersOf(s, thief), count: s.n === 6 ? 1 : 2 };
+    s.pending = { by: thief, among: othersOf(s, thief), count: recruitCount(s) };
   } else if (st.k === 'rec-meet') meetWindow(s);
   return s;
 }
@@ -536,7 +586,7 @@ function openWindow(s, st, ctx) {
   }
   if (stoleNow) addNote(s, thief, { k: 'stole', h: st.h });
 
-  if (s.n === 5 && stoleNow) {
+  if (witnessRule(s) && stoleNow) {
     const witnesses = awake.filter((p) => p !== thief);
     if (witnesses.length === 1) applyRecruit(s, [witnesses[0]], st.h);
     else if (witnesses.length > 1) s.pending = { by: thief, among: witnesses, count: 1 };
@@ -565,13 +615,13 @@ function stealNow(s, h) {
   addNote(s, thief, { k: 'stole', h });
 }
 
-/** Record the followers. 5p tells the follower right away; 6–8p tell them at the meeting step. */
+/** Record the followers. 5p (witness rule) tells the follower right away; the night-end step tells them at the meeting. */
 function applyRecruit(s, targets, h) {
   const thief = thiefOf(s);
   s.followers = targets.slice();
   s.pending = null;
   addNote(s, thief, { k: 'recruited', followers: targets.slice() });
-  if (s.n !== 5) return;
+  if (!witnessRule(s)) return;
   s.recruitHour = h;
   for (const f of targets) { s.informed.push(f); addNote(s, f, { k: 'follower', h, thief, mates: [] }); }
   for (const p of s.order.filter((x) => s.wake[x].includes(h))) {
@@ -616,6 +666,7 @@ function finishWindow(s, ctx) {
   s.stage = 'cue';
   s.deadline = null;
   s.acked = [];
+  s.done = [];
   return s;
 }
 
@@ -664,6 +715,13 @@ function nightAct(s, pid, a, ctx) {
       markAck(s, pid);
       return s;
     }
+    case 'done':
+      // 「交畀下一位」 on a shared phone: this seat has seen what it needs; focus moves on.
+      // Never touches the deadline (anti-tell: a step lasts its full time whatever anyone does).
+      if (!canFinish(s, pid)) return s;
+      (s.done ||= []).push(pid);
+      markAck(s, pid);
+      return s;
     default: return s;
   }
 }
@@ -675,6 +733,7 @@ function startDay(s, ctx) {
   s.stage = 'cue';
   s.pending = null;
   s.acked = [];
+  s.done = [];
   s.deadline = s.cfg.discussSec > 0 ? nowOf(ctx) + s.cfg.discussSec * 1000 : null;
   s.timerLabel = '討論時間';
   return s;
@@ -823,8 +882,8 @@ function nightRecap(s) {
     const who = awake.length ? `${names(awake)} 醒咗` : '冇人醒';
     out.push(`${CLOCK[h]}點鐘：${who}${bits.length ? ' — ' + bits.join('；') : ''}`);
   }
-  if (s.n >= 6) {
-    const how = s.n === 6 ? '兩個互相認得' : s.n === 7 ? '兩位共犯互相認得，大盜冇同佢哋對望' : '三個互相認得';
+  if (hasRecruitStep(s.n, s.cfg)) {
+    const how = s.n === 7 ? '兩位共犯互相認得，大盜冇同佢哋對望' : s.n === 8 ? '三個互相認得' : '兩個互相認得';
     out.push(`夜尾：大盜揀咗 ${names(s.followers)} 做共犯（${how}）`);
   }
   return out;
@@ -844,7 +903,7 @@ function progress(done, total) { return { done, total }; }
 
 function buildView(s, pid) {
   const seat = pid != null && s.order.includes(pid) ? pid : null;
-  const v = { phase: s.phase, seat, n: s.n, opts: { reroll: s.cfg.reroll, recap: s.cfg.recap, peek4: s.cfg.peek4 } };
+  const v = { phase: s.phase, seat, n: s.n, opts: { reroll: s.cfg.reroll, recap: s.cfg.recap, peek4: s.cfg.peek4, pick5: !!s.cfg.pick5 } };
 
   const [title, subtitle] = s.phase === 'night'
     ? ['🌙 夜晚', stepTitle(stepOf(s))]
@@ -914,10 +973,10 @@ function hintFor(s, pid, v) {
       return HINT.night.awake;
     }
     case 'day':
-      if (my.role === THIEF) return HINT.day.thief;
-      if (my.role === FMOUSE) return HINT.day.fallMouse;
-      if (my.follower) return HINT.day.follower;
-      return HINT.day.sleepyhead;
+      // The same line for every seat: the 💡 sheet is not behind a cover, so a
+      // role-specific line ("幫大盜…") would tell a neighbour who is a follower.
+      // What each role should do is on its role card, behind hold-to-peek.
+      return HINT.day.all;
     case 'vote': return v.myVote !== undefined ? HINT.voted : HINT.vote;
     case 'reveal': return HINT.reveal;
     case 'over': return HINT.over;
@@ -945,7 +1004,11 @@ function seatView(s, pid, v) {
     mine.chosen = s.pick4[pid];
     mine.ready = s.ready[pid];
   }
-  if (s.phase !== 'roll') mine.wake = s.wake[pid].slice();
+  if (s.phase !== 'roll') {
+    mine.wake = s.wake[pid].slice();
+    const crew = crewOf(s, pid);
+    if (crew) mine.crew = crew;
+  }
   v.my = mine;
 
   if (s.phase === 'night') {
@@ -963,6 +1026,21 @@ function seatView(s, pid, v) {
 }
 
 function clonePlain(x) { return JSON.parse(JSON.stringify(x ?? [])); }
+
+/**
+ * Who this seat knows on the thief's team — for the role card (shown only behind
+ * hold-to-peek). A told follower: the thief if it knows it (7p: only if it watched
+ * the theft) and the other follower(s) it met; the thief: its followers. Nothing
+ * here goes beyond the seat's own 'follower' / 'recruited' notes.
+ */
+function crewOf(s, pid) {
+  if (s.informed.includes(pid)) {
+    const note = [...(s.notes[pid] || [])].reverse().find((x) => x.k === 'follower');
+    return { thief: note?.thief ?? null, mates: (note?.mates ?? []).slice() };
+  }
+  if (s.role[pid] === THIEF && s.followers.length) return { thief: null, mates: s.followers.slice() };
+  return null;
+}
 
 /** What this seat sees on its phone during the current night step. */
 function nightFor(s, pid) {
