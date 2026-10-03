@@ -935,7 +935,7 @@ test('custom: views are whitelist-built (no state field leaks through by name)',
   assert.deepEqual(Object.keys(sim.view('p1')).sort(), topKeys);
   assert.deepEqual(Object.keys(sim.view('p2')).sort(), topKeys.filter((k) => k !== 'all'));
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topKeys.filter((k) => k !== 'all'));
-  const seatKeys = ['diceLocked', 'id', 'name', 'playing', 'roleLocked', 'rolled', 'seenRole'];
+  const seatKeys = ['diceLocked', 'id', 'name', 'playing', 'roleLocked', 'rolled', 'rolls', 'seenRole'];
   for (const s of sim.view('p3').seats) assert.deepEqual(Object.keys(s).sort(), seatKeys);
   assert.equal(sim.view('p1').deadline, undefined, 'no timers here');
   for (const r of sim.view('p3').roles) assert.deepEqual(Object.keys(r).sort(), ['count', 'desc', 'emoji', 'filler', 'id', 'name']);
@@ -1334,4 +1334,75 @@ test('custom ui: U1 — long-pressing a role name on the roster explains it; a t
     assert.deepEqual(toasts, [tag.attrs.title], 'only the held press explains');
     ph.handle.destroy();
   });
+});
+
+test('custom: the roster counts this round\'s rolls (🎲 已搖 ×3), so rolling until a number fits shows before a lock', () => {
+  const sim = mk(4, { seed: 3 });
+  const rollsOf = (pid) => sim.view('p3').seats.find((s) => s.id === pid).rolls;
+  assert.equal(rollsOf('p2'), 0);
+  for (let i = 1; i <= 3; i++) changed(sim, 'p2', { type: 'roll' });
+  assert.equal(rollsOf('p2'), 3, 'public: everybody sees the count (the log says each roll anyway)');
+  assert.equal(sim.view(null).seats.find((s) => s.id === 'p2').rolls, 3);
+  changed(sim, 'p2', { type: 'lock-dice' });
+  assert.equal(rollsOf('p2'), 3, 'the lock keeps the count');
+  changed(sim, 'p1', { type: 'unlock-dice', pid: 'p2' });
+  changed(sim, 'p2', { type: 'roll' });
+  assert.equal(rollsOf('p2'), 4, 'a roll after an unlock counts too');
+  changed(sim, 'p1', { type: 'redeal' });
+  assert.equal(rollsOf('p2'), 4, 'a re-deal leaves the dice and the count');
+  changed(sim, 'p1', { type: 'roll-all' });
+  for (const pid of ['p1', 'p2', 'p3', 'p4']) assert.equal(rollsOf(pid), 1, 'the host rolled for everybody: a fresh start');
+  changed(sim, 'p1', { type: 'next-round' });
+  for (const pid of ['p1', 'p2', 'p3', 'p4']) assert.equal(rollsOf(pid), 0, 'a new round starts from nothing');
+  assert.equal(sim.view('p3').seats[1].rolled, false);
+  checkLeaks(sim);
+});
+
+test('custom ui: 已搖 ×N, the 開盅 status line, the locked-cup badge and the showdown under the cup', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 9 });
+    const host = mountFor(ui, sim, 'p1');
+    const p2 = mountFor(ui, sim, 'p2');
+    const p3 = mountFor(ui, sim, 'p3');
+    const sync = () => { for (const ph of [host, p2, p3]) ph.handle.update(sim.view(ph.pid), {}); };
+    sync();
+    for (const pid of ['p2', 'p3']) changed(sim, pid, { type: 'seen' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p3', { type: 'roll' });
+    sync();
+    const tagsOf = (ph, pid) => findEls(ph.root, (x) => x.cls.has('cu-row'))[sim.state.order.indexOf(pid)].textContent;
+    assert.ok(tagsOf(p3, 'p2').includes('🎲 已搖 ×3'), tagsOf(p3, 'p2'));
+    assert.ok(tagsOf(p3, 'p3').includes('🎲 已搖') && !tagsOf(p3, 'p3').includes('×'), 'one roll: no count');
+    // a locked cup: no roll / lock buttons on the cup, a badge says why
+    changed(sim, 'p2', { type: 'lock-dice' });
+    sync();
+    const cup = p2.stub.made.cups.at(-1).props;
+    assert.equal(cup.lockedRoll, true);
+    assert.equal(cup.canRoll, false, 'no greyed-out roll button');
+    assert.equal(cup.onLock, undefined, 'no greyed-out lock button');
+    const badge = findEls(p2.root, (x) => x.cls.has('cu-badge'))[0];
+    assert.ok(badge && shown(badge) && badge.textContent.includes('鎖定咗點數') && badge.textContent.includes('主持'));
+    const free = findEls(p3.root, (x) => x.cls.has('cu-badge'))[0];
+    assert.ok(!shown(free), 'an unlocked cup has no badge');
+    assert.equal(p3.stub.made.cups.at(-1).props.canRoll, true);
+    assert.equal(typeof p3.stub.made.cups.at(-1).props.onLock, 'function');
+    // the host opens the dice: a status line says so, and 開盅 sits right under the cup (above the role card)
+    changed(sim, 'p1', { type: 'reveal-dice' });
+    sync();
+    const status = findEls(p3.root, (x) => x.cls.has('cu-status'))[0];
+    assert.ok(status.textContent.includes('開咗盅'), status.textContent);
+    const cards = findEls(p3.root, (x) => x.cls.has('cu-card') && shown(x)).map((x) => x.textContent);
+    const at = (s) => cards.findIndex((t) => t.includes(s));
+    assert.ok(at('骰盅') < at('開盅 🎲') && at('開盅 🎲') < at('我嘅角色牌'), 'cup → 開盅 → role card');
+    assert.ok(!shown(badge), 'the badge goes once the dice are open');
+    for (const ph of [host, p2, p3]) ph.handle.destroy();
+  });
+});
+
+test('custom: the rules call the dice lock by the button\'s name (鎖定點數)', () => {
+  const text = rules.sections.map((s) => s.body).join('\n');
+  assert.ok(text.includes('㩒「鎖定點數」'));
+  assert.ok(!text.includes('鎖定骰盅'));
 });

@@ -11,11 +11,14 @@
 // game's emoji and name, `me` (highlights your row), `showHistory` (default true).
 //
 // Sorted by points, then wins, then fewer games played, then seat order.
-// Ties share a rank.
+// Ties share a rank. Medals only for something won (#39, logic.scoreboardMode): points above 0, or wins
+// on a night where no game awarded points — and on such a night the 分 column (all zeros) is left out.
+// History rows: `{ gameId, winners, summary, void?, noScore? }` (noScore: a tool that does not judge,
+// 「唔計輸贏」).
 // ============================================================
 
 import { el, sig } from '../dom.js?v=1';
-import { rankRows } from '../logic.js?v=1';
+import { rankRows, scoreboardMode } from '../logic.js?v=1';
 
 const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
@@ -31,20 +34,23 @@ export function Scoreboard(props = {}) {
 
     const rows = rankRows(p.players, p.scoreboard);
     const anyPlayed = rows.some((r) => r.played > 0);
+    const mode = scoreboardMode(rows);
     const byId = new Map((p.players ?? []).map((x) => [x.id, x]));
+    // a medal for something won; a rank number for the rest of the scorers; '·' for nothing at all
+    const rankText = (r) => (!anyPlayed || !mode.earned(r) ? '·' : (MEDAL[r.rank] ?? String(r.rank)));
 
     const table = el('table', { class: 'c-scoreboard-table' },
       el('thead', {}, el('tr', {},
         el('th', { text: '' }), el('th', { class: 'l', text: '玩家' }),
-        el('th', { text: '玩' }), el('th', { text: '贏' }), el('th', { text: '分' }))),
+        el('th', { text: '局' }), el('th', { text: '贏' }), mode.points ? el('th', { text: '分數' }) : null)),
       el('tbody', {}, rows.map((r) => el('tr', { class: r.pl.id === p.me ? 'me' : '' },
-        el('td', { class: 'rk', text: anyPlayed ? (MEDAL[r.rank] ?? String(r.rank)) : '·' }),
+        el('td', { class: 'rk', text: rankText(r) }),
         el('td', { class: 'l' },
           el('span', { class: 'c-scoreboard-dot', style: { '--seat': r.pl.color ?? 'var(--cheese)' } }),
           el('span', { class: 'nm', text: r.pl.name + (r.pl.id === p.me ? '（你）' : '') })),
         el('td', { text: String(r.played) }),
         el('td', { text: String(r.wins) }),
-        el('td', { class: 'pts', text: String(r.points) })))));
+        mode.points ? el('td', { class: 'pts', text: String(r.points) }) : null))));
 
     const hist = (p.history ?? []).slice().reverse();
     const history = p.showHistory === false || !hist.length ? null : el('div', { class: 'c-scoreboard-history' },
@@ -54,7 +60,7 @@ export function Scoreboard(props = {}) {
         const names = (h.winners ?? []).map((id) => byId.get(id)?.name).filter(Boolean);
         return el('li', {},
           el('span', { class: 'g', text: `${g?.emoji ?? '🎲'} ${g?.name ?? h.gameId}` }),
-          el('span', { class: 'w', text: h.void ? '🚫 唔計' : names.length ? `🏆 ${names.join('、')}` : '冇人贏' }),
+          el('span', { class: 'w', text: h.void ? '🚫 唔計' : h.noScore ? '唔計輸贏' : names.length ? `🏆 ${names.join('、')}` : '冇人贏' }),
           h.summary ? el('span', { class: 'hint s', text: h.summary }) : null);
       })));
 

@@ -36,6 +36,7 @@
 //                               on), and all of them incl. the current one — the results screen's souvenir
 //   state.canInk                this device's seats engine.canInk lets draw now (the narrator bar folds)
 //   state.hostActions / hostCtl.hostAction(i, label)   the game's own host buttons (engine.hostActions)
+//   state.waiting               host: the engine's focus names some seat (or an eyes-closed step) right now
 //   connLog()                   the last ~40 connection events as `<UTC ISO> text` lines (⚙️ 連線記錄); no tokens
 //
 // Liveness (iOS locks phones and suspends pages; a dead DataChannel often never says 'close'):
@@ -153,6 +154,7 @@ export function createApp(opts = {}) {
     pictures: [],             // earlier pictures of this game ([{ epoch, strokes }]); the current one is `ink`
     canInk: [],               // this device's seats that may draw right now (engine.canInk)
     hostActions: [],          // host: the game's own extra buttons right now ([{ i, label }], engine.hostActions)
+    waiting: false,           // host: the engine is waiting on some seat now (its whole focus) — ⏭ takes two taps (#13)
     // polish pass
     narration: idleNarration(),
     outbox: 0,
@@ -372,6 +374,7 @@ export function createApp(opts = {}) {
     state.focus = v.focus ?? null;
     state.canInk = Array.isArray(v.canInk) ? v.canInk.filter((pid) => state.mySeats.includes(pid)) : [];
     if ('cue' in v) state.cue = v.cue ?? null;
+    if ('waiting' in v) state.waiting = v.waiting === true;
     if ('hostActions' in v) state.hostActions = Array.isArray(v.hostActions) ? v.hostActions : [];
     if (state.mode === 'client' && typeof v.hostNow === 'number' && !clockSamples.length) clockOffset = v.hostNow - now();
     touch();
@@ -659,7 +662,7 @@ export function createApp(opts = {}) {
     Object.assign(state, {
       mode: null, conn: 'idle', connMessage: '', code: null, isHost: false,
       mySeats: [], activeSeat: null, room: emptyRoom(), views: {}, table: null, focus: null, cue: null,
-      ink: emptyInk(), rev: 0, pictures: [], canInk: [], hostActions: [],
+      ink: emptyInk(), rev: 0, pictures: [], canInk: [], hostActions: [], waiting: false,
       narration: idleNarration(), outbox: 0, versionMismatch: false, versionInfo: null, claim: null, saveFailed: false,
     });
     seatRecs = [];

@@ -32,7 +32,7 @@
 // reading and what games/custom/game.js already produces.
 // ============================================================
 
-import { el, sig, toast } from '../dom.js?v=1';
+import { el, sig, toast, confirmTap } from '../dom.js?v=1';
 import { fmtDuration } from '../logic.js?v=1';
 import { sfx } from '../../core/sfx.js?v=1';
 
@@ -332,7 +332,8 @@ function categoriesField(emit, ctx) {
   resetBtn.addEventListener('click', () => {
     let name = '';
     try { name = ctx.bag.label?.(cur.f.bank) ?? ''; } catch { /* no label */ }
-    if (!window.confirm(`重置${name ? `「${name}」` : ''}？用過嘅會再出。`)) return;
+    // #3: two taps on the button, never a native confirm (it would freeze the host phone, the room's server)
+    if (!confirmTap(`重置${name ? `「${name}」` : ''}？用過嘅會再出。`, { node: resetBtn, key: 'bag-reset' })) return;
     try { if (ctx.bag.reset(cur.f.bank) === false) throw new Error('reset refused'); } catch (err) { console.error(err); toast('重置唔到'); return; }
     sfx('tap');
     toast('已經重置');

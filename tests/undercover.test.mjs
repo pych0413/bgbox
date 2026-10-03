@@ -1406,6 +1406,9 @@ test('undercover: #10 — result lines explain why: mis-votes, roles hidden duri
   assert.ok(lines.includes('平民一個自己人都冇投錯！'), lines);
   assert.ok(lines.includes('第 1 輪：全部人同票，冇人出局'), lines);
   assert.ok(!lines.includes('冇公開身份'));
+  // one undercover is 「佢」, two or more 「佢哋」
+  assert.ok(lines.includes('（佢一開始都唔知自己係臥底）'), lines);
+  assert.ok(!lines.includes('佢哋一開始'), lines);
 });
 
 test('undercover: points — civilians 2 each, undercovers share the table, a white card gets 3', () => {
@@ -1875,4 +1878,157 @@ test('undercover: act returns the state it was given (the session clones before 
   const out = E.act(s, { pid: 'p1', action: { type: 'ready' } }, sim.ctx());
   assert.equal(out, s);
   assert.equal(E.act(s, { pid: 'p1', action: { type: 'nope' } }, sim.ctx()), s);
+});
+
+// ============================================================
+// ui.js on a minimal fake DOM, with the real RoleCard (playtest: the word card is a 詞語卡, not a 角色牌)
+// ============================================================
+
+class UNode {}
+class UText extends UNode {
+  constructor(t) { super(); this.data = String(t); this.parentNode = null; }
+  get textContent() { return this.data; }
+}
+class UEl extends UNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.parentNode = null; this.children = []; this.attrs = {}; this.listeners = {};
+    this.cls = new Set(); this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.value = '';
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new UText(v)])); }
+  get offsetWidth() { return 0; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k]; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(t, fn, capture) { (this.listeners[t] ||= []).push({ fn, capture: !!capture }); }
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof UNode ? k : new UText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+  focus() {}
+  blur() {}
+}
+/** Dispatch like a browser: capture listeners root → target, then the target, then bubbling, honouring stopPropagation. */
+function uDispatch(target, type, extra = {}) {
+  let stopped = false;
+  const ev = { type, target, pointerId: 1, preventDefault() {}, stopPropagation() { stopped = true; }, ...extra };
+  const path = [];
+  for (let x = target; x; x = x.parentNode) path.unshift(x);
+  const above = path.slice(0, -1);
+  for (const n of above) {
+    for (const l of n.listeners[type] ?? []) if (l.capture) l.fn(ev);
+    if (stopped) return ev;
+  }
+  for (const l of target.listeners[type] ?? []) l.fn(ev);
+  if (stopped) return ev;
+  for (const n of above.reverse()) {
+    for (const l of n.listeners[type] ?? []) if (!l.capture) l.fn(ev);
+    if (stopped) return ev;
+  }
+  return ev;
+}
+const uClick = (n) => { for (const l of n.listeners.click ?? []) l.fn({}); };
+const uWalk = (n, fn) => { fn(n); for (const c of n.children ?? []) uWalk(c, fn); };
+const uFind = (root, pred) => { const out = []; uWalk(root, (n) => { if (n instanceof UEl && pred(n)) out.push(n); }); return out; };
+const uShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** Every word a player can see or hear: text, aria-labels and titles of everything not hidden (a hidden node is neither shown nor read out). */
+const uWords = (root) => {
+  const out = [];
+  const go = (n) => {
+    if (n instanceof UText) { out.push(n.data); return; }
+    if (n.hidden) return;
+    out.push(n.attrs['aria-label'] ?? '', n.attrs.title ?? '');
+    for (const c of n.children) go(c);
+  };
+  go(root);
+  return out.join('\n');
+};
+
+async function withUndercoverUi(fn) {
+  const saved = { document: globalThis.document, window: globalThis.window, Node: globalThis.Node };
+  globalThis.document = { createElement: (t) => new UEl(t), createTextNode: (t) => new UText(t), addEventListener() {}, hidden: false };
+  globalThis.window = { addEventListener() {}, AudioContext: undefined };
+  globalThis.Node = UNode;
+  try {
+    const { RoleCard } = await import('../js/ui/components/RoleCard.js');
+    const ui = await import('../js/games/undercover/ui.js');
+    const stub = () => { const el = new UEl('div'); return { el, update() {}, destroy() { el.remove(); } }; };
+    return await fn(ui, { RoleCard, VotePanel: stub, Timer: stub });
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete globalThis[k]; else globalThis[k] = v; }
+  }
+}
+
+test('undercover ui: the word card is a 詞語卡 everywhere (lock, refusal, label) and the lock still works', async () => {
+  await withUndercoverUi(async (ui, comps) => {
+    const sim = mk(5, { seed: 61 });
+    rig(sim, 'CCCCU');
+    const toasts = [];
+    const sent = [];
+    const root = new UEl('div');
+    const handle = ui.mount(root, {
+      me: 'p2', players: sim.players, isHost: false, meta, config: sim.state.cfg,
+      send: (a) => { sent.push(a); sim.act('p2', a); }, now: () => sim.now, sfx() {}, toast: (t) => toasts.push(t), components: comps,
+    });
+    const show = () => handle.update(sim.view('p2'), { focus: sim.focus(), paused: false });
+    show();
+    const lockBtns = () => uFind(root, (n) => n.tag === 'button' && uShown(n) && n.textContent.includes('鎖'));
+    const cover = () => uFind(root, (n) => n.cls.has('c-cover'))[0];
+
+    assert.ok(!uWords(root).includes('角色牌'), `no 角色牌 on the deal screen: ${uWords(root)}`);
+    assert.equal(cover().attrs['aria-label'], '㩒住睇詞語');
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔓 鎖定詞語卡'], 'exactly one lock button, worded for a word card');
+    const lead = uFind(root, (n) => n.cls.has('uc-lead'))[0].textContent;
+    assert.ok(!lead.includes('放手即刻冚返'), 'the peek instruction is said once (the card hint), not twice');
+
+    // peeking works while unlocked
+    uDispatch(cover(), 'pointerdown');
+    assert.ok(cover().cls.has('open'), 'the card opens while held');
+    uDispatch(cover(), 'pointerup');
+    assert.ok(!cover().cls.has('open'));
+
+    // lock it with the game's own button
+    uClick(lockBtns()[0]);
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔒 已鎖 — 㩒一下解鎖']);
+    assert.ok(cover().cls.has('locked'), 'the cover shows as locked');
+    // a press on the locked card is refused with the word-card message, and the card stays shut
+    uDispatch(cover(), 'pointerdown');
+    assert.ok(!cover().cls.has('open'), 'a locked card does not open');
+    assert.deepEqual(toasts, ['詞語卡鎖咗，要自己解鎖']);
+    // unlock, then 記住喇 locks it again and sends ready
+    uClick(lockBtns()[0]);
+    assert.ok(!cover().cls.has('locked'));
+    uClick(uFind(root, (n) => n.tag === 'button' && n.textContent.includes('記住喇'))[0]);
+    assert.deepEqual(sent, [{ type: 'ready' }]);
+    show();
+    assert.ok(cover().cls.has('locked'), '記住喇 locks the card');
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔒 已鎖 — 㩒一下解鎖']);
+
+    // later, 睇返我個詞: the same card, the same words
+    for (const p of sim.players) if (p.id !== 'p2') sim.act(p.id, { type: 'ready' });
+    assert.equal(sim.state.phase, 'speak');
+    show();
+    uClick(uFind(root, (n) => n.cls.has('uc-wordtoggle'))[0]);
+    assert.ok(uShown(cover()), 'the card is in the 睇返我個詞 panel');
+    assert.ok(!uWords(root).includes('角色牌'), 'no 角色牌 in the word panel either');
+    assert.equal(cover().attrs['aria-label'], '㩒住睇詞語');
+    handle.destroy();
+  });
 });

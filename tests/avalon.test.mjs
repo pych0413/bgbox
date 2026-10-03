@@ -1908,6 +1908,67 @@ test('avalon: the leak sweep passes at every step of a scripted game, for every 
   }
 });
 
+/**
+ * Quest 1 passes on its first proposal; quest 2 is rejected twice, its third vote is voided by the host and cast again,
+ * then passes; quest 3 is rejected once, then passes; the Assassin shoots. `strip` drops the stored per-quest numbers
+ * before the end, the way a snapshot from an older build would look.
+ */
+function proposalsGame({ strip = false } = {}) {
+  const sim = mk(5, { seed: 3, lady: 'off' });
+  revealAll(sim);
+  forceQuest(sim, true); cont(sim);
+  pickTeam(sim); voteAll(sim, 'reject'); cont(sim);
+  pickTeam(sim); voteAll(sim, 'reject'); cont(sim);
+  pickTeam(sim);
+  ok(sim, st(sim).order[0], { type: 'vote', vote: 'reject' });
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), true);
+  voteAll(sim, 'approve'); cont(sim);
+  playCards(sim); cont(sim);
+  pickTeam(sim); voteAll(sim, 'reject'); cont(sim);
+  forceQuest(sim, true); cont(sim);
+  assert.equal(phase(sim), 'assassinate');
+  if (strip) { for (const e of st(sim).voteLog) delete e.k; for (const x of st(sim).voids) delete x.k; }
+  ok(sim, seatOf(sim, 'assassin'), { type: 'assassinate', target: seatOf(sim, 'merlin') });
+  sim.advance();
+  assert.equal(phase(sim), 'over');
+  return sim;
+}
+
+test('avalon: the recap numbers proposals per quest, as the game screens do, voids included; an old snapshot without the numbers reads the same (#33)', () => {
+  const sim = proposalsGame();
+  assert.deepEqual(st(sim).voteLog.map((e) => [e.q, e.k]), [[1, 1], [2, 1], [2, 2], [2, 3], [3, 1], [3, 2]]);
+  const lines = sim.result().lines;
+  const props = lines.map((l) => l.match(/^(任務 \d · 第 \d 次提議)：隊長/)?.[1]).filter(Boolean);
+  assert.deepEqual(props, ['任務 1 · 第 1 次提議', '任務 2 · 第 1 次提議', '任務 2 · 第 2 次提議', '任務 2 · 第 3 次提議', '任務 3 · 第 1 次提議', '任務 3 · 第 2 次提議']);
+  assert.ok(lines.includes('任務 2 · 第 3 次提議：投票取消，重新投過'), 'the void names the proposal of its quest');
+  for (const l of lines) assert.doesNotMatch(l, /第 [4-9] 次/, `a game-wide number leaked into the recap: ${l}`);
+  assert.deepEqual(proposalsGame({ strip: true }).result().lines, lines, 'derived from the log when k is missing');
+});
+
+test('avalon: the results recap folds into sections — every heading is a 「── 標題 ──」 line the shell understands', async () => {
+  const { resultSections, headingOf } = await import('../js/ui/logic.js');
+  for (const k of Object.keys(S.RECAP).filter((x) => x.endsWith('Head'))) assert.ok(headingOf(S.RECAP[k]), `${k} is a section heading`);
+  const lines = proposalsGame().result().lines;
+  const secs = resultSections(lines);
+  assert.equal(secs[0].title, null, 'the why-line comes first, on its own');
+  assert.ok(secs[0].lines[0].includes('刺中梅林'));
+  assert.deepEqual(secs.slice(1).map((x) => x.title), ['🎭 身份同夜晚情報', '📜 任務記錄（連出咗咩牌）', '🗳 提議同投票記錄', '⏭ 主持「呢鋪唔計」', '🗡️ 刺殺']);
+  for (const x of secs) assert.ok(x.lines.length > 0);
+  assert.equal(secs[1].lines.length, 5, 'one row per seat under 身份');
+});
+
+test('avalon: a picked Fail tile is styled exactly like a picked Success tile, and the button never names the card (#17)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../js/games/avalon/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const selectors = css.split('}').map((r) => r.split('{').slice(-2, -1)[0] ?? '').map((x) => x.trim()).filter(Boolean);
+  const byKind = selectors.filter((sel) => /\.av-tile[^,{]*\.(success|fail)\b|\.(success|fail)[^,{]*\.av-tile\b/.test(sel));
+  assert.deepEqual(byKind, [], 'no style tells the Success tile from the Fail tile');
+  assert.ok(selectors.some((sel) => sel.includes('.av-tile.on')), 'one selected style for both');
+  assert.equal(S.T.quest.play('fail'), S.T.quest.play('success'));
+  assert.equal(S.T.quest.play('fail'), '確定出牌');
+  assert.notEqual(S.T.quest.play(null), S.T.quest.play('fail'), 'nothing picked yet: 揀一張牌先');
+});
+
 test('avalon: the over view and the result carry the whole story — every role, every card, every vote, what each seat knew', () => {
   const sim = mk(8, { seed: 15, lady: 'on' });
   revealAll(sim);
@@ -2763,9 +2824,14 @@ test('avalon ui: the inert Fail tile for good makes the same sound as the live o
     const play = (pid) => findAll(seats[pid].root, (n) => n.attrs['data-act'] === 'play')[0];
     assert.equal(play(g).disabled, true);
     assert.equal(play(e).disabled, false);
-    assert.match(play(e).textContent, /失敗/);
+    assert.equal(play(e).textContent, '確定出牌', 'the button never names the card (#17)');
     click(findAll(seats[g].root, (n) => n.attrs['data-act'] === 'tile-success')[0]);
-    assert.match(play(g).textContent, /成功/);
+    assert.equal(play(g).textContent, play(e).textContent, 'Success and Fail picked: the same button');
+    // the picked tile looks the same whichever card it is: one class set, no team colour
+    const picked = (pid) => tilesOf(pid).filter((t) => hasCls(t, 'on')).map((t) => [...t.cls].filter((c) => c !== 'success' && c !== 'fail').sort().join('.'));
+    assert.deepEqual(picked(g), ['av-tile.on']);
+    assert.deepEqual(picked(e), picked(g), 'a picked Fail is styled exactly like a picked Success');
+    assert.equal(tilesOf(e).find((t) => hasCls(t, 'on')).attrs['data-act'], 'tile-fail');
     click(play(g));
     assert.deepEqual(sent.map((s) => [s.pid, s.a]), [[g, { type: 'quest', card: 'success' }]]);
     pushViews(sim, seats);
@@ -2858,17 +2924,27 @@ test('avalon ui: a vote can be changed with 改票 until the last vote lands, an
       pushViews(sim, seats);
       assert.equal(sim.state.votes.p1, 'approve');
       assert.equal(act('p1', 'vote-confirm'), undefined, 'locked: no confirm button');
-      assert.match(seats.p1.root.textContent, /你投咗：贊成/);
+      const status = () => findAll(seats.p1.root, (n) => hasCls(n, 'av-voted'))[0];
+      const lit = () => findAll(seats.p1.root, (n) => hasCls(n, 'av-vote') && hasCls(n, 'on')).map((n) => n.attrs['data-act']);
+      // locked: 「已投 ✓」, neither tile lit, the choice nowhere on screen (a neighbour could follow it)
+      assert.equal(status().hidden, false);
+      assert.ok(status().textContent.startsWith(S.T.vote.voted));
+      assert.doesNotMatch(status().textContent, /贊成|反對/);
+      assert.deepEqual(lit(), []);
+      assert.equal(findAll(seats.p1.root, (n) => n.attrs['aria-pressed'] === 'true').length, 0, 'no pressed tile either');
       assert.equal(sim.view('p2').vote.progress.done, 1);
       // the guard keeps a double tap from sending twice; it lets go after a moment
       while (queue.length) queue.shift()();
       click(act('p1', 'vote-change'));
       pushViews(sim, seats, ['p1']);
+      assert.deepEqual(lit(), ['vote-approve'], 'only while 改票 is open does your own vote show');
       click(act('p1', 'vote-reject'));
       click(act('p1', 'vote-confirm'));
       pushViews(sim, seats);
       assert.equal(sim.state.votes.p1, 'reject');
-      assert.match(seats.p1.root.textContent, /你投咗：反對/);
+      assert.ok(status().textContent.startsWith(S.T.vote.voted));
+      assert.doesNotMatch(status().textContent, /贊成|反對/);
+      assert.deepEqual(lit(), [], 'locked again: nothing lit');
       assert.equal(sim.view('p2').vote.progress.done, 1, 'still one vote counted');
       assert.deepEqual(sent.map((s) => s.a.vote), ['approve', 'reject']);
       for (const seat of Object.values(seats)) seat.handle.destroy();
@@ -2894,11 +2970,14 @@ test('avalon ui: after 呢鋪唔計 the vote and the quest screens open again, w
       click(act('p1', 'vote-reject'));
       click(act('p1', 'vote-confirm'));
       pushViews(sim, seats);
-      assert.match(seats.p1.root.textContent, /你投咗：反對/);
+      const status = () => findAll(seats.p1.root, (n) => hasCls(n, 'av-voted'))[0];
+      assert.equal(status().hidden, false);
+      assert.ok(status().textContent.startsWith(S.T.vote.voted));
       assert.equal(sim.host({ type: ACT.VOID_ROUND }), true);
       while (queue.length) queue.shift()();
       pushViews(sim, seats);
-      assert.doesNotMatch(seats.p1.root.textContent, /你投咗/, 'the cancelled vote is gone from the screen');
+      assert.equal(status().hidden, true, 'the cancelled vote is gone from the screen');
+      assert.equal(findAll(seats.p1.root, (n) => hasCls(n, 'av-vote') && hasCls(n, 'on')).length, 0);
       assert.ok(act('p1', 'vote-approve'), 'p1 can vote again');
       for (const pid of ['p1', 'p4', 'table']) assert.match(seats[pid].root.textContent, /主持取消咗啱啱嘅投票/);
       assert.match(seats.p2.root.textContent, /已投 0\/6/);

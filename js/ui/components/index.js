@@ -17,13 +17,14 @@ import { PassGate } from './PassGate.js?v=1';
 import { SeatEditor } from './SeatEditor.js?v=1';
 import { Scoreboard } from './Scoreboard.js?v=1';
 import { ConfigForm } from './ConfigForm.js?v=1';
+import { RecentFold } from './RecentFold.js?v=1';
 
 export {
   Cover, closeAllCovers, RoleCard, teamStyle, DiceCup, PlayerPicker, VotePanel, Timer, Canvas,
-  RulesSheet, NarratorBar, PassGate, SeatEditor, Scoreboard, ConfigForm, dieFace,
+  RulesSheet, NarratorBar, PassGate, SeatEditor, Scoreboard, ConfigForm, RecentFold, dieFace,
 };
 
 /** What game UIs receive as api.components (§15.8). */
 export const components = Object.freeze({
-  Cover, RoleCard, DiceCup, PlayerPicker, VotePanel, Timer, Canvas, dieFace,
+  Cover, RoleCard, DiceCup, PlayerPicker, VotePanel, Timer, Canvas, RecentFold, dieFace,
 });

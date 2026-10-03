@@ -1921,3 +1921,167 @@ test('spyfall ui: the hands-mode buttons send verdicts the engine accepts, inclu
     }
   });
 });
+
+// ---------- playtest fixes (docs/playtest/multi/spyfall.md) ----------
+
+/** Mount one seat's UI on the fake DOM, logging what it sends, plays and toasts. */
+function mountSpyfallSeat(ui, sim, pid, log) {
+  const root = new FEl('div');
+  const handle = ui.mount(root, {
+    me: pid, players: sim.players, isHost: pid === 'p1', meta: game.meta, config: sim.state.cfg,
+    send: (a) => log.sent.push([pid, a]), ink() {}, now: () => sim.now,
+    sfx: (n) => log.sfx.push([pid, n]), toast: (t) => log.toast.push([pid, t]), components: stubSpyfallComponents(),
+  });
+  const show = () => handle.update(sim.view(pid), { focus: null, paused: false });
+  show();
+  return { pid, root, handle, show };
+}
+/** h() sets the attribute (as the real DOM would); the fake element keeps it in attrs. */
+const isOff = (b) => b.disabled || 'disabled' in b.attrs;
+const clickEl = (b) => {
+  assert.ok(b, 'button exists');
+  assert.ok(!isOff(b), `button 「${b.textContent}」 is enabled`);
+  for (const f of b.listeners.click ?? []) f({});
+};
+const btnText = (root, text) => findEls(root, (n) => n.tag === 'button' && shown(n) && n.textContent.includes(text))[0];
+const boxOf = (root, cls) => findEls(root, (n) => n.cls.has(cls))[0];
+
+/** Timers are queued, not run, until `step()`; window.scrollTo is recorded. */
+async function withQueuedTimers(fn) {
+  const saved = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout, scrollTo: globalThis.scrollTo };
+  const queue = [];
+  let seq = 0;
+  const scrolls = [];
+  globalThis.setTimeout = (f, ms) => { const id = ++seq; queue.push({ id, f, ms }); return id; };
+  globalThis.clearTimeout = (id) => { const i = queue.findIndex((q) => q.id === id); if (i >= 0) queue.splice(i, 1); };
+  globalThis.scrollTo = (x, y) => scrolls.push([x, y]);
+  try {
+    return await fn({ step: () => { const q = queue.shift(); q?.f(); return !!q; }, pending: () => queue.length, scrolls });
+  } finally {
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+    if (saved.scrollTo === undefined) delete globalThis.scrollTo; else globalThis.scrollTo = saved.scrollTo;
+  }
+}
+
+test('spyfall ui: 🕵️ 我係間諜 is the same silent panel on every phone; only a spy’s 停鐘 sends anything', async () => {
+  await withSpyfallUi(async (ui) => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../js/games/spyfall/ui.js', import.meta.url), 'utf8');
+    assert.ok(!src.includes('你唔係間諜'), 'no screen ever says 「你唔係間諜」');
+    for (const spies of [1, 2]) {
+      const sim = playing(spies === 2 ? 7 : 5, { seed: 31 + spies, config: { spies } });
+      const spy = spyOf(sim);
+      const agent = nonSpies(sim)[0];
+      const log = { sent: [], sfx: [], toast: [] };
+      const seats = [spy, agent].map((pid) => mountSpyfallSeat(ui, sim, pid, log));
+      const acts = (s) => serializeEl(boxOf(s.root, 'sf-actions'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'the action grid is identical for the spy and a non-spy');
+      for (const s of seats) clickEl(btnText(s.root, '我係間諜'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'the confirm panel is identical for the spy and a non-spy');
+      assert.ok(seats[1].root.textContent.includes('確定要亮身分'), 'a non-spy gets the same confirmation');
+      assert.deepEqual([log.sfx, log.toast], [[], []], 'no sound and no toast for anyone');
+      // a non-spy's 停鐘 closes the panel like 取消 and sends nothing
+      clickEl(btnText(seats[1].root, '我係間諜，停鐘'));
+      assert.deepEqual(log.sent, [], 'a non-spy sends nothing');
+      assert.ok(btnText(seats[1].root, '🕵️ 我係間諜'), 'back to the main buttons');
+      // 取消 does the same for the spy; then a real 停鐘
+      clickEl(btnText(seats[0].root, '取消'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'both phones are back to the same grid');
+      clickEl(btnText(seats[0].root, '我係間諜'));
+      clickEl(btnText(seats[0].root, '我係間諜，停鐘'));
+      assert.deepEqual(log.sent, [[spy, { type: 'spy-stop' }]]);
+      assert.equal(sim.act(spy, log.sent[0][1]), true, 'the engine accepts what the spy sent');
+      assert.deepEqual([log.sfx, log.toast], [[], []], 'still silent everywhere');
+      for (const s of seats) s.handle.destroy();
+    }
+    const section = game.rules.sections.find((x) => x.title === '指控同投票');
+    assert.ok(section.body.includes('唔好俾人睇你部手機證明身分'), 'the rules sheet says not to use the phone as proof');
+  });
+});
+
+test('spyfall ui: the clock bar keeps 🙋 in reach; the list folds once when play starts; used accusations are marked', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = mk(5, { seed: 44 });
+    const log = { sent: [], sfx: [], toast: [] };
+    const seats = ids(sim).map((pid) => mountSpyfallSeat(ui, sim, pid, log));
+    const listChips = (s) => findEls(s.root, (n) => n.cls.has('sf-loc') && shown(n)).length;
+    const nm = (pid) => sim.players.find((p) => p.id === pid).name;
+    for (const s of seats) {
+      assert.ok(listChips(s) > 0, 'the list is open during the look');
+      assert.ok(!shown(boxOf(s.root, 'sf-clock')), 'no clock bar before play');
+    }
+    readyAll(sim);
+    t.scrolls.length = 0;
+    for (const s of seats) s.show();
+    assert.ok(t.scrolls.length >= 1 && t.scrolls.every(([x, y]) => x === 0 && y === 0), 'play starts at the top of the page');
+    for (const s of seats) {
+      assert.equal(listChips(s), 0, 'the list folds once when play starts');
+      const bar = boxOf(s.root, 'sf-clock');
+      assert.ok(shown(bar), 'the clock bar shows during play');
+      assert.equal(findEls(bar, (n) => n.tag === 'button')[0].textContent, '🙋 指控');
+    }
+    // the 📍 toggle reopens the list, and a later update does not fold it again
+    const s0 = seats[0];
+    clickEl(findEls(s0.root, (n) => n.cls.has('sf-list-toggle'))[0]);
+    s0.show();
+    assert.ok(listChips(s0) > 0, 'the toggle reopens the list and it stays open');
+    // the holder line: the first question, then "answer, then ask"
+    const holderText = (s) => boxOf(s.root, 'sf-holder').textContent;
+    const dealer = R(sim).dealer;
+    for (const s of seats) assert.equal(holderText(s), s.pid === dealer ? '你問第一條問題' : `${nm(dealer)} 問第一條問題`);
+    const asked = ids(sim).find((id) => id !== dealer);
+    sim.act(dealer, { type: 'ask', target: asked });
+    for (const s of seats) {
+      s.show();
+      assert.equal(holderText(s), s.pid === asked ? '你答完就問下一個' : `${nm(asked)} 答完就問下一個`);
+    }
+    // the bar's 🙋 opens the picker (the question card makes way for it)
+    const accuser = ids(sim).find((id) => id !== dealer && id !== asked);
+    const a = seats.find((s) => s.pid === accuser);
+    clickEl(findEls(boxOf(a.root, 'sf-clock'), (n) => n.tag === 'button')[0]);
+    assert.ok(shown(boxOf(a.root, 'sf-picker')), 'the accusation picker is open');
+    assert.ok(!shown(boxOf(a.root, 'sf-floor')), 'the question card makes way for it');
+    clickEl(btnText(a.root, '取消'));
+    // after a failed accusation every phone marks the accuser, and only the accuser's bar button is spent
+    const suspect = ids(sim).find((id) => id !== accuser);
+    sim.act(accuser, { type: 'accuse', target: suspect });
+    voteAll(sim, false);
+    settle(sim);
+    assert.equal(phase(sim), 'play');
+    for (const s of seats) {
+      s.show();
+      const marked = findEls(boxOf(s.root, 'sf-floor'), (n) => n.cls.has('sf-acc')).map((n) => n.parentNode.textContent);
+      assert.equal(marked.length, 1, 'exactly one seat carries 🙋✓');
+      assert.ok(marked[0].includes(nm(accuser)));
+      const b = findEls(boxOf(s.root, 'sf-clock'), (n) => n.tag === 'button')[0];
+      assert.equal(isOff(b), s.pid === accuser, 'only the accuser’s 🙋 is spent');
+      assert.equal(b.textContent, s.pid === accuser ? '🙋 用咗' : '🙋 指控');
+    }
+    assert.equal(listChips(seats[1]), 0, 'resuming play after a vote does not reopen the list');
+    for (const s of seats) s.handle.destroy();
+  }));
+});
+
+test('spyfall ui: 下一局 wakes up after a 2-second countdown that is shown on screen', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = playing(5, { seed: 52, config: { rounds: 2 } });
+    wrongGuess(sim);
+    assert.equal(phase(sim), 'roundEnd');
+    const log = { sent: [], sfx: [], toast: [] };
+    const s = mountSpyfallSeat(ui, sim, nonSpies(sim)[0], log);
+    const next = () => btnText(s.root, '下一局');
+    assert.ok(s.root.textContent.includes('睇清楚先，2 秒後先㩒得'));
+    assert.equal(isOff(next()), true);
+    assert.ok(t.step());
+    assert.ok(s.root.textContent.includes('睇清楚先，1 秒後先㩒得'));
+    assert.equal(isOff(next()), true);
+    assert.ok(t.step());
+    assert.ok(!s.root.textContent.includes('秒後先㩒得'), 'the countdown line goes away');
+    assert.equal(isOff(next()), false);
+    assert.equal(t.pending(), 0, 'no timer left running');
+    clickEl(next());
+    assert.deepEqual(log.sent.pop()[1], { type: 'next-round' });
+    s.handle.destroy();
+  }));
+});

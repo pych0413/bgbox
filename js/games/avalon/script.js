@@ -463,28 +463,28 @@ export function knowsLine(kind, names, { oberonSeen } = {}) {
 }
 
 export const RECAP = {
-  rolesHead: '🎭 身份同夜晚情報',
+  rolesHead: '── 🎭 身份同夜晚情報 ──',
   roleRow: (name, role, knows) => `${name}：${roleLabel(role)}（${TEAM[teamOf(role)].short}）— ${knows}`,
-  questsHead: '📜 任務記錄（連出咗咩牌）',
+  questsHead: '── 📜 任務記錄（連出咗咩牌） ──',
   quest: ({ no, size, leader, team, success, successes, fails }) =>
     `任務 ${no}（${size} 人，隊長 ${leader}）：${list(team)} → ${success ? '成功' : '失敗'}（${successes} 成功、${fails} 失敗）`,
   played: (rows) => `　出牌：${rows.map(([n, c]) => `${n} ${c === 'fail' ? '失敗' : '成功'}`).join('、')}`,
   twoFail: '　（呢個任務要兩張失敗先算失敗，得一張失敗所以仍然成功）',
   autoPlayed: (names) => `　（${list(names)} 冇出牌，由系統代出成功）`,
-  votesHead: '🗳 提議同投票記錄',
+  votesHead: '── 🗳 提議同投票記錄 ──',
   proposal: ({ q, no, leader, team, approved, approves, rejects, yes, no_ }) =>
     `任務 ${q} · 第 ${no} 次提議：隊長 ${leader} 揀 ${list(team)} → ${approved ? '通過' : '否決'} ${approves}:${rejects}`
     + `（贊成：${yes.length ? list(yes) : '冇'}；反對：${no_.length ? list(no_) : '冇'}）`,
-  voidsHead: '⏭ 主持「呢鋪唔計」',
+  voidsHead: '── ⏭ 主持「呢鋪唔計」 ──',
   voided: ({ q, no, phase, leader }) => (phase === 'pick'
     ? `任務 ${q}：隊長 ${leader} 冇揀到隊，傳俾下一位（唔算否決）`
     : phase === 'vote'
       ? `任務 ${q} · 第 ${no} 次提議：投票取消，重新投過`
       : `任務 ${q}：出牌取消，隊員重新出過`),
   firstLeader: (name, lady) => `👑 第一任隊長：${name}${lady ? `；湖中女神由 ${lady} 開始` : ''}`,
-  ladyHead: '🌊 湖中女神',
+  ladyHead: '── 🌊 湖中女神 ──',
   lady: ({ holder, target, loyalty }) => `${holder} 驗 ${target} → 睇到${loyaltyName(loyalty)}`,
-  shotHead: '🗡️ 刺殺',
+  shotHead: '── 🗡️ 刺殺 ──',
   shot: ({ assassin, target, targetRole, hit }) =>
     `${assassin} 刺咗 ${target}（${roleLabel(targetRole)}）→ ${hit ? '刺中梅林' : '刺錯咗'}`,
 };
@@ -546,7 +546,7 @@ export const T = {
     confirmApprove: '確定：贊成',
     confirmReject: '確定：反對',
     pick: '揀一個先',
-    voted: (v) => (v === 'approve' ? '你投咗：贊成 ✓' : '你投咗：反對 ✓'),
+    voted: '已投 ✓',
     change: '改票',
     waiting: '等緊其他人…',
     progress: (d, t) => `已投 ${d}/${t}`,
@@ -574,7 +574,7 @@ export const T = {
     successSub: '幫任務成功',
     failSub: '破壞任務',
     rule: '只有邪惡陣營先出得「失敗」。其他人㩒「失敗」冇反應。',
-    play: (card) => (card === 'fail' ? '出「失敗」牌' : card === 'success' ? '出「成功」牌' : '揀一張牌先'),
+    play: (card) => (card ? '確定出牌' : '揀一張牌先'),   // never names the card: the label is readable from the next seat
     played: '已經出牌 ✓',
     playedWait: '等緊其他隊員…',
     playedWaitTimer: '時間到先公佈結果。',

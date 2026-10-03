@@ -12,8 +12,12 @@
 //    live differs: a seat with nothing to do sees the same boxes, greyed out.
 //  - nothing here makes a sound at night (no api.sfx, no PlayerPicker, no Timer):
 //    their taps and ticks would tell the room who is awake.
-//  - what a seat LEARNED sits behind a hold-to-peek cover; the big button is the
-//    decoy for everybody ("ack") and also the confirm button for whoever has a choice.
+//  - what a seat LEARNED sits behind ONE hold-to-peek 📓 cover that every phone has
+//    at every step, holding everything it learned tonight so far (a sleeper's says
+//    「今晚未見過嘢」); the big button is the decoy for everybody ("ack") and also the
+//    confirm button for whoever has a choice.
+//  - a Doppelgänger's copy (a hidden team change) and its instructions are only ever
+//    behind that cover; her plain line and her confirm labels never name the role.
 //  - the day screen never shows a current card: only what you were dealt and what
 //    you learned, with a warning that it may be out of date.
 //
@@ -223,8 +227,9 @@ function buildNight(E) {
   const lines = h('div', { class: 'on-lines' });
   const peekFront = h('div', { class: 'on-peekfront' });
   const peekCover = C.Cover({ front: peekFront, backArt: T.nightPeekBack, backLabel: T.nightPeekLabel, lockMode: 'none', locked: false, openSound: 'none' });
-  // always in the layout (invisible when there is nothing to show) so every seat's card has the same height
-  const peekWrap = h('div', { class: 'on-peekwrap is-empty' }, peekCover.el);
+  // the same 📓 cover on every phone at every step, all night: a result stays peekable after its window closes
+  // (playtest #11), and a seat with nothing behind it looks exactly like one with something
+  const peekWrap = h('div', { class: 'on-peekwrap' }, peekCover.el);
   const panel = h('div', { class: 'on-panel' }, lines, peekWrap);
 
   const players = makeChips('on-grid');
@@ -288,6 +293,11 @@ function buildNight(E) {
 
   function labelFor(a) {
     const nm = E.nameOf;
+    // a Doppelgänger acting as her copy: the label names the pick only — 🔮 / 🗡️ / 🌪️ / 🍺 would name the copied role
+    if (a.type !== 'copy' && current?.step?.k === 'doppelganger') {
+      const picks = a.target ? [nm(a.target)] : a.a ? [nm(a.a), nm(a.b)] : (a.cards ?? [a.card]).map((i) => S.slotName(i));
+      return S.confirmNeutral(picks);
+    }
     switch (a.type) {
       case 'copy': return T.confirmCopy(nm(a.target));
       case 'look-player': return T.confirmLookPlayer(nm(a.target));
@@ -323,16 +333,12 @@ function buildNight(E) {
       lines.replaceChildren(...ls.map(([cls, text]) => h('p', { class: `on-line ${cls}`, text })));
     }
 
-    // what I learned: behind a cover, so a neighbour with open eyes cannot read it
-    const learned = awake ? night.info.map((n) => S.noteLine(n, E.nameOf)).filter(Boolean) : [];
-    peekWrap.classList.toggle('is-empty', !learned.length);
-    if (learned.length) {
-      const k = sig(learned);
-      if (peekFront.dataset.key !== k) {
-        peekFront.dataset.key = k;
-        peekFront.replaceChildren(h('ul', {}, learned.map((t) => h('li', { text: t }))));
-      }
-      peekCover.update({ front: peekFront, backArt: T.nightPeekBack, backLabel: T.nightPeekLabel, lockMode: 'none', locked: false, openSound: 'none' });
+    // what I learned tonight: behind the cover, so a neighbour with open eyes cannot read it
+    const book = S.nightBook(step, night, E.nameOf);
+    const bk = sig(book);
+    if (peekFront.dataset.key !== bk) {
+      peekFront.dataset.key = bk;
+      peekFront.replaceChildren(h('ul', {}, book.map(([t, cls]) => h('li', { class: cls || null, text: t }))));
     }
 
     // the seats and the centre: live only while I have a choice
@@ -524,7 +530,7 @@ function buildReveal(E) {
         h('h3', { class: 'on-h', text: T.revealCards }),
         h('div', { class: 'on-cardlist' }, rv.cards.map((c) => h('div', { class: `on-fcard ${c.won ? 'win' : 'lose'}${c.dead ? ' dead' : ''}` },
           h('div', { class: 'on-fhead' }, dot(c.pid), h('b', { text: E.nameOf(c.pid) + (c.pid === me ? '（你）' : '') }), c.dead ? h('span', { text: '☠️' }) : null,
-            h('span', { class: `on-win ${c.won ? 'ok' : 'no'}`, text: c.won ? '✅' : '❌' })),
+            h('span', { class: `on-win ${c.won ? 'ok' : 'no'}`, text: c.won ? T.revealWon : T.revealLost })),
           h('div', { class: 'on-ftrail' }, h('span', { text: `${T.revealDealt} ${S.roleTag(c.orig)}` }), h('span', { class: 'arrow', text: '→' }), h('b', { text: `${T.revealFinal} ${S.roleTag(c.face)}` })),
           c.face === 'doppelganger' ? h('div', { class: 'on-fnote', text: c.copied ? `複製咗 ${S.roleName(c.copied)}` : '冇複製過，當村民' }) : null,
           h('div', { class: 'on-fteam', text: c.final === 'minion' ? (rv.cards.some((x) => x.final === 'werewolf') ? S.TEAM_LABEL.minion : S.TEAM_LABEL.minionSolo) : S.TEAM_LABEL[c.team] })))),
@@ -606,9 +612,10 @@ function buildTable(E) {
           setText(count, T.dealCount(view.ready.done, view.ready.total));
           break;
         case 'night':
+          // no tap counter at night (playtest #18): actions count as taps, so it would say how many seats are awake
           setText(title, T.tableNightTitle(view.subtitle));
           setText(body, T.tableNightBody);
-          setText(count, T.tableAcks(view.acks.done, view.acks.total));
+          setText(count, '');
           break;
         case 'day':
           setText(title, T.tableDay);
@@ -622,6 +629,7 @@ function buildTable(E) {
           break;
         default: break;
       }
+      setHidden(count, !count.textContent);
       timer.update(view.phase === 'day' ? view : { deadline: null }, ctx);
       tick();
     },

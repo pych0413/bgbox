@@ -137,7 +137,7 @@ the shell shows it only when the player taps 💡.
 
 | Screen | Shows |
 |---|---|
-| Every player phone | 「你嘅詞語」 + the hold-to-peek word card (RoleCard, 🃏 + the word in the same place and size for everybody; the white card's card says 「白板」) + button 「記住喇 ✓」. Under it 「已有 3 / 6 人記住咗 · 等緊：阿明、阿強」 |
+| Every player phone | 「你嘅詞語」, 「睇清楚你個詞，記住就㩒「記住喇」。」 + the hold-to-peek word card (RoleCard, 🃏 + the word in the same place and size for everybody; the white card's card says 「白板」; the card's own hint 「㩒住先睇到，放手即刻冚返」 is the only peek instruction) + 「🔓 鎖定詞語卡」 + button 「記住喇 ✓」. Under it 「已有 3 / 6 人記住咗 · 等緊：阿明、阿強」 |
 | After 記住喇 | the card **locks itself** (sound `lock`, same for every role); text 「✓ 你已經記住咗」; 「想再睇一次？㩒 🔓 解鎖，睇完記得再鎖返。」 |
 | Table / spectator | 「大家逐個睇緊自己嘅詞語，你係旁觀者。」 + the same progress line |
 | Header (all) | 「今局：平民 5 · 臥底 1 · 白板 1」 (counts are announced) and the seat strip |
@@ -383,7 +383,7 @@ card. `summary`: 「平民贏！平民詞「泳池」，臥底詞「沙灘」」
    「平民淨係剩 2 個，臥底方仲有人喺度，臥底方贏。」 / 「平民淨係剩 1 個，臥底方贏。」 / 「平民全部出局，臥底方贏。」 /
    「白板 阿強 出局之後估中平民嘅詞語「泳池」，臥底方即刻贏。」 (or 「…，白板自己贏。」)
 2. 「詞語：平民「泳池」，臥底「沙灘」（地方）」
-3. 「平民：…」, 「臥底：…（佢哋一開始都唔知自己係臥底）」, 「白板：…」
+3. 「平民：…」, 「臥底：…（佢一開始都唔知自己係臥底）」 (two or more: 「佢哋」), 「白板：…」
 4. the mis-votes that decided it: 「平民投走咗 2 個自己人：阿明、阿強。」 or 「平民一個自己人都冇投錯！」
 5. with `revealRole` off: 「今局出局嗰陣冇公開身份，下面係真身份。」
 6. one line per vote: 「第 1 輪：阿龍 出局（臥底，5 票）」, 「第 2 輪：阿華、阿明 同票，要 PK」, 「第 2 輪 PK：阿明 出局（平民，4 票）」,
@@ -396,8 +396,10 @@ card 3 (a lone white card with no undercover is paid like an undercover; a solo 
 
 `result().carry = { special: [pids of every undercover and white card] }`. `setup({ ..., carry })` reads it only when
 `cfg.antiStreak` is on: those seats go to the back of the shuffled queue, so they are civilians whenever at least
-`U + B` other seats exist (otherwise as many as possible are skipped). Garbage `carry` is ignored. **The room does not
-pass `carry` yet** (§8.1); until it does the toggle has no effect.
+`U + B` other seats exist (otherwise as many as possible are skipped). Garbage `carry` is ignored. The room keeps the
+last `result().carry` per game id in host memory (`js/core/room.js` `carries`) and the Session hands it to the next
+`setup` of the same game, so the toggle works across games of one evening. It is part of the host's saved room
+(`snapshot().carries`), so a host refresh / resume of the same room keeps it; a new room starts with none.
 
 ## 6. Edge cases → tests (`tests/undercover.test.mjs`)
 
@@ -467,10 +469,10 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
 
 ## 8. Framework requests / notes for other tasks
 
-1. **Room: carry between games (anti-streak, BACKLOG #20).** Keep `res.carry` from `engine.result()` per `gameId`
-   (host memory is enough; it must not survive a page reload into another group) and pass it to the next
-   `engine.setup({ ..., carry })` for the same game; `tests/lib.mjs` `Sim` could take a `carry` option too. Without it
-   `antiStreak` does nothing (the test deals with `carry` by hand).
+1. **Room: carry between games (anti-streak, BACKLOG #20) — done.** The room keeps `res.carry` from `engine.result()`
+   per `gameId` in host memory (`js/core/room.js`: `this.carries`, stored when a game ends, passed to the next
+   `Session` for the same game), the Session passes it to `engine.setup({ ..., carry })`, and `tests/lib.mjs` `Sim`
+   takes a `carry` option. So `antiStreak` works from the second game of an evening on.
 2. **💡 sheet (U1).** Read `view.hint` for 「而家要做咩」. In this game nobody knows their own role (only the white card,
    `view.me.blank`), so 「你嘅角色」 should list the three `rules.roles` lines (each has 「點贏：」) rather than one role; never
    pick a role from hidden state.
@@ -478,8 +480,14 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
    with the wrong 揾 for 搵); game meta is 「人人一個詞，臥底嘅詞好似但唔同 — 一句嘢形容，投出臥底！」.
 4. **Lobby: show 已用 / 總數.** `config.fields(cfg, n, { bag })` fills `field.stats` for the `categories` field; the
    lobby should pass its bag (`bag.stats` throws if the bank is not loaded, which `fields` swallows).
-5. **RoleCard lock label** 「🔒 已鎖 — 㩒一下解鎖」 / 「🔓 鎖定角色牌」 say "角色牌" (role card); a word card would like
-   `lockLabels` or neutral wording (「鎖定張卡」). Cosmetic.
+5. **RoleCard lock label.** RoleCard words its lock for a role card (「🔓 鎖定角色牌」, the refusal toast 「角色牌鎖咗，要自己
+   解鎖」, the label 「㩒住睇角色牌」); nobody here holds a role, only a word. Done game-side for now (playtest polish): the UI
+   passes no `onLockToggle`, so RoleCard's own lock button stays hidden, and renders its own 「🔓 鎖定詞語卡」 /
+   「🔒 已鎖 — 㩒一下解鎖」 under the card with RoleCard's classes; a press on the locked cover is refused in a capture
+   listener on the card (「詞語卡鎖咗，要自己解鎖」) before the cover can say 角色牌; the cover's aria-label is set to
+   「㩒住睇詞語」 after every paint (and passed as `ariaLabel`). RoleCard has since grown `lockLabels` ({ lock, locked,
+   message }) and `ariaLabel` (#39, another task); once that lands, this can shrink to passing `onLockToggle` + those props
+   (the test then has to catch the refusal toast from the Cover, not `api.toast`). Tested with the real RoleCard on a fake DOM.
 6. **Bank aliases.** `undercover-words.js` entries could carry `alias: { a: [...], b: [...] }` (other spellings / Mandarin
    forms) which the engine accepts as a correct white-card guess. There is no 簡 ↔ 繁 folding.
 7. **`api.players[].deviceId`** is used to detect a shared phone; the UI treats a missing id as "own phone".

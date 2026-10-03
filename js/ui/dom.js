@@ -1,8 +1,9 @@
 // ============================================================
 // dom.js — tiny DOM helpers shared by the shell and every component.
 //
-// Deliberately self-contained (no imports): components and game UIs can
-// pull this in without dragging the rest of core along.
+// Deliberately self-contained (no imports but logic.js): components and game UIs can
+// pull this in without dragging the rest of core along. Nothing here touches the
+// DOM at import time (tests import it under minimal fake DOMs).
 // ============================================================
 
 export const $ = (sel, root = document) => root.querySelector(sel);
@@ -105,14 +106,130 @@ export function addPips(node, value) {
   }
 }
 
-/** A die face: pips for d6, the plain number for every other die. */
+/**
+ * A die face: pips for d6, the plain number for every other die. A face on its own is shown, so it carries
+ * role="img" + aria-label 「N 點」 (#37: pips alone are slow to count and say nothing to a screen reader);
+ * a `Cover` strips the label from every die inside it while it is closed (labelDice), so a covered die never
+ * says its number.
+ */
 export function dieFace(value, sides = 6) {
-  if (sides === 6 && PIPS[value]) {
-    const d = el('div', { class: 'die pips' });
-    addPips(d, value);
-    return d;
+  const d = sides === 6 && PIPS[value] ? el('div', { class: 'die pips' }) : el('div', { class: 'die', text: String(value) });
+  if (d.classList.contains('pips')) addPips(d, value);
+  d.setAttribute('role', 'img');
+  d.setAttribute('aria-label', `${value} 點`);
+  return d;
+}
+
+/** The value a die face shows: its pips, or its text. */
+function dieValue(d) {
+  if (!d.classList.contains('pips')) return String(d.textContent ?? '').trim();
+  let n = 0;
+  for (const c of d.children ?? []) if (c.classList?.contains('pip')) n++;
+  return String(n);
+}
+
+/**
+ * Label (on) or unlabel (off) every die face under `root` — `Cover` calls it as it opens and closes.
+ * Walks `children` only, so it also runs on the tests' minimal fake DOMs.
+ */
+export function labelDice(root, on) {
+  const walk = (n) => {
+    for (const c of n?.children ?? []) {
+      if (c.classList?.contains('die')) {
+        const v = dieValue(c);
+        if (on && /^\d+$/.test(v)) {                // a placeholder face (「–」 before the first roll) says nothing
+          c.setAttribute('role', 'img');
+          c.setAttribute('aria-label', `${v} 點`);
+        } else if (typeof c.removeAttribute === 'function') {
+          c.removeAttribute('role');
+          c.removeAttribute('aria-label');
+        }
+      }
+      walk(c);
+    }
+  };
+  walk(root);
+}
+
+// ---------- arm-then-confirm (#3) ----------
+// The host's phone IS the room's server. While a native confirm() is up, iOS stops its JavaScript: guests
+// get 冇送到 after 4 s and 同房主斷咗 after 12 s. So nothing in the app may block. A risky tap asks twice
+// instead: the first tap ARMS it (the button reads 「再㩒一次：…」 for ARM_MS — or a toast says so when there
+// is no button to relabel), and the same tap again within that time does it. A second tap sooner than
+// ARM_GAP_MS is the same thumb bouncing, not a decision: it is ignored and the arm stays.
+
+export const ARM_MS = 3000;
+export const ARM_GAP_MS = 350;
+let armedNow = null;      // { key, node, at, saved, timer, onDisarm }
+
+const firstLine = (text) => String(text ?? '').split('\n')[0].trim();
+
+/** Drop the current arm (if any): the button gets its own label back. */
+export function disarmConfirm() {
+  const a = armedNow;
+  if (!a) return;
+  armedNow = null;
+  clearTimeout(a.timer);
+  if (a.node) {
+    a.node.classList?.remove('armed');
+    if (a.saved) a.node.replaceChildren(...a.saved);
   }
-  return el('div', { class: 'die', text: String(value) });
+  try { a.onDisarm?.(); } catch (err) { console.error(err); }
+}
+
+/** Is `key` armed right now (optionally: on this node)? */
+export function isArmed(key, node) {
+  return !!armedNow && armedNow.key === key && (!node || armedNow.node === node);
+}
+
+/**
+ * Arm-then-confirm, never blocking. Returns true only for the confirming tap:
+ *   if (!confirmTap('踢走 阿明？', { node: btn })) return;   // first tap: arms, returns false
+ * `node` — the button that was tapped (relabelled 「再㩒一次：<first line of text>」 while armed, unless
+ * `inline: false`, e.g. a ✕ icon, which keeps its face and gets a toast); `key` (default: the text) — what
+ * must be tapped again; `onDisarm` — runs when the arm ends (expired, replaced or confirmed).
+ * A different button with the same key re-arms on that button, unless the first one has left the page
+ * (its screen re-rendered it).
+ */
+export function confirmTap(text, { node = null, key, inline = true, ms = ARM_MS, onDisarm = null } = {}) {
+  const k = key ?? String(text ?? '');
+  const t = Date.now();
+  const a = armedNow;
+  if (a && a.key === k && (!node || !a.node || a.node === node || a.node.isConnected === false)) {
+    if (t - a.at < ARM_GAP_MS) return false;
+    if (t - a.at <= ms) { disarmConfirm(); return true; }
+  }
+  disarmConfirm();
+  const label = `再㩒一次：${firstLine(text)}`;
+  const entry = { key: k, node, at: t, saved: null, timer: null, onDisarm };
+  if (node && inline) {
+    entry.saved = [...(node.childNodes ?? node.children ?? [])];
+    node.textContent = label;
+  } else {
+    toast(label, ms);
+  }
+  node?.classList?.add('armed');
+  entry.timer = setTimeout(() => { if (armedNow === entry) disarmConfirm(); }, ms);
+  armedNow = entry;
+  return false;
+}
+
+/**
+ * The safety net (#3): `win.confirm` becomes confirmTap on the button tapped in the last second — false now,
+ * true on the second tap — so a confirm() left in a game UI can never freeze the host phone. The shell
+ * installs it once at boot. Returns false if this window will not let confirm be replaced.
+ */
+export function installConfirmShim(win, doc) {
+  let lastTap = null;
+  doc.addEventListener('click', (e) => {
+    lastTap = { node: e.target?.closest?.('button, [role="button"]') ?? null, at: Date.now() };
+  }, true);
+  try {
+    win.confirm = (text) => confirmTap(String(text ?? ''), { node: lastTap && Date.now() - lastTap.at < 1000 ? lastTap.node : null });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Stable JSON key for "did these props change?" checks. */

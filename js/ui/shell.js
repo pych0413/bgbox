@@ -26,9 +26,12 @@
 //  - Games come from `app.games` (the registry). Batch-2 games (meta.batch === 2)
 //    are probed once with app.game(id): if the module loads they are playable,
 //    if it is missing they stay greyed out as 「即將推出」.
+//  - No native dialogs (playtest #3): on the host phone a confirm() stops the room's server. sh.confirm /
+//    sh.leave are the in-page arm-then-confirm (dom.js confirmTap); window.confirm itself is replaced by
+//    the same thing as a safety net. The connection bar pushes the page down (body.has-netbar, #4).
 // ============================================================
 
-import { el, toast } from './dom.js?v=1';
+import { el, toast, confirmTap, installConfirmShim } from './dom.js?v=1';
 import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=1';
 import * as sfxMod from '../core/sfx.js?v=1';
 import { createTableTimer } from './timer.js?v=1';
@@ -178,11 +181,17 @@ export async function startShell(app, root, opts = {}) {
     saveNarration() { lsSet(NARR_KEY, narrator.settings); },
     saveName(name) { sh.drafts.name = name; if (name) prefSet(NAME_KEY, name); },
 
-    /** Native confirm: blocking on purpose, so it cannot be tapped through. */
-    confirm: (text) => window.confirm(text),
+    /**
+     * Arm-then-confirm (#3), never a native dialog: on the host's phone that would freeze the room's server.
+     * `if (!sh.confirm(text, btn)) return;` — the first tap arms `btn` (「再㩒一次：…」 for ~3 s) and returns
+     * false; the same tap again in time returns true. `node` may be omitted (a toast says it then); opts go to
+     * dom.js confirmTap ({ key, inline, onDisarm }).
+     */
+    confirm: (text, node = null, opts = {}) => confirmTap(text, { node, ...opts }),
 
-    leave() {
-      if (!window.confirm('真係要離開？')) return false;
+    /** 🚪 — two taps (sh.confirm) on `node`, then leave the room. Returns true once it left. */
+    leave(node = null, opts = {}) {
+      if (!sh.confirm('真係要離開？', node, { key: 'leave-room', ...opts })) return false;
       narrator.cancel();                            // app.leave() forgets the room's resume data itself
       try { app.leave(); } catch (err) { console.error(err); }
       sh.route = 'home';
@@ -306,12 +315,40 @@ export async function startShell(app, root, opts = {}) {
     if (inRoom !== awake) { awake = inRoom; keepAwake(inRoom); }
   }
 
+  // #4: the bar pushes the page (and the sticky play header with its ⋯ → 🚪) down instead of covering it;
+  // body.has-netbar + --netbar-h (its measured height, safe area included) drive the CSS. A guest stuck
+  // behind it for NETBAR_LEAVE_MS (the host has gone) also gets a 🚪 離開 inside the bar.
+  const NETBAR_LEAVE_MS = 30_000;
+  const netText = el('span', { class: 'netbar-text' });
+  const netLeave = el('button', {
+    class: 'btn btn-sm netbar-leave', type: 'button',
+    onclick: () => sh.leave(netLeave, { onDisarm: () => schedule() }),
+  }, '🚪 離開');
+  netLeave.hidden = true;
+  let netSince = null;
+  let netTimer = null;
+
   function netbar(st) {
     const msg = st.mode ? connectionMessage(st) : null;
     netbarEl.classList.toggle('hidden', !msg);
-    if (!msg) return;
+    document.body.classList.toggle('has-netbar', !!msg);
+    if (!msg) {
+      netSince = null;
+      clearTimeout(netTimer);
+      netLeave.hidden = true;
+      return;
+    }
+    if (netText.parentNode !== netbarEl) netbarEl.replaceChildren(netText, netLeave);
     netbarEl.classList.toggle('warn', msg.kind === 'warn');
-    netbarEl.textContent = msg.text;
+    if (netText.textContent !== msg.text) netText.textContent = msg.text;
+    const now = Date.now();
+    netSince ??= now;
+    const stuck = st.mode === 'client' && now - netSince >= NETBAR_LEAVE_MS;
+    netLeave.hidden = !stuck;
+    clearTimeout(netTimer);
+    if (st.mode === 'client' && !stuck) netTimer = setTimeout(schedule, NETBAR_LEAVE_MS - (now - netSince) + 50);
+    const h = netbarEl.offsetHeight;
+    if (h > 0) document.body.style.setProperty('--netbar-h', `${h}px`);
   }
 
   const CONN_DEFAULT = {
@@ -337,6 +374,10 @@ export async function startShell(app, root, opts = {}) {
   }
 
   // ---------- boot ----------
+  // #3 safety net: a window.confirm() anywhere (a game UI) must not freeze the host phone, which is the room's
+  // server. It becomes the same arm-then-confirm on the button just tapped: false now, true on the second tap.
+  installConfirmShim(window, document);
+
   applyTextSize();
   root.replaceChildren(host);
   document.body.append(nightDim, status.el);

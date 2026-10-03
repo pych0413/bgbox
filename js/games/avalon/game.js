@@ -417,8 +417,10 @@ function tallyVotes(s) {
   const approves = s.order.filter((p) => votes[p] === 'approve').length;
   const rejects = s.n - approves;
   const approved = approves >= approvalsNeeded(s.n);
+  // no = the game-wide proposal id (internal); k = which proposal of THIS quest it was, the number every screen shows
+  // (「任務 3 · 第 2 次提議」, matching the 連續否決 track: a quest always starts on 0 rejections)
   const entry = {
-    q: s.questNo, no: s.proposalNo, leader: leaderOf(s), team: s.team.slice(), votes, approves, rejects, approved,
+    q: s.questNo, no: s.proposalNo, k: s.rejects + 1, leader: leaderOf(s), team: s.team.slice(), votes, approves, rejects, approved,
   };
   s.voteLog.push(entry);
   const before = s.rejects;
@@ -612,7 +614,7 @@ function redoing(s) {
  * need the real person (代佢做 covers a dead phone there).
  */
 function voidRound(s, ctx) {
-  const record = () => { (s.voids ??= []).push({ q: s.questNo, no: s.proposalNo, phase: s.phase, leader: leaderOf(s) }); };
+  const record = () => { (s.voids ??= []).push({ q: s.questNo, no: s.proposalNo, k: s.rejects + 1, phase: s.phase, leader: leaderOf(s) }); };
   switch (s.phase) {
     case 'pick':
       record();
@@ -1095,6 +1097,15 @@ function autoAct(state, pid, ctx) {
 
 // ---------- result and the "why" ----------
 
+/**
+ * Which proposal of its quest a vote-log entry or a 呢鋪唔計 record was: the stored `k`, or — for a snapshot from before
+ * `k` existed — the count of earlier proposals of the same quest + 1 (the game-wide `no` would read like rejections).
+ */
+function perQuestNo(s, e) {
+  if (Number.isInteger(e.k)) return e.k;
+  return s.voteLog.filter((x) => x.q === e.q && x.no < e.no).length + 1;
+}
+
 function explain(s) {
   const nmx = (p) => nm(s, p);
   const assassin = roleOwner(s, 'assassin');
@@ -1140,7 +1151,7 @@ function explain(s) {
     lines.push(S.RECAP.firstLeader(nmx(s.order[s.startIx]), s.ladyOn ? nmx(s.lady.held[0]) : null));
     for (const e of s.voteLog) {
       lines.push(S.RECAP.proposal({
-        q: e.q, no: e.no, leader: nmx(e.leader), team: names(s, e.team), approved: e.approved,
+        q: e.q, no: perQuestNo(s, e), leader: nmx(e.leader), team: names(s, e.team), approved: e.approved,
         approves: e.approves, rejects: e.rejects,
         yes: names(s, s.order.filter((p) => e.votes[p] === 'approve')),
         no_: names(s, s.order.filter((p) => e.votes[p] === 'reject')),
@@ -1150,7 +1161,7 @@ function explain(s) {
 
   if (s.voids?.length) {
     lines.push(S.RECAP.voidsHead);
-    for (const x of s.voids) lines.push(S.RECAP.voided({ q: x.q, no: x.no, phase: x.phase, leader: nmx(x.leader) }));
+    for (const x of s.voids) lines.push(S.RECAP.voided({ q: x.q, no: perQuestNo(s, x), phase: x.phase, leader: nmx(x.leader) }));
   }
 
   if (s.lady.log.length) {

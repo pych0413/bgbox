@@ -84,8 +84,8 @@ function pointsSpoken(rv, nm) {
   if (rv.scoring === 'none') return '';
   const get = (role) => rv.deltas.filter((d) => d.role === role).map((d) => nm(d.pid));
   if (rv.fakeSide) {
-    const q = rv.qm ? `，出題者${nm(rv.qm)}` : '';
-    return `${nm(rv.fake)}${q}各得 2 分。`;
+    // 各 only when there are two of them (with a question master); one fake alone 「得 2 分」
+    return rv.qm ? `${nm(rv.fake)}，出題者${nm(rv.qm)}各得 2 分。` : `${nm(rv.fake)}得 2 分。`;
   }
   const a = get('artist');
   return a.length ? `每個真畫家得 1 分。` : '';

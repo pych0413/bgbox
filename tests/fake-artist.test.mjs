@@ -1975,7 +1975,7 @@ function installDom() {
 }
 
 function fakeComponents(FakeNode) {
-  const made = { canvases: [], panels: [], pickers: [] };
+  const made = { canvases: [], panels: [], pickers: [], covers: [] };
   const plain = () => { const el = new FakeNode('div'); return { el, update() {}, destroy() { el.remove(); } }; };
   return {
     made,
@@ -1983,7 +1983,9 @@ function fakeComponents(FakeNode) {
       Cover(props) {
         const el = new FakeNode('div');
         el.append(props.front);   // the real Cover keeps the front in the DOM too (hidden until held): leak checks see it
-        return { el, update() {}, close() {}, destroy() { el.remove(); } };
+        const me = { el, props, update(p) { me.props = p; }, close() {}, destroy() { el.remove(); } };
+        made.covers.push(me);
+        return me;
       },
       PlayerPicker() { const me = { el: new FakeNode('div'), props: null, update(p) { me.props = p; }, destroy() {} }; made.pickers.push(me); return me; },
       VotePanel(props) { const me = { el: new FakeNode('div'), props, update(p) { me.props = p; }, destroy() {} }; made.panels.push(me); return me; },
@@ -2189,4 +2191,196 @@ test('fake-artist: strokeLength / matchesWord / tidy helpers', () => {
   assert.equal(game.matchesWord('', '大象', ['']), false);
   assert.equal(game.tidy('  a \n\t b\u0007  '), 'a b');
   assert.equal(game.textLen('大象ab'), 4);
+});
+
+// ============================================================
+// playtest fixes (docs/playtest/multi/fake-artist.md)
+// ============================================================
+
+/** Mount one seat on the fake DOM (installDom must be active). */
+async function mountFakeArtistSeat(dom, sim, me) {
+  const { mount } = await import('../js/games/fake-artist/ui.js');
+  const root = new dom.FakeNode('div');
+  const sent = [];
+  const fc = fakeComponents(dom.FakeNode);
+  const ui = mount(root, { me, players: sim.players, isHost: me === 'p1', send: (a) => sent.push(a), ink() {}, sfx() {}, toast() {},
+    now: () => sim.now, components: fc.components, meta: game.meta, config: sim.config });
+  const show = () => ui.update(sim.view(me), { focus: sim.focus(), paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] } });
+  show();
+  return { me, root, ui, sent, fc, show };
+}
+/** Is `node` inside `ancestor`? */
+const inside = (node, ancestor) => { for (let x = node; x; x = x.parent) if (x === ancestor) return true; return false; };
+
+test('fake-artist: #7 spoken guess — the judge’s answer is behind hold-to-peek, 啱 / 錯 outside it; typed keeps it visible', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    for (const [qm, guess] of [['app', 'spoken'], ['player', 'spoken'], ['app', 'typed']]) {
+      const sim = mk(5, { seed: 41, config: { qm, guess } });
+      toVote(sim);
+      allVote(sim, R(sim).fake);
+      settle(sim);
+      if (guess === 'typed') sim.act(R(sim).fake, { type: 'guess', text: '（亂估）' });
+      assert.equal(phase(sim), guess === 'typed' ? 'judge' : 'guess');
+      const j = await mountFakeArtistSeat(dom, sim, R(sim).judge);
+      uis.push(j.ui);
+      const word = R(sim).word;
+      const wordEl = j.root.all().find((n) => n.className === 'fk-judge-word');
+      assert.equal(wordEl.textContent, word, 'the judge has the answer');
+      const answerCover = j.fc.made.covers.find((c) => inside(wordEl, c.el));
+      const yes = uiButton(j.root, '啱');
+      const no = uiButton(j.root, '錯');
+      if (guess === 'spoken') {
+        assert.ok(answerCover, `${qm}: the answer sits under a Cover while the fake is still thinking`);
+        assert.equal(answerCover.props.backLabel, '㩒住睇答案');
+        assert.notEqual(answerCover.props.lockMode, 'peek', 'the judge can always peek (it is not latched shut)');
+        for (const b of [yes, no]) assert.ok(b && !inside(b, answerCover.el), '啱 / 錯 stay outside the cover');
+      } else {
+        assert.equal(answerCover, undefined, 'typed: the guess is locked, so the answer may simply show');
+      }
+      // the two-tap verdict still works
+      no.click();
+      uiButton(j.root, '再㩒一下').click();
+      assert.deepEqual(j.sent.pop(), { type: 'verdict', correct: false });
+    }
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist: #27 the vote and guess screens keep the full-size picture; ballot and tally dots use the pen colours', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    const sim = mk(5, { seed: 43 });
+    toVote(sim);
+    const pens = sim.view('p1').pens;
+    const voter = await mountFakeArtistSeat(dom, sim, R(sim).artists[0]);
+    uis.push(voter.ui);
+    const boards = voter.root.all().filter((n) => (n.className ?? '').split(' ').includes('fk-board'));
+    assert.equal(boards.length, 1, 'the vote screen shows the picture');
+    assert.equal(boards[0].className, 'fk-board', 'full size (no compact board)');
+    const panel = voter.fc.made.panels[0].props;
+    for (const p of panel.players) assert.equal(p.color, pens[p.id], `${p.id}: the ballot dot is the pen colour`);
+    assert.equal(typeof panel.colorOf, 'function');
+    for (const id of ids(sim)) assert.equal(panel.colorOf(id), pens[id]);
+    // the tally shows the same colours
+    allVote(sim, R(sim).fake);
+    assert.equal(phase(sim), 'tally');
+    voter.show();
+    const tallyPanel = voter.fc.made.panels[voter.fc.made.panels.length - 1].props;
+    assert.ok(tallyPanel.reveal, 'the tally panel');
+    for (const p of tallyPanel.players) assert.equal(p.color, pens[p.id]);
+    // the guess screen: full size too
+    settle(sim);
+    const fake = await mountFakeArtistSeat(dom, sim, R(sim).fake);
+    uis.push(fake.ui);
+    const gb = fake.root.all().filter((n) => (n.className ?? '').split(' ').includes('fk-board'));
+    assert.equal(gb.length, 1);
+    assert.equal(gb[0].className, 'fk-board', 'the caught fake reads a full-size picture');
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist: the result screen keeps who voted for whom (both ballots after a revote), in pen colours', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    const nm = (sim, id) => sim.players.find((p) => p.id === id).name;
+    // a plain round
+    const sim = mk(5, { seed: 47 });
+    toVote(sim);
+    const F = R(sim).fake;
+    const real = R(sim).artists.filter((a) => a !== F);
+    voteWith(sim, (a) => (a === real[0] ? real[1] : real[0]));
+    settle(sim);
+    assert.equal(phase(sim), 'result');
+    const u = await mountFakeArtistSeat(dom, sim, real[2]);
+    uis.push(u.ui);
+    const votes = u.root.all().find((n) => n.className === 'fk-votes');
+    assert.ok(votes && !votes.hidden, 'a who-voted-for-whom block');
+    const text = votes.textContent;
+    assert.ok(text.includes('邊個投邊個'));
+    const rows = votes.all().filter((n) => (n.className ?? '').startsWith('fk-votes-row'));
+    const top = rows.find((r) => r.textContent.includes(nm(sim, real[0])) && r.textContent.includes('4 票'));
+    assert.ok(top, `${nm(sim, real[0])} got 4 votes: ${text}`);
+    for (const v of R(sim).artists.filter((a) => a !== real[0])) assert.ok(top.textContent.includes(nm(sim, v)), `${nm(sim, v)} is listed as a voter`);
+    const pens = sim.view('p1').pens;
+    const dotColours = top.all().filter((n) => n.className === 'fk-dot').map((n) => n.style.cssText);
+    for (const c of dotColours) assert.ok(Object.values(pens).some((pc) => c === `--seat:${pc}`), `dot in a pen colour: ${c}`);
+    // a revote shows both ballots
+    let found = false;
+    for (let seed = 1; seed <= 40 && !found; seed++) {
+      const s2 = mk(5, { seed: 500 + seed, config: { tieRule: 'revote' } });
+      toVote(s2);
+      const [a, b, c, d, e] = R(s2).artists;
+      // a 2-2-1 tie between a and b, then a second ballot by the other three
+      const plan = { [a]: b, [b]: a, [c]: a, [d]: b, [e]: a === e ? b : c };
+      voteWith(s2, (x) => plan[x]);
+      if (phase(s2) !== 'revote') { s2.advance(); }
+      if (phase(s2) !== 'revote') continue;
+      for (const x of R(s2).vote.voters) s2.act(x, { type: 'vote', target: R(s2).vote.candidates.find((t) => t !== x) });
+      settle(s2);
+      if (phase(s2) === 'guess' || phase(s2) === 'judge') s2.act(R(s2).judge, { type: 'verdict', correct: false });
+      if (phase(s2) !== 'result') continue;
+      const u2 = await mountFakeArtistSeat(dom, s2, R(s2).artists[0]);
+      uis.push(u2.ui);
+      const t2 = u2.root.all().find((n) => n.className === 'fk-votes').textContent;
+      assert.ok(t2.includes('第一次投票') && t2.includes('再投'), t2);
+      found = true;
+    }
+    assert.ok(found, 'reached a revote result');
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist: #28 scoring text and narration fit the QM mode (no phantom 出題者, 「得 2 分」 for one person)', () => {
+  assert.ok(!game.rules.quick.some((l) => l.includes('假畫家同出題者贏各')), 'the quick rules do not name a QM who may not exist');
+  assert.ok(game.rules.quick.some((l) => l.includes('假畫家贏 +2') && l.includes('有出題者')));
+  const help = (cfg) => game.config.fields({ ...game.config.defaults(5), ...cfg }, 5).find((f) => f.key === 'scoring').help;
+  assert.ok(!help({ qm: 'app' }).includes('出題者'), help({ qm: 'app' }));
+  assert.ok(help({ qm: 'player' }).includes('出題者'));
+  for (const qm of ['app', 'player']) {
+    const sim = mk(5, { seed: 61, config: { qm, first: 'auto' } });
+    playRound(sim);   // the fake escapes: +2 (and the QM +2)
+    assert.equal(phase(sim), 'result');
+    const c = sim.cue();
+    const nm = (id) => sim.players.find((p) => p.id === id).name;
+    if (qm === 'app') {
+      assert.ok(c.text.includes(`${nm(R(sim).fake)}得 2 分`), c.text);
+      assert.ok(!c.text.includes('各得'), `one person never 「各得」: ${c.text}`);
+    } else {
+      assert.ok(c.text.includes(`出題者${nm(R(sim).qm)}各得 2 分`), c.text);
+    }
+  }
+});
+
+test('fake-artist: 呢鋪唔計 explains itself — engine.canVoid agrees with @void-round and says why a scored round stays', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const sim = mk(5, { seed: seed + 700, config: { endMode: 'rounds', rounds: 2, qm: seed % 2 ? 'app' : 'player', first: 'auto' } });
+    for (let i = 0; i < (seed * 5) % 37 && phase(sim) !== 'over'; i++) stepRandom(sim);
+    const verdict = engine.canVoid(clone(sim.state));
+    const before = phase(sim);
+    const changed = sim.host(VOID);
+    assert.equal(verdict.ok, changed, `${before}: canVoid says ${verdict.ok}, @void-round changed ${changed}`);
+    if (!verdict.ok) assert.ok(verdict.message && /[一-鿿]/.test(verdict.message), 'a reason in words');
+    if (before === 'result') assert.match(verdict.message, /計咗分/);
+  }
+  const s = mk(4, { seed: 3 });
+  playRound(s);
+  assert.equal(phase(s), 'result');
+  assert.deepEqual(engine.canVoid(s.state), { ok: false, message: '呢輪已經計咗分，㩒「下一輪」就得' });
+  // the round that decided the game: its button reads 睇總結, and so does the reason
+  const last = mk(4, { seed: 3, config: { endMode: 'rounds', rounds: 1 } });
+  playRound(last);
+  assert.equal(phase(last), 'result');
+  assert.equal(last.view('p1').last, true);
+  assert.deepEqual(engine.canVoid(last.state), { ok: false, message: '呢輪已經計咗分，㩒「睇總結」就得' });
+  assert.ok(game.rules.sections.some((x) => x.body.includes('已經計咗分')), 'the rules sheet says a scored round stays');
 });

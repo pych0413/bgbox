@@ -49,8 +49,10 @@ export function mountLobby(sh) {
 
   // ---------- top bar ----------
   const title = el('h2');
+  // ‹ is an icon: it keeps its face while armed and a toast says 「再㩒一次」 (#3)
+  const backBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '離開', onclick: () => sh.leave(backBtn, { inline: false }) }, '‹');
   const topbar = el('header', { class: 'topbar' },
-    el('button', { class: 'icon-btn', type: 'button', 'aria-label': '離開', onclick: () => sh.leave() }, '‹'),
+    backBtn,
     title, sh.timer.button(), sh.soundButton(), sh.settingsButton());
   const timerStrip = sh.timer.strip();
 
@@ -221,6 +223,8 @@ export function mountLobby(sh) {
   // ---------- start ----------
   const startBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '開始 ▶');
   const status = el('p', { class: 'status' });
+  // #39: 開始 ▶ stays on screen while the host scrolls the long settings (sticky at the bottom)
+  const startBar = el('div', { class: 'lobby-start' }, startBtn, status);
 
   async function doStart() {
     // iOS gesture rule: prime speech and audio from the tap itself, before anything async
@@ -466,7 +470,7 @@ export function mountLobby(sh) {
   }
 
   const root = el('section', { class: 'screen', 'data-screen': 'lobby' },
-    topbar, timerStrip, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBtn, status);
+    topbar, timerStrip, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBar);
 
   return {
     el: root,
@@ -482,7 +486,9 @@ export function mountLobby(sh) {
         const key = String(st.code);
         if (bigCode.dataset.code !== key) {
           bigCode.dataset.code = key;
-          bigCode.replaceChildren(...key.split('').map((ch) => dieFace(Number(ch))));
+          // #37: a small digit under each die, so the code can be read out without counting pips
+          bigCode.replaceChildren(...key.split('').map((ch) => el('div', { class: 'code-cell' },
+            dieFace(Number(ch)), el('span', { class: 'code-digit', 'aria-hidden': 'true', text: ch }))));
         }
         if (qrShown) buildQr();
       }
@@ -499,10 +505,11 @@ export function mountLobby(sh) {
         orderHint: room.gameId && turnOrderMatters(room.gameId, sh.gameMeta(room.gameId)) ? ORDER_HINT : null,
         onMove: (pid, index) => report(app.lobby.moveSeat(pid, index)),
         onColor: (pid, color) => report(app.lobby.setColor(pid, color)),
-        onKick: (pid) => {
+        onKick: (pid, node) => {
           const p = room.players.find((x) => x.id === pid);
           if (mySeats.includes(pid)) report(app.lobby.removeSeat(pid));
-          else if (sh.confirm(`踢走 ${p?.name ?? ''}？`)) report(app.lobby.kick(pid));
+          // ✕ is an icon: armed, it keeps its face and a toast says 「再㩒一次：踢走 X？」 (#3, never a native confirm)
+          else if (sh.confirm(`踢走 ${p?.name ?? ''}？`, node ?? null, { key: `kick:${pid}`, inline: false })) report(app.lobby.kick(pid));
         },
       });
 

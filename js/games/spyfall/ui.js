@@ -41,7 +41,7 @@ const fmtClock = (ms) => {
 };
 
 const WITH_CARD = new Set(['reveal', 'play', 'vote', 'tally', 'guess']);
-const END_DELAY_MS = 2500;   // the 下一局 button wakes up this long after the reveal appears
+const END_DELAY_S = 2;       // the 下一局 button wakes up this many seconds after the reveal appears (counted down on screen)
 
 export function mount(root, api) {
   const { RoleCard, Timer, PlayerPicker } = api.components;
@@ -58,7 +58,7 @@ export function mount(root, api) {
     sentReady: false,
     seat: null,
     endFor: 0,               // round whose reveal has started its delay
-    endReady: false,
+    endLeft: 0,              // seconds until 下一局 wakes up (shown as a countdown)
     phase: null,
     holder: null,
   };
@@ -98,7 +98,10 @@ export function mount(root, api) {
 
   const headBox = h('div', { class: 'sf-head' });
   const bannerBox = h('div', { class: 'sf-banner-wrap' });
-  const timerBox = h('div', { class: 'sf-clock' }, timer.el);
+  // During play the clock is a compact bar that stays stuck under the app header while the location list
+  // scrolls, with a 🙋 shortcut on every seat's phone (the same on every phone: who has accused is public).
+  const clockAct = h('div', { class: 'sf-clock-act' });
+  const timerBox = h('div', { class: 'sf-clock' }, timer.el, clockAct);
   const frozenBox = h('div', { class: 'sf-frozen' });
   const readyBox = h('div', { class: 'sf-ready' });
   const floorBox = h('section', { class: 'card sf-floor' });
@@ -119,6 +122,7 @@ export function mount(root, api) {
   root.append(wrap);
 
   const kHead = keyed(headBox);
+  const kClockAct = keyed(clockAct);
   const kBanner = keyed(bannerBox);
   const kReady = keyed(readyBox);
   const kFloor = keyed(floorBox);
@@ -147,6 +151,11 @@ export function mount(root, api) {
     const running = v.phase === 'play';
     timerBox.hidden = !running;
     timer.update({ deadline: running ? v.deadline : null, now: () => api.now(), label: '剩餘時間', paused: !!ctx.paused, warnAt: [60, 10] });
+    const mine = running ? v.mine : null;
+    kClockAct([!!mine, mine?.accUsed ?? null], () => (mine
+      ? btn(mine.accUsed ? '🙋 用咗' : '🙋 指控', 'btn-ghost btn-sm sf-clock-acc', jumpToAccuse,
+        { disabled: mine.accUsed, 'aria-label': mine.accUsed ? '已用咗指控' : '指控' })
+      : null));
     const stopped = ['vote', 'tally', 'guess'].includes(v.phase);
     frozenBox.hidden = !stopped;
     if (stopped) {
@@ -224,10 +233,13 @@ export function mount(root, api) {
     const f = v.floor;
     const my = me();
     const active = !!v.mine;
-    kFloor([f, my, active], () => {
+    const used = v.accUsed ?? [];
+    kFloor([f, my, active, used], () => {
       const mineTurn = f.holder === my;
+      // The card turns to someone the moment they are asked, while they are still answering: say "answer, then ask".
       return [
-        h('div', { class: 'sf-holder' }, h('span', { text: '輪到 ' }), h('b', { text: seatName(f.holder) }), h('span', { text: ' 問' })),
+        h('div', { class: 'sf-holder' }, h('b', { text: mineTurn ? '你' : nameOf(f.holder) }),
+          h('span', { text: (mineTurn ? '' : ' ') + (f.prev ? '答完就問下一個' : '問第一條問題') })),
         h('p', { class: 'sf-prev', text: f.prev ? `唔可以問返 ${nameOf(f.prev)}` : '第一條問題，想問邊個都得' }),
         h('p', { class: 'sf-hint', text: mineTurn ? '你問邊個？㩒佢個名' : `${nameOf(f.holder)} 問完，就㩒被問嗰個人` }),
         h('div', { class: 'sf-seat-grid' }, v.seats.map((pid) => {
@@ -238,7 +250,9 @@ export function mount(root, api) {
             style: { '--seat': colorOf(pid) },
             disabled: blocked || !active,
             onclick: () => { api.sfx('tap'); send({ type: 'ask', target: pid }); },
-          }, h('i', { class: 'dot' }), h('span', { class: 'nm', text: seatName(pid) }), pid === f.holder ? h('em', { text: '發問中' }) : pid === f.prev ? h('em', { text: '🚫' }) : null);
+          }, h('i', { class: 'dot' }), h('span', { class: 'nm', text: seatName(pid) }),
+          used.includes(pid) ? h('span', { class: 'sf-acc', title: '用咗指控', 'aria-label': '用咗指控', text: '🙋✓' }) : null,
+          pid === f.holder ? h('em', { text: '發問中' }) : pid === f.prev ? h('em', { text: '🚫' }) : null);
         })),
         h('div', { class: 'sf-floor-foot' },
           f.trail.length > 1 ? h('span', { class: 'sf-trail', text: f.trail.map(nameOf).join(' → ') }) : h('span'),
@@ -257,6 +271,13 @@ export function mount(root, api) {
   }
   const leaveMode = () => setMode('main');
 
+  /** The clock bar's 🙋: open the accusation picker and bring it into view (the list may have scrolled it away). */
+  function jumpToAccuse() {
+    if (!view?.mine || view.mine.accUsed || view.phase !== 'play') return;
+    if (st.mode !== 'accuse') setMode('accuse');
+    try { actionBox.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); } catch { /* an old browser without options */ }
+  }
+
   function renderActions(v) {
     const play = v.phase === 'play';
     actionBox.hidden = !play;
@@ -267,14 +288,21 @@ export function mount(root, api) {
     }
     const mine = v.mine;
     if (!mine) { kActions(['spectator'], () => h('p', { class: 'sf-note', text: '你係觀眾，睇緊就得。' })); return; }
-    kActions([st.mode, mine.accUsed, mine.isSpy, v.rules.spies], () => {
+    // The key never holds isSpy: every phone builds exactly the same buttons and panels.
+    kActions([st.mode, mine.accUsed, v.rules.spies], () => {
       if (st.mode === 'spy') {
+        // The same panel on every phone, opened with no sound. For a non-spy 「我係間諜，停鐘」 closes it exactly
+        // like 取消 and sends nothing, so no screen can be held up as proof of innocence.
         return h('div', { class: 'card sf-confirm' },
           h('h4', { text: '🕵️ 確定要亮身分？' }),
           h('p', { class: 'sf-note', text: '㩒落去鐘會即刻停，全場都知你係間諜，然後你要喺清單揀一個地點。揀啱你贏，揀錯你輸。' }),
           h('div', { class: 'grid2' },
             btn('取消', 'btn-ghost', leaveMode),
-            btn('我係間諜，停鐘', 'btn-danger', () => { setMode('main'); send({ type: 'spy-stop' }); })));
+            btn('我係間諜，停鐘', 'btn-danger', () => {
+              const spy = !!view?.mine?.isSpy;
+              setMode('main');
+              if (spy) send({ type: 'spy-stop' });
+            })));
       }
       if (st.mode === 'accuse') {
         return h('div', { class: 'sf-accuse-head' },
@@ -284,11 +312,8 @@ export function mount(root, api) {
       }
       return h('div', { class: 'grid2 sf-act-grid' },
         btn(mine.accUsed ? '已用咗指控' : '🙋 指控', mine.accUsed ? 'btn-ghost' : 'btn-primary', () => setMode('accuse'), { disabled: mine.accUsed }),
-        // Present on every phone, so pressing it tells nobody anything.
-        btn('🕵️ 我係間諜', 'btn-ghost', () => {
-          if (!view.mine?.isSpy) { api.sfx('deny'); api.toast('你唔係間諜，唔使㩒'); return; }
-          setMode('spy');
-        }));
+        // Present on every phone and identical on every phone: no sound, no toast, the same confirm panel.
+        btn('🕵️ 我係間諜', 'btn-ghost', () => setMode('spy')));
     });
 
     if (st.mode === 'accuse') {
@@ -479,11 +504,17 @@ export function mount(root, api) {
     if (!e) return;
     if (st.endFor !== e.n) {
       st.endFor = e.n;
-      st.endReady = false;
-      later(() => { st.endReady = true; if (view) renderEnd(view); }, END_DELAY_MS);
+      st.endLeft = END_DELAY_S;
+      const tick = () => {
+        st.endLeft = Math.max(0, st.endLeft - 1);
+        if (st.endLeft > 0) later(tick, 1000);
+        if (view) renderEnd(view);
+      };
+      later(tick, 1000);
     }
+    const ready = st.endLeft <= 0;
     const canNext = v.phase === 'roundEnd' && !!v.mine;
-    kEnd([e, v.totals, canNext && st.endReady, v.phase, me()], () => {
+    kEnd([e, v.totals, canNext && ready, v.phase, me(), st.endLeft], () => {
       const spyWon = e.winTeam === 'spy';
       const rows = v.seats.map((pid) => {
         const isSpy = e.spies.includes(pid);
@@ -506,9 +537,10 @@ export function mount(root, api) {
           h('div', { class: 'sf-row sf-row-head' }, h('span', { class: 'nm', text: '玩家' }), h('span', { class: 'role', text: '身分' }), h('span', { class: 'delta', text: '本局' }), h('b', { class: 'total', text: '總分' })),
           rows),
         v.phase === 'roundEnd' && v.mine
-          ? btn(e.last ? '睇總分' : '下一局', 'btn-primary btn-lg', () => { api.sfx('tap'); send({ type: 'next-round' }); }, { disabled: !st.endReady })
+          ? btn(e.last ? '睇總分' : '下一局', 'btn-primary btn-lg', () => { api.sfx('tap'); send({ type: 'next-round' }); }, { disabled: !ready })
           : null,
-        v.phase === 'roundEnd' && !st.endReady ? h('p', { class: 'sf-note dim', text: '睇清楚先㩒…' }) : null,
+        // a short lock, so a tap meant for the last screen cannot skip the reveal — and it says how long
+        v.phase === 'roundEnd' && !ready ? h('p', { class: 'sf-note dim sf-end-wait', text: `睇清楚先，${st.endLeft} 秒後先㩒得` }) : null,
       ];
     });
   }
@@ -548,6 +580,12 @@ export function mount(root, api) {
       st.holder = null;
       if (picker) { picker.destroy(); picker = null; }
       kReady(null, () => null);
+    }
+    if (st.phase === 'reveal' && v.phase === 'play') {
+      // Play starts: the blocks reorder (clock and question card first), so start from the top, and fold the
+      // location list once — its 📍 toggle reopens it — so it does not push everything off the screen.
+      st.listOpen = false;
+      try { globalThis.scrollTo?.(0, 0); } catch { /* no window */ }
     }
     wrap.dataset.phase = v.phase;
     stage.hidden = v.phase === 'roundEnd' || v.phase === 'over';

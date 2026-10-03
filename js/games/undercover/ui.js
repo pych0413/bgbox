@@ -13,7 +13,7 @@
 // The phases and the wording: docs/games/undercover.md.
 // ============================================================
 
-import { el } from '../../ui/dom.js?v=1';
+import { el, restartAnim } from '../../ui/dom.js?v=1';
 
 const ROLE = {
   civilian: { emoji: '🧑', name: '平民' },
@@ -25,6 +25,13 @@ const ACCENT = '#a78bfa';
 const NO_OUT = { nobody: '冇人投票', nomajority: '冇人過半數', alltied: '全部人同票', pktie: 'PK 再平票', tie: '平票' };
 const BANNER = { civilians: ['is-civ', '🧑 平民贏！'], infiltrators: ['is-inf', '🕵️ 臥底方贏！'], blank: ['is-inf', '⬜ 白板贏！'] };
 const LOCKOUT_MS = 1500;           // 繼續 stays dead this long after a result appears, so a stray tap cannot skip it
+/** Nobody here holds a role, only a word: the card's own words (RoleCard says 角色牌). */
+const CARD_TEXT = {
+  lock: '🔓 鎖定詞語卡',
+  locked: '🔒 已鎖 — 㩒一下解鎖',
+  refused: '詞語卡鎖咗，要自己解鎖',
+  aria: '㩒住睇詞語',
+};
 
 export function mount(root, api) {
   const C = api.components;
@@ -92,22 +99,52 @@ export function mount(root, api) {
     return {
       role: wordRole(),
       locked,
-      onLockToggle: () => { locked = !locked; paintCard(); },
+      ariaLabel: CARD_TEXT.aria,
+      // no onLockToggle: RoleCard's own lock button says 「鎖定角色牌」, so the lock button below is the game's
       // On a passed-around phone every peek ends locked again, so the next person to hold it sees nothing.
       onOpen: (open) => { if (!open && sharedDevice() && !locked) { locked = true; paintCard(); } },
     };
   }
 
+  // RoleCard words its lock for a ROLE card (「鎖定角色牌」, 「角色牌鎖咗」, 「㩒住睇角色牌」). This card holds a word, so
+  // the lock button is the game's own (RoleCard's classes, so it looks the same), a press on the locked card is
+  // refused here with the word-card message (before the cover would say 角色牌), and the label is renamed.
   const card = C.RoleCard({ role: null, locked: false });
+  const lockBtn = el('button', { class: 'btn btn-ghost c-rolecard-lock uc-lock', type: 'button' });
+  lockBtn.addEventListener('click', () => {
+    sfx(locked ? 'unlock' : 'lock');
+    if (!locked) card.close();                 // locking hides the card straight away
+    locked = !locked;
+    paintCard();
+  });
+  const cardBox = el('div', { class: 'uc-card' }, card.el, lockBtn);
+
+  function refuseLocked(e) {
+    const cover = card.cover?.el;
+    if (!locked || !cover || !cover.contains?.(e.target)) return;
+    if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault?.();
+    e.stopPropagation?.();                     // the cover never sees the press, so it never says 角色牌
+    if (e.repeat) return;
+    restartAnim(cover, 'denied');
+    sfx('deny');
+    api.toast?.(CARD_TEXT.refused);
+  }
+  card.el.addEventListener('pointerdown', refuseLocked, true);
+  card.el.addEventListener('keydown', refuseLocked, true);
 
   function paintCard() {
-    if (view?.me) card.update(cardProps());
+    if (!view?.me) return;
+    card.update(cardProps());
+    card.cover?.el?.setAttribute?.('aria-label', CARD_TEXT.aria);
+    lockBtn.textContent = locked ? CARD_TEXT.locked : CARD_TEXT.lock;
+    lockBtn.classList.toggle('btn-locked', locked);
   }
 
   function placeCard(container) {
-    if (card.el.parentNode === container) return;
+    if (cardBox.parentNode === container) return;
     card.close();
-    container.append(card.el);
+    container.append(cardBox);
   }
 
   // ---------- timer slot ----------
@@ -143,7 +180,8 @@ export function mount(root, api) {
 
   // ---- deal: look at your word, tap 記住喇 ----
   function dealScreen() {
-    const lead = el('p', { class: 'uc-lead', text: '㩒住張卡先睇到，放手即刻冚返。記住就㩒「記住喇」。' });
+    // the card's own hint already says how to peek (「㩒住先睇到，放手即刻冚返」): say it once
+    const lead = el('p', { class: 'uc-lead', text: '睇清楚你個詞，記住就㩒「記住喇」。' });
     const slot = el('div', { class: 'uc-cardslot' });
     const action = el('div', { class: 'uc-action' });
     const note = el('p', { class: 'uc-note' });

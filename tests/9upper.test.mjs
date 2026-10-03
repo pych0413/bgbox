@@ -11,6 +11,7 @@ import { test, assert, Sim, HOST, ACT, makePlayers, paths } from './lib.mjs';
 import { createBag } from '../js/core/bag.js';
 import { mulberry32, clone } from '../js/core/engine-kit.js';
 import * as game from '../js/games/9upper/game.js';
+import * as S from '../js/games/9upper/script.js';
 
 const { engine, config, meta, rules, CATEGORIES, PRESETS } = game;
 
@@ -652,18 +653,73 @@ test('9upper: speakers follow the queue; done by the speaker or the 諗樣 only'
   const sim = mk(5, 6);
   toExplain(sim);
   const ex = sim.state.round.explainers;
-  assert.deepEqual(sim.view(null).turn, { pid: ex[0], spoken: [], total: 4 });
+  assert.deepEqual(sim.view(null).turn, { pid: ex[0], spoken: [], total: 4, skipped: [], no: 0, next: ex[1] });
   assert.equal(sim.act(ex[1], { type: 'done' }), false);              // not your turn
   assert.equal(sim.act(ex[0], { type: 'done' }), true);
   assert.equal(sim.view(null).turn.pid, ex[1]);
-  assert.equal(sim.act(J(sim), { type: 'done' }), true);              // the judge may end any turn
+  assert.equal(sim.act(J(sim), { type: 'done' }), true);              // the judge may end any turn — that is a skip
   assert.equal(sim.view(null).turn.pid, ex[2]);
+  assert.deepEqual(sim.view(null).turn.skipped, [ex[1]]);
   assert.ok(sim.legal(ex[2]).some((a) => a.type === 'done'));
   assert.deepEqual(sim.legal(ex[3]), []);
   sim.act(ex[2], { type: 'done' });
+  assert.equal(sim.view(null).turn.next, ex[1], 'after the last one waiting, the skipped player is next');
   sim.act(ex[3], { type: 'done' });
+  assert.equal(phase(sim), 'explain', 'the skipped player gets the floor back once nobody else is waiting');
+  assert.equal(sim.view(null).turn.pid, ex[1]);
+  assert.deepEqual(sim.view(null).turn.skipped, []);
+  sim.act(ex[1], { type: 'done' });
   assert.equal(phase(sim), 'judge');
   assert.equal(sim.view(null).turn, null);
+});
+
+test('9upper: a skipped speaker shows as skipped, comes back once, and the 諗樣 can call them back', () => {
+  // 諗樣揀: the 諗樣's 下一位 skips; the skipped one stays callable
+  const sim = mk(5, 6);
+  toExplain(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  assert.ok(sim.act(judge, { type: 'done', turn: 0 }));
+  assert.deepEqual(sim.view(null).turn.skipped, [ex[0]]);
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[0]]);
+  assert.ok(sim.legal(judge).some((a) => a.type === 'call' && a.target === ex[0]), 'a skipped player is callable');
+  assert.ok(sim.act(judge, { type: 'call', target: ex[0] }));
+  assert.equal(sim.view(null).turn.pid, ex[0]);
+  assert.deepEqual(sim.view(null).turn.skipped, []);
+  assert.deepEqual(sim.view(null).turn.spoken, [], 'called back: a full turn again');
+  assert.ok(sim.act(ex[0], { type: 'done' }));
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[0]]);
+  assert.equal(sim.act(judge, { type: 'call', target: ex[0] }), false, 'spoken for real: not callable');
+  // a second skip after the one come-back is final (no endless loop), but the 諗樣 may still call them
+  const sys = mk(4, 3, { speakOrder: 'system' });
+  toExplain(sys);
+  const sx = sys.state.round.explainers;
+  sys.act(J(sys), { type: 'done' });                       // skip sx[0]
+  sys.act(sx[1], { type: 'done' });
+  sys.act(sx[2], { type: 'done' });
+  assert.equal(sys.view(null).turn.pid, sx[0], 'back once');
+  sys.act(J(sys), { type: 'done' });                       // skipped again
+  assert.equal(phase(sys), 'judge', 'only once');
+  // a speaking clock that runs out is not a skip; the host's 下一步 is
+  const clock = mk(4, 3, { speakOrder: 'system', speakSecs: 30 });
+  toExplain(clock);
+  const cx = clock.state.round.explainers;
+  clock.advance();
+  assert.deepEqual(clock.view(null).turn.skipped, [], 'time up: they had the floor');
+  clock.cueDone();
+  clock.host({ type: ACT.NEXT });
+  assert.deepEqual(clock.view(null).turn.skipped, [cx[1]], 'the host moved past a stuck speaker');
+  // the turn number keeps counting through a come-back, so a stale double tap never ends the wrong turn
+  const dbl = mk(4, 3, { speakOrder: 'system' });
+  toExplain(dbl);
+  const dx = dbl.state.round.explainers;
+  dbl.act(J(dbl), { type: 'done', turn: 0 });              // skip dx[0]
+  dbl.act(dx[1], { type: 'done', turn: 1 });
+  dbl.act(dx[2], { type: 'done', turn: 2 });
+  assert.equal(dbl.view(null).turn.pid, dx[0]);
+  assert.equal(dbl.view(null).turn.no, 3);
+  assert.equal(dbl.act(J(dbl), { type: 'done', turn: 2 }), false, 'a stale 下一位 from the turn before');
+  assert.equal(dbl.view(null).turn.pid, dx[0]);
 });
 
 test('9upper: rule: the 諗樣 chooses who speaks and in what order', () => {
@@ -821,7 +877,7 @@ test('9upper: 系統派 — the phone deals the speakers, nobody can call out of
   const judge = J(sim);
   const ex = sim.state.round.explainers;
   assert.equal(sim.view(null).speakOrder, 'system');
-  assert.deepEqual(sim.view(null).turn, { pid: ex[0], spoken: [], total: 4 });
+  assert.deepEqual(sim.view(null).turn, { pid: ex[0], spoken: [], total: 4, skipped: [], no: 0, next: ex[1] });
   assert.equal(sim.act(judge, { type: 'call', target: ex[2] }), false, 'no calling out of turn');
   assert.ok(!sim.legal(judge).some((a) => a.type === 'call'));
   assert.equal(sim.act(ex[1], { type: 'done' }), false, 'not your turn');
@@ -834,9 +890,16 @@ test('9upper: 系統派 — the phone deals the speakers, nobody can call out of
   assert.equal(sim.view(null).turn.pid, ex[2]);
   assert.equal(sim.act(judge, { type: 'done' }), true, 'no turn number: a plain done');
   assert.equal(sim.view(null).turn.pid, ex[3]);
+  assert.deepEqual(sim.view(null).turn.skipped, [ex[1], ex[2]], 'the 諗樣 moved past them');
   assert.deepEqual(sim.legal(ex[3]), [{ type: 'done' }]);
   assert.deepEqual(sim.legal(ex[0]), []);
   assert.equal(sim.act(ex[3], { type: 'done' }), true);
+  // 系統派 re-queues the skipped ones after everybody else, in the order they were skipped
+  assert.equal(sim.view(null).turn.pid, ex[1]);
+  assert.equal(sim.view(null).turn.next, ex[2]);
+  assert.equal(sim.act(ex[1], { type: 'done' }), true);
+  assert.equal(sim.view(null).turn.pid, ex[2]);
+  assert.equal(sim.act(ex[2], { type: 'done' }), true);
   assert.equal(phase(sim), 'judge');
   // 收皮啦 and 決定 work as in the other modes
   const again = mk(5, 6, { speakOrder: 'system', callouts: 2 });
@@ -882,7 +945,7 @@ test('9upper: 系統派 cues — the first line names the first speaker, every l
   assert.equal(c.id, 'r1:explain:1');
   assert.equal(c.text, `輪到${nameOf(sim, ex[1])}。`);
   assert.ok(c.minMs > 0);
-  sim.act(J(sim), { type: 'done' });
+  sim.act(ex[1], { type: 'done' });
   assert.equal(take().text, `輪到${nameOf(sim, ex[2])}。`);
   sim.act(ex[2], { type: 'done' });
   assert.equal(take().text, `最後一位，輪到${nameOf(sim, ex[3])}。`);
@@ -906,7 +969,7 @@ test('9upper: 自己決定 — nobody is up; players tick themselves off, the �
   const ex = sim.state.round.explainers;
   assert.deepEqual(ex, ringOf(sim), 'listed in seat order from the 諗樣\'s left');
   assert.equal(sim.view(null).speakOrder, 'free');
-  assert.deepEqual(sim.view(null).turn, { pid: null, spoken: [], total: 4 });
+  assert.deepEqual(sim.view(null).turn, { pid: null, spoken: [], total: 4, skipped: [], no: 0, next: null });
   assert.equal(sim.state.deadline, null, 'no clock without anybody on the floor');
   assert.equal(sim.view(ex[0]).deadline, undefined);
   assert.equal(sim.act(judge, { type: 'call', target: ex[1] }), false, 'no calling in 自己決定');
@@ -955,8 +1018,15 @@ test('9upper: 自己決定 — legalActions, autoAct, @next and the cue', () => 
   sim.cueDone();
   sim.host({ type: ACT.NEXT });                          // skip: ticks the first one still waiting
   assert.deepEqual(sim.view(null).turn.spoken, [ex[0], ex[1]]);
+  assert.deepEqual(sim.view(null).turn.skipped, [ex[1]]);
   sim.host({ type: ACT.NEXT });
+  assert.equal(phase(sim), 'explain', 'nobody new is waiting: the skipped one is back on the list');
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[0], ex[2]]);
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' }, 'and can tick themselves off');
+  let presses = 0;
+  while (phase(sim) === 'explain' && presses < 5) { sim.host({ type: ACT.NEXT }); presses += 1; }
   assert.equal(phase(sim), 'judge');
+  assert.equal(presses, 2, 'each skipped player comes back once, then the pick');
 });
 
 test('9upper: 發言次序 hints (≤ 40 chars) and cues stay right in every mode and never leak', () => {
@@ -1805,7 +1875,9 @@ test('9upper: UI renders every phase for every seat, never shows the explanation
     chip.click();
     assert.equal(judge.sent.length, 0, '收皮啦 needs a second tap');
     judge.show();
-    buttons(judge.root).find((b) => b.className.includes('g9-chip') && b.textContent.includes('再㩒')).click();
+    assert.ok(buttons(judge.root).some((b) => b.className.includes('g9-chip') && b.textContent === `確定收皮 ${nameOf(sim, ex[1])}？`),
+      'the armed chip names its target');
+    buttons(judge.root).find((b) => b.className.includes('g9-chip') && b.textContent.includes('確定收皮')).click();
     assert.deepEqual(judge.sent.pop(), { type: 'callout', target: ex[1] });
     button(judge.root, '我決定咗').click();
     assert.deepEqual(judge.sent.pop(), { type: 'decide' });
@@ -1922,4 +1994,157 @@ test('9upper: UI — 系統派 announces the speaker and has no 叫佢講; 自�
     for (const ui of mounted) ui.destroy();
     dom.restore();
   }
+});
+
+test('9upper: UI — same-length cards, an honest read the phone can vouch for, skips, the callout row, source and swap', async () => {
+  const dom = installDom();
+  const mounted = [];
+  try {
+    const { mount } = await import('../js/games/9upper/ui.js');
+    const covers = [];
+    const seatUi = (sim, pid) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const sfxs = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const Cover0 = fc.components.Cover;
+      fc.components.Cover = (props) => { const c = Cover0(props); covers.push({ pid, props }); return c; };
+      const ui = mount(root, { me: pid, players: sim.players, isHost: pid === 'p1', send: (a) => sent.push(a),
+        sfx: (n) => sfxs.push(n), toast() {}, now: () => sim.now, components: fc.components, meta, config: sim.config });
+      mounted.push(ui);
+      return { root, sent, sfxs, show() { ui.update(sim.view(pid), {}); return root.visibleText(); } };
+    };
+    const faceText = (root) => root.all().find((n) => n.className === 'g9-face-text')?.textContent ?? '';
+    const len = (t) => Array.from(t).length;
+
+    // #16: during the read every card holds a block of similar length (a real explanation is 17–67 characters)
+    const real = '喺好嘈嘅環境入面，人仍然可以集中聽住一個人講嘢；聽到有人叫自己個名都會即刻留意到。';
+    const bank = { '9upper': BANK.map((e) => ({ ...e, explain: `${real}【${e.term}】` })) };
+    for (let seed = 1; seed <= 6; seed++) {
+      const sim = mk(5, seed, {}, bank);
+      const seats = sim.players.map((p) => seatUi(sim, p.id));
+      toRead(sim);
+      for (const u of seats) u.show();
+      const lens = seats.map((u) => len(faceText(u.root)));
+      for (const n of lens) assert.ok(n >= 25 && n <= 70, `every card holds a block (${lens})`);
+      // #21: the window opens with the same sound and flash on every phone, the 諗樣's included
+      for (const u of seats) {
+        assert.deepEqual(u.sfxs, ['deal']);
+        assert.ok(u.root.all().some((n) => n.classList.contains('g9-flash')));
+      }
+      for (const u of seats) u.show();
+      assert.ok(seats.every((u) => u.sfxs.length === 1), 'once, not on every update');
+    }
+
+    // #21: an honest player whose phone watched the window and never opened the card is not told they read it
+    const told = (opened) => {
+      const sim = mk(4, 3);
+      toRead(sim);
+      const H = sim.state.round.honest;
+      const u = seatUi(sim, H);
+      u.show();
+      if (opened) covers.filter((c) => c.pid === H).at(-1).props.onOpen(true);
+      finishRead(sim);
+      u.show();
+      return faceText(u.root);
+    };
+    assert.ok(told(true).includes('你睇過真正解釋喇'));
+    const missed = told(false);
+    assert.ok(missed.includes('你冇打開到張卡') && !missed.includes('你睇過真正解釋喇'), missed);
+    // a phone that joined after the window does not know: the usual line
+    {
+      const sim = mk(4, 3);
+      toExplain(sim);
+      const u = seatUi(sim, sim.state.round.honest);
+      u.show();
+      assert.ok(faceText(u.root).includes('你睇過真正解釋喇'));
+    }
+    // a phone that re-mounted half way through the window cannot know whether the card was opened before the reload:
+    // no second start sound, no flash, and afterwards the usual line (never a false 「你冇打開到張卡」)
+    {
+      const sim = mk(4, 3);
+      toRead(sim);
+      sim.tick(4000);
+      const u = seatUi(sim, sim.state.round.honest);
+      u.show();
+      assert.deepEqual(u.sfxs, [], 'no start sound on a re-mount mid-window');
+      assert.ok(!u.root.all().some((n) => n.classList.contains('g9-flash')));
+      finishRead(sim);
+      u.show();
+      assert.ok(faceText(u.root).includes('你睇過真正解釋喇'), faceText(u.root));
+    }
+
+    // #23: a skipped speaker is shown as such, and in 諗樣揀 the 諗樣 can call them back
+    const sim = mk(5, 6, { callouts: 1 });
+    toExplain(sim);
+    const ex = sim.state.round.explainers;
+    const jd = seatUi(sim, J(sim));
+    sim.act(J(sim), { type: 'done', turn: 0 });
+    let t = jd.show();
+    assert.ok(t.includes('⏭ 跳過咗'), t);
+    const back = jd.root.all().find((n) => n.tagName === 'button' && n.className.includes('skipped') && n.textContent.includes(nameOf(sim, ex[0])));
+    assert.ok(back && back.textContent.includes('叫返佢'));
+    back.click();
+    assert.deepEqual(jd.sent.pop(), { type: 'call', target: ex[0] });
+    // #22: the 收皮啦 chips follow seat order (the 揀人 list's order), and the armed chip names its target
+    const chips = buttons(jd.root).filter((b) => b.className.includes('g9-chip')).map((b) => b.textContent);
+    const seatOrdered = sim.players.map((p) => p.id).filter((p) => ex.includes(p)).map((p) => nameOf(sim, p));
+    assert.deepEqual(chips, seatOrdered);
+    buttons(jd.root).find((b) => b.textContent === seatOrdered[1]).click();
+    jd.show();
+    assert.ok(buttons(jd.root).some((b) => b.textContent === `確定收皮 ${seatOrdered[1]}？`));
+    // the others' 揀人 screen says the questions go on
+    sim.act(J(sim), { type: 'decide' });
+    const other = seatUi(sim, ex[1]);
+    assert.ok(other.show().includes('諗樣仲可以追問'));
+    // the reveal names the 9uppers and shows the source as a readable label
+    sim.act(J(sim), { type: 'pick', target: ex[2] });
+    t = other.show();
+    const nine = sim.state.round.explainers.filter((p) => p !== sim.state.round.honest);
+    assert.ok(t.includes(`🤥 9upper：${sim.players.filter((p) => nine.includes(p.id)).map((p) => p.name).join('、')}`), t);
+    assert.ok(t.includes(`來源：${sim.state.round.term.src}`), 'a non-URL source stays as written');
+    const link = mk(4, 1, {}, { '9upper': [{ term: '深水埗', explain: '九龍西北部一區。', cat: CATS[0], level: 1,
+      src: 'https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97' }] });
+    toJudge(link);
+    link.act(J(link), { type: 'pick', target: link.state.round.explainers[0] });
+    const lu = seatUi(link, J(link));
+    t = lu.show();
+    assert.ok(t.includes('來源：維基百科：深水埗') && !t.includes('%E6'), t);
+    const a = lu.root.all().find((n) => n.tagName === 'a');
+    assert.equal(a.attrs.href, 'https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97');
+    assert.equal(a.attrs.rel, 'noopener noreferrer');
+
+    // polish: a 換題 is announced on every phone
+    const sw = mk(4, 2);
+    const p2 = seatUi(sw, sw.state.round.explainers[0]);
+    p2.show();
+    sw.act(J(sw), { type: 'swap' });
+    t = p2.show();
+    assert.ok(t.includes('🔄 換咗題（仲可以換 2 次）'), t);
+  } finally {
+    for (const ui of mounted) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('9upper: srcLabel turns bank URLs into readable labels; decoys are stable per round and seat', async () => {
+  assert.deepEqual(S.srcLabel('https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97'),
+    { text: '維基百科：深水埗', href: 'https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97' });
+  assert.equal(S.srcLabel('https://en.wikipedia.org/wiki/Cocktail_party_effect').text, 'Wikipedia：Cocktail party effect');
+  assert.equal(S.srcLabel('https://www.moedict.tw/%E9%9D%89%E9%9D%86').text, '萌典：靉靆');
+  assert.equal(S.srcLabel('https://dict.idioms.moe.edu.tw/idiomView.jsp?ID=1').text, '教育部成語典');
+  assert.equal(S.srcLabel('https://www.space.com/blazar').text, 'space.com');
+  assert.deepEqual(S.srcLabel('《The Pragmatic Programmer》（1999）'), { text: '《The Pragmatic Programmer》（1999）', href: null });
+  // every bank source gets a short label, never a percent-encoded one
+  for (const x of (await realBank())?.bank ?? []) {
+    if (!x.src) continue;
+    const l = S.srcLabel(x.src).text;
+    assert.ok(l && !/%[0-9A-F]{2}/i.test(l) && Array.from(l).length <= 60, `${x.src} → ${l}`);
+  }
+  const term = { text: '深水埗', level: 1, hint: { kind: 'one', options: ['香港冷知識'] } };
+  assert.equal(S.bluffDecoy(term, '1|p2'), S.bluffDecoy(term, '1|p2'));
+  assert.equal(S.judgeDecoy('3|p1'), S.judgeDecoy('3|p1'));
+  assert.ok(S.bluffDecoy(term, '1|p2').includes('深水埗'));
+  const lens = new Set(Array.from({ length: 12 }, (_, i) => Array.from(S.bluffDecoy(term, `${i}|p2`)).length));
+  assert.ok(lens.size >= 3, 'decoy lengths vary like real explanations do');
 });

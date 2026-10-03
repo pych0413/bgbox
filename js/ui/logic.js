@@ -68,6 +68,121 @@ export function rankRows(players, scoreboard) {
   return rows;
 }
 
+/**
+ * How the evening's table reads (#39). `points`: did any game tonight award points? If not, the 分 column is
+ * hidden (a column of zeros says nothing) and the board effectively ranks by wins. `earned(row)`: may this row
+ * wear a medal — only for something actually won (points above 0, or wins on a night without points); a tie
+ * at 0 is not a 🥈.
+ */
+export function scoreboardMode(rows) {
+  const points = (rows ?? []).some((r) => (r?.points ?? 0) !== 0);
+  return { points, earned: (r) => ((points ? r?.points : r?.wins) ?? 0) > 0 };
+}
+
+// ---------- results hero (#39) ----------
+
+/**
+ * The results screen's headline, stating the RESULT (never 「<game> — 贏家」, which on 芝士大盜 read as "the
+ * thief won" right after the thief was caught). The game's emoji + name go in a small kicker line above.
+ *   void            → 🚫 「呢鋪唔計」
+ *   noScore         → the game's emoji, 「邊個贏由你哋講」 (a tool that does not judge: 通用派牌)
+ *   a summary line  → 🏆 / 🤝 and the summary itself (every scoring game writes it as the result)
+ *   else            → 🏆 「贏家」 / 🤝 「冇人贏」
+ * `summaryBelow` says whether the summary still needs its own line under the winners.
+ */
+export function resultHero(res, meta = {}) {
+  const summary = typeof res?.summary === 'string' ? res.summary.trim() : '';
+  const winners = Array.isArray(res?.winners) ? res.winners.length : 0;
+  if (res?.void === true) return { trophy: '🚫', heading: '呢鋪唔計', summaryBelow: !!summary };
+  if (res?.noScore === true || meta?.noScore === true) {
+    return { trophy: meta?.emoji ?? '🎲', heading: '邊個贏由你哋講', summaryBelow: !!summary };
+  }
+  const trophy = winners ? '🏆' : '🤝';
+  if (summary) return { trophy, heading: summary, summaryBelow: false };
+  return { trophy, heading: winners ? '贏家' : '冇人贏', summaryBelow: false };
+}
+
+/** The confetti for a win: the game's own emoji in place of the cheese mascot (#39). */
+export function confettiSet(meta) {
+  const own = typeof meta?.emoji === 'string' && meta.emoji.trim() ? meta.emoji.trim() : '⭐';
+  return ['🎉', '✨', own, '🎊', '⭐'];
+}
+
+// ---------- play screen: 輪到你 and the host's ⏭ (#13, #14) ----------
+
+/**
+ * Does the header show 「輪到你」 for `seat`? Only for a real turn — the engine waits on this seat ALONE.
+ * Never at night (the brightest thing on a lit phone), never in an eyes-closed / secret step (`anonymous`: in
+ * the Avalon assassination only the Assassin's phone would light up), and never in a step that calls several
+ * seats at once (`together`, added by the room; or `simultaneous`, if an engine says so itself): a deal or a
+ * vote is everybody's, a pulsing pill on each phone is noise.
+ */
+export function turnBadge(focus, seat, { night = false } = {}) {
+  if (!seat || night || !focus || typeof focus !== 'object') return false;
+  if (focus.anonymous || focus.together || focus.simultaneous) return false;
+  const pids = Array.isArray(focus.pids) ? focus.pids : [];
+  return pids.length === 1 && pids[0] === seat;
+}
+
+/** The armed label's text for the host's skip: 「再㩒一次：跳過？未做嘅當冇做」. */
+export const SKIP_CONFIRM = '跳過？未做嘅當冇做';
+
+/**
+ * Does the host's ⏭ 跳過呢步 need a second tap (#13)? When skipping would cut somebody off: the engine is
+ * waiting on a seat (`waiting` — the room tells the host device; its own `focus` is filtered to its seats),
+ * an eyes-closed step, or night. Not the 讀稿 narrator's tap on a line not yet acknowledged (`cueId` differs
+ * from `ackedCueId`, the line the host last moved past): that tap only says "I have read it out".
+ */
+export function skipNeedsConfirm({ waiting = false, focus = null, night = false, mode = 'voice', cueId = null, ackedCueId = null } = {}) {
+  const risky = !!waiting || !!focus?.anonymous || (Array.isArray(focus?.pids) && focus.pids.length > 0) || !!night;
+  if (!risky) return false;
+  if (mode === 'read' && cueId && cueId !== ackedCueId) return false;
+  return true;
+}
+
+// ---------- public "recent events" folds (#10) ----------
+
+const MAX_FOLDS = 4;
+const MAX_ENTRIES = 30;
+const MAX_LINES = 40;
+
+/** One line of a fold: a string, `{ text }`, or a ballot `{ from: pid, to: pid | null }` (null = 棄權). */
+function foldLine(l) {
+  if (typeof l === 'string') return l.trim() ? { text: l } : null;
+  if (!l || typeof l !== 'object') return l == null ? null : { text: String(l) };
+  if (typeof l.from === 'string') return { from: l.from, to: typeof l.to === 'string' ? l.to : null };
+  if (typeof l.text === 'string' && l.text.trim()) return { text: l.text };
+  return null;
+}
+const foldLines = (ls) => (Array.isArray(ls) ? ls.map(foldLine).filter(Boolean).slice(0, MAX_LINES) : []);
+
+/**
+ * `view.recent` → folds the play screen can render: [{ key, title, open, entries: [{ title, lines }] }].
+ * Accepts one fold or an array of them; a fold is `{ id?, title, lines? , entries?: [{ title?, lines }], open? }`.
+ * Folds with nothing in them are dropped (no empty 「📜 之前嘅投票」 before the first vote).
+ */
+export function recentFolds(recent) {
+  const list = Array.isArray(recent) ? recent : recent && typeof recent === 'object' ? [recent] : [];
+  const out = [];
+  for (const [i, f] of list.entries()) {
+    if (!f || typeof f !== 'object') continue;
+    const entries = [];
+    const top = foldLines(f.lines);
+    if (top.length) entries.push({ title: null, lines: top });
+    for (const e of Array.isArray(f.entries) ? f.entries.slice(0, MAX_ENTRIES) : []) {
+      if (!e || typeof e !== 'object') continue;
+      const lines = foldLines(e.lines);
+      if (!lines.length) continue;
+      entries.push({ title: typeof e.title === 'string' && e.title.trim() ? e.title.trim() : null, lines });
+    }
+    if (!entries.length) continue;
+    const title = typeof f.title === 'string' && f.title.trim() ? f.title.trim() : '📜 之前發生咗咩';
+    out.push({ key: typeof f.id === 'string' && f.id ? f.id : `${i}:${title}`, title, open: f.open === true, entries });
+    if (out.length >= MAX_FOLDS) break;
+  }
+  return out;
+}
+
 // ---------- time ----------
 
 /** 45 → 「45 秒」, 120 → 「2 分鐘」, 90 → 「1 分 30 秒」. */

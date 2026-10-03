@@ -22,7 +22,7 @@
 // a shake only rolls the cup that is actually on screen.
 // ============================================================
 
-import { el, dieFace, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=1';
+import { el, dieFace, labelDice, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=1';
 import { sfx } from '../../core/sfx.js?v=1';
 import { lsGet, lsSet } from '../../core/util.js?v=1';
 import {
@@ -213,6 +213,7 @@ export function DiceCup(props = {}) {
       row.append(el('div', { class: 'die', text: '–' }));
       sum.textContent = '未搖過';
     }
+    labelDice(row, cover.isOpen());     // #37: a covered die never says 「N 點」 (the Cover re-labels as it opens)
   }
 
   function paintShake() {

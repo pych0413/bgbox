@@ -437,7 +437,8 @@ function setup({ players, config: cfg, rng, hostPid }) {
     nt: null,
     dirCw: rng() < 0.5, anchor: null,
     quiet: 0, roundDeaths: 0,
-    win: null, winWhy: null, outcome: null,
+    lastNight: null,                         // public: { n, deaths } of the last dawn (kept on the day screens)
+    win: null, winWhy: null, winBoth: false, outcome: null,
   };
   return s;
 }
@@ -463,7 +464,8 @@ function checkWin(s) {
     wolvesWin = godsGone || villGone;
     why = godsGone ? 'gods' : 'villagers';
   }
-  if (wolvesWin) { s.winWhy = why; return 'wolves'; }   // wolves first when both sides qualify
+  // wolves first when both sides qualify (狼刀優先); winBoth = the last wolf went down with them (the results explain it)
+  if (wolvesWin) { s.winWhy = why; s.winBoth = w === 0; return 'wolves'; }
   if (w === 0) { s.winWhy = 'wolves-dead'; return 'good'; }
   return null;
 }
@@ -488,6 +490,7 @@ function cueText(s) {
       return S.cueSpeech({
         who: spk(s, c.pid), idx: c.idx, total: c.total, pk: c.pk, secs: c.secs, dirUp: c.dirUp,
         tied: (c.tied ?? []).map((p) => spk(s, p)),
+        next: c.pk ? [] : s.speechOrder.slice(c.idx + 1, c.idx + 3).map((p) => spk(s, p)),
       });
     case 'vote': return S.cueVote({ round: c.round, tied: (c.tied ?? []).map((p) => spk(s, p)) });
     case 'say':
@@ -729,20 +732,43 @@ function panel(s, pid) {
     case 'witch': {
       if (!isMe('witch')) { decoy(S.PANEL.decoy); break; }
       if (!alive(pid)) { decoy(S.PANEL.dead); break; }
-      if (!s.potion.save && !s.potion.poison) { decoy([S.PANEL.witch.empty, S.PANEL.decoy[1]]); break; }
+      const W = S.PANEL.witch;
+      const did = c.stage === 'tail' ? s.nt.rec.witch : null;   // commit() has settled her window
+      if (did) {
+        // the closing line says what she actually did — 「今晚你冇用藥」 when a lapsed window spent nothing
+        P.real = true;
+        const who = did.target ? nm(s, did.target) : '';
+        P.info = [did.act === 'save' ? W.didSave(who) : did.act === 'poison' ? W.didPoison(who) : W.didNone, W.potions(s.potion.save, s.potion.poison)];
+        P.skip = W.skip;
+        break;
+      }
+      if (!s.potion.save && !s.potion.poison) { decoy([W.empty, S.PANEL.decoy[1]]); break; }
       P.real = true;
       const atk = s.nt.attacked;
       const saveOk = s.potion.save && !!atk && (atk !== pid || selfSaveAllowed(s));
       const lines = [];
       if (s.potion.save) {
-        lines.push(atk ? S.PANEL.witch.victim(nm(s, atk), atk === pid) : S.PANEL.witch.victimNone);
-        if (atk === pid && !selfSaveAllowed(s)) lines.push(S.PANEL.witch.noSelfSave);
+        lines.push(atk ? W.victim(nm(s, atk), atk === pid) : W.victimNone);
+        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave);
         if (atk) P.tags[atk] = '💊';
-      } else lines.push(S.PANEL.witch.victimHidden);
-      lines.push(S.PANEL.witch.potions(s.potion.save, s.potion.poison));
+      } else lines.push(W.victimHidden);
+      // Her pick names the potion it spends, on her button and on a line of her own panel (a tentative pick is
+      // spent when the window closes, so the line also says how to take it back). Nobody else's panel changes.
+      // The line takes the potions line's PLACE, so her panel keeps its height when she taps: a panel that grew a
+      // line on a tap would show across a 靜音 table which phone tapped for real.
+      const pk = sel?.pick ?? null;
+      let status = W.potions(s.potion.save, s.potion.poison);
+      if (pk) {
+        const isSave = saveOk && pk === atk;
+        const who = nm(s, pk);
+        P.ok = isSave ? W.okSave(who) : W.okPoison(who);
+        if (sel.lock) status = isSave ? W.lockedSave(who) : W.lockedPoison(who);
+        else status = isSave ? W.pickedSave(who) : W.pickedPoison(who);
+      } else if (sel?.lock) status = W.lockedNone;
+      lines.push(status);
       P.info = lines;
-      P.hint = S.PANEL.witch.hint;
-      P.skip = S.PANEL.witch.skip;
+      P.hint = saveOk && s.potion.poison ? W.hint : saveOk ? W.hintSave : s.potion.poison ? W.hintPoison : W.hintNone;
+      P.skip = W.skip;
       P.on = (t) => open && alive(t) && ((saveOk && t === atk) || (s.potion.poison && t !== pid && !(saveOk && t === atk)));
       break;
     }
@@ -773,18 +799,13 @@ function panel(s, pid) {
     }
 
     case 'final': {
+      // By day, so one panel for every dead player — a hunter, a poisoned hunter or anybody else — word for word.
+      // Only a hunter who can shoot has an effect (resolveFinal reads c.canShoot); his 💡 says which he is.
       if (pid !== c.pid) break;
-      const hunter = isMe('hunter');
-      if (c.canShoot) {
-        P.real = true;
-        P.info = S.PANEL.final.hunter.slice();
-        P.skip = S.PANEL.final.skip;
-        P.on = (t) => open && alive(t);
-      } else {
-        P.info = (hunter ? S.PANEL.final.poisoned : S.PANEL.final.other).slice();
-        P.skip = S.PANEL.final.skipDecoy;
-        P.on = (t) => open && alive(t);
-      }
+      P.real = c.canShoot;
+      P.info = S.PANEL.final.info.slice();
+      P.skip = S.PANEL.final.skip;
+      P.on = (t) => open && alive(t);
       P.hint = '';
       break;
     }
@@ -792,6 +813,9 @@ function panel(s, pid) {
     default: break;
   }
   if (sel?.lock && !P.retarget) P.on = () => false;
+  // Every seat, during a step's opening line: the chips are grey until the narrator is done, and the screen says so
+  // (a tap in the cue used to vanish without a word — playtest p3). Same words on every phone.
+  if (c.stage === 'cue' && step !== 'begin') P.hint = S.PANEL.cueWait;
   return P;
 }
 
@@ -937,6 +961,7 @@ function resolveNight(s, ctx) {
   s.d = s.n;
   s.dirCw = !s.dirCw;
   s.anchor = dead.length === 1 ? dead[0] : null;
+  s.lastNight = { n: s.n, deaths: dead.slice() };
   s.q = [];
   const steps = applyDeaths(s, dead.map((pid) => ({ pid, how: how.get(pid), time: 'night', wordsOk })));
   s.q = [{ k: 'dawn', deaths: dead }, ...steps, { k: 'plan', what: 'discuss' }];
@@ -1175,7 +1200,8 @@ function cue(state) {
   if (!c || c.stage === 'run') return null;
   const text = cueText(s);
   if (!text) return null;
-  return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs: S.cueMinMs(text) };
+  const minMs = c.k === 'dawn' ? Math.max(S.DAWN_MIN_MS, S.cueMinMs(text)) : S.cueMinMs(text);
+  return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs };
 }
 
 function focus(state) {
@@ -1329,7 +1355,9 @@ function rosterOf(s, seat) {
       r.how = s.phase === 'over' || how === 'exile' || how === 'shot' || how === 'explode' ? (how ?? null) : null;
       r.at = s.died[pid] ? { n: s.died[pid].n, time: s.died[pid].time } : null;
     }
-    if (all || pid === seat || (s.cfg.open && !s.alive[pid])) r.role = s.role[pid];
+    // Only roles that are public to this seat: never the viewer's own (it is in `my`, and a role on your own chip is
+    // readable from the next seat all day — playtest #2).
+    if (all || (s.cfg.open && !s.alive[pid])) r.role = s.role[pid];
     return r;
   });
 }
@@ -1390,6 +1418,8 @@ function godBlock(s) {
   return g;
 }
 
+const DAY_PHASES = new Set(['dawn', 'words', 'final', 'say', 'speech', 'vote']);
+
 function view(state, pid) {
   const s = state;
   const seat = isStr(pid) && s.order.includes(pid) ? pid : null;
@@ -1415,6 +1445,24 @@ function view(state, pid) {
     stage: c ? c.stage : null,
   };
   if (s.cfg.preset) v.opts.reasonId = s.cfg.preset;
+  // Public records the day screens keep (the dawn card and the tally are only up for a few seconds):
+  // who left last night (seat order, no cause) and every vote so far with its 票型.
+  if (s.lastNight && s.lastNight.n === s.d && DAY_PHASES.has(s.phase)) v.lastNight = { n: s.lastNight.n, deaths: s.lastNight.deaths.slice() };
+  v.voteLog = s.rec.filter((r) => r.k === 'vote').map((r) => ({
+    d: r.d, round: r.round, votes: r.votes.map((x) => ({ by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
+  }));
+  // …and the same 票型 as the shell's public fold (RecentFold under the game, closed until tapped), newest first, by day
+  if (v.voteLog.length && DAY_PHASES.has(s.phase)) {
+    const who = (p) => nm(s, p);
+    v.recent = [{
+      id: 'ww-votes',
+      title: S.UI.day.voteLogHead,
+      entries: v.voteLog.slice().reverse().map((r) => ({
+        title: S.UI.day.voteLogRound(r.d, r.round),
+        lines: [...S.voteParts(r, who), `➜ ${S.voteOutcome(r, who)}`],
+      })),
+    }];
+  }
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
   if (s.span) v.span = s.span;
 
@@ -1514,10 +1562,9 @@ function hintFor(s, seat, v) {
   }
   // the day: the moderator and a dead seat have their own line, except for a dead player's own turn
   if (v.isMod) return H.day.mod;
-  if (s.phase === 'final' && me === c.pid) {
-    if (c.canShoot) return H.day.final.hunter;
-    return s.role[me] === 'hunter' ? H.day.final.poisoned : H.day.final.other;
-  }
+  // By day the line never depends on the seat's card: the sheet shows it in plain text on a face-up phone (only its
+  // role box is covered), so a wolf's or a hunter's own line would be readable from the next seat.
+  if (s.phase === 'final' && me === c.pid) return H.day.final.me;
   if (s.phase === 'words' && me === c.pid) return H.day.words.me;
   if (me && !s.alive[me]) return H.day.dead;
   switch (s.phase) {
@@ -1550,7 +1597,7 @@ function buildResult(s) {
   // Sections (the results screen folds them): the why + a pointer to the recap stay open on top; then the roles;
   // then one section per night and per day. A heading is a plain string 「── 標題 ──」, so a renderer without
   // sections still shows a readable list.
-  const lines = [...S.explainLines(win, s.winWhy, s.cfg.win), S.RECAP.intro];
+  const lines = [...S.explainLines(win, s.winWhy, s.cfg.win, { both: win === 'wolves' && !!s.winBoth }), S.RECAP.intro];
 
   lines.push(S.section(S.RECAP.roles));
   for (const pid of s.pl) {

@@ -201,7 +201,7 @@ Cue: 「阿明提議自己、阿欣出任務。大家請投票：贊成定反對
 
 | who | screen |
 |---|---|
-| every seat | 「投票：贊成定反對？」; `隊員：` chips of the team; two big tiles 👍 贊成 / 👎 反對; the confirm button 「揀一個先」 → 「確定：贊成」/「確定：反對」 (two taps, so a stray thumb does not lock anyone in); after confirming 「你投咗：贊成 ✓　等緊其他人…」 and a small 「改票」 (a vote may be changed until the last one lands); 「已投 3/7」 (a count, never who); note 「全部人投完先會同時公開，每個人投咩都會見到。」 |
+| every seat | 「投票：贊成定反對？」; `隊員：` chips of the team; two big tiles 👍 贊成 / 👎 反對; the confirm button 「揀一個先」 → 「確定：贊成」/「確定：反對」 (two taps, so a stray thumb does not lock anyone in); after confirming 「已投 ✓　等緊其他人…」 with **neither tile lit** and a small 「改票」 (a vote may be changed until the last one lands). A locked vote is never on screen — a neighbour who has not voted could read it and follow it (research: the vote being cast is private until all are locked); your own choice shows only while you pick it or after 改票 reopens it; 「已投 3/7」 (a count, never who); note 「全部人投完先會同時公開，每個人投咩都會見到。」 |
 | table | the team and the count |
 
 The leader and the team members vote like everybody else. When the last vote lands the engine tallies at once.
@@ -230,13 +230,17 @@ Cue: 「隊伍通過喇。阿明、阿欣，請喺電話揀「成功」或者「
 
 | who | screen |
 |---|---|
-| team member | 「出任務牌」; `隊員：` chips; the `Timer` 「出牌時間」 (timed mode); **two tiles** ✅ 成功 (幫任務成功) and ❌ 失敗 (破壞任務), in a random order per seat per quest; the confirm button 「揀一張牌先」 → 「出「成功」牌」 / 「出「失敗」牌」; the same caption for everybody 「只有邪惡陣營先出得「失敗」。其他人㩒「失敗」冇反應。」; after playing 「已經出牌 ✓　時間到先公佈結果。」 and both tiles dim (no echo of the choice) |
+| team member | 「出任務牌」; `隊員：` chips; the `Timer` 「出牌時間」 (timed mode); **two tiles** ✅ 成功 (幫任務成功) and ❌ 失敗 (破壞任務), in a random order per seat per quest, with **one look for both** (neutral border, and the same accent ring when picked — never a team colour); the confirm button 「揀一張牌先」 → 「確定出牌」 whichever tile is picked; the same caption for everybody 「只有邪惡陣營先出得「失敗」。其他人㩒「失敗」冇反應。」; after playing 「已經出牌 ✓　時間到先公佈結果。」 and both tiles dim (no echo of the choice) |
 | not on the team | 「你唔喺隊入面，等隊員出牌。」 |
 | table | 「隊員正喺各自部電話秘密出牌。」 |
 
 **Good and evil see the identical screen.** For a good seat the 「失敗」 tile is simply inert: it is not greyed, not disabled, makes the
 same `tap` sound, and the confirm button stays on 「揀一張牌先」. The UI never offers `fail` to good, and the engine would refuse it
 anyway. Tile order is mirrored per seat at random so an over-the-shoulder glance at *where* a finger went is uninformative too.
+A picked Fail looks exactly like a picked Success and the button says 「確定出牌」 for both (playtest #17): a red glow or 「出「失敗」牌」
+could only ever appear on an evil phone and is readable across the table; a tinted border on the *other* tile would give the pick away
+just the same. Only the emoji and words inside the tile say which card it is. Test: the CSS has no rule that tells the two tiles apart,
+and a good seat with Success picked and an evil seat with Fail picked have the same picked-tile classes and the same button.
 
 **The clock is a minimum.** In timed mode (`questSecs > 0`) nothing resolves early, even when every card is in: the result appears at the
 later of the deadline and the last card. A card still missing at the deadline is **waited for** (the engine never plays success on an evil
@@ -306,25 +310,28 @@ Lines (the shell lists them under 「點解會咁」) — the first sentence say
 
 ```
 好人完成咗三個任務，刺客 阿欣 刺咗 阿強（🛡️ 派西維爾），但係梅林係 阿明，好人贏。
-🎭 身份同夜晚情報
+── 🎭 身份同夜晚情報 ──
 阿明：🧙 梅林（好人）— 夜晚見到邪惡：阿傑、阿玲、阿欣
 阿強：🛡️ 派西維爾（好人）— 夜晚見到梅林同莫甘娜（唔知邊個真）：阿明、阿玲
 阿傑：👤 奧伯倫（邪惡）— 孤軍作戰，冇人識佢
 …
-📜 任務記錄（連出咗咩牌）
+── 📜 任務記錄（連出咗咩牌） ──
 任務 2（3 人，隊長 阿欣）：阿強、阿玲、阿輝 → 失敗（2 成功、1 失敗）
 　出牌：阿強 成功、阿玲 失敗、阿輝 成功
 任務 4（4 人，隊長 阿輝）：… → 成功（3 成功、1 失敗）
 　出牌：…
 　（呢個任務要兩張失敗先算失敗，得一張失敗所以仍然成功）
-🗳 提議同投票記錄
+── 🗳 提議同投票記錄 ──
 任務 1 · 第 1 次提議：隊長 阿明 揀 阿輝、阿欣 → 通過 4:3（贊成：…；反對：…）
-🌊 湖中女神
+── 🌊 湖中女神 ──
 阿傑 驗 阿玲 → 睇到邪惡
-🗡️ 刺殺
+── 🗡️ 刺殺 ──
 阿欣 刺咗 阿強（🛡️ 派西維爾）→ 刺錯咗
 ```
 
+Every heading is a 「── 標題 ──」 line, so the shell folds the recap into sections (the why-line first, untitled; a long recap opens
+only its first section). Proposals are numbered **per quest** — 「任務 3 · 第 2 次提議」, as on the game screens and the 連續否決 track —
+never with the game-wide counter, which would read like rejections (playtest #33); a 呢鋪唔計 line uses the same number.
 If a card was defaulted by the host's 下一步 the quest block adds 「（X 冇出牌，由系統代出成功）」. Who played which card is only ever shown here,
 after the game — never live.
 
@@ -395,9 +402,9 @@ flip {pid: bool}                       per-seat tile mirroring (only that seat's
 cards {pid: 'success'|'fail'}          PRIVATE until over (never in a view; not even as a count per seat)
 windowOver, auto [pid…]                the quest clock is over / seats whose card the host defaulted
 outcome {no, team, leader, successes, fails, need, success, pile}   public pile = counts, shuffled
-results [true|false|null ×5], quests [{…, played PRIVATE until over}], voteLog [{q, no, leader, team, votes, approves, rejects, approved}] public after each reveal
+results [true|false|null ×5], quests [{…, played PRIVATE until over}], voteLog [{q, no, k, leader, team, votes, approves, rejects, approved}] public after each reveal (no = game-wide id; k = the proposal's number within its quest, rejects + 1)
 seen [pid…], decoyed [pid…]            internal bookkeeping for the two decoy taps
-voids [{q, no, phase, leader}]         the host's 呢鋪唔計 (public; recapped in the results)
+voids [{q, no, k, phase, leader}]      the host's 呢鋪唔計 (public; recapped in the results with k)
 lady {holder, held [pid…], step {holder, target, loyalty PRIVATE (holder only)}, log [{q, holder, target, loyalty}]}
 shot {assassin, target, hit, merlin}, pendingEnd {winner, reason}, winner, reason, final {winners, summary, lines, points}
 ```
@@ -548,8 +555,7 @@ QA additions (2026-10-03 UTC)
 2. ~~Stall detection and decoys~~ — done by core (`engine.blocking`); adopted (§5).
 3. **Uniform 輪到你 badge.** During the assassination only the Assassin's phone gets the badge (`focus` = the Assassin so that a shared phone's gate can be
    anonymous). On separate phones that is a tiny tell for an over-the-shoulder glance. A `focus.decoyPids` (badge shown, gate not opened) would close it. Low priority.
-4. **Results screen headings.** `result.lines` can be 40+ lines long (roles, quests, votes, Lady, shot). Plain `li`s work; collapsible sections (lines starting with
-   an emoji heading folded under it) would read better. Low priority.
+4. ~~**Results screen headings.**~~ — done: the shell folds `result.lines` at 「── 標題 ──」 lines, and every recap heading is one (§3.10).
 5. **Seat order.** Leader rotation follows seat order, so the lobby's 換位 should be used to match the real table; the lobby could say so for games with rotating
    turn order. (The rules sheet's 手機點用 says it; nothing in the lobby does.)
 6. **呢鋪唔計 button.** `app.hostCtl.voidRound()` exists but no screen offers it yet. For 阿瓦隆 it only does something in `pick`, `vote` and `quest`

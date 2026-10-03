@@ -1087,7 +1087,7 @@ function result(s) {
     ? `平民「${s.pair.civ}」，臥底「${s.pair.und}」${s.pair.cat ? `（${s.pair.cat}）` : ''}`
     : `平民「${s.pair.civ}」${s.pair.cat ? `（${s.pair.cat}）` : ''}，今局冇臥底`;
   const lines = [reasonText(s), `詞語：${wordsLine}`, `平民：${names(s, civs)}`];
-  if (unds.length) lines.push(`臥底：${names(s, unds)}（佢哋一開始都唔知自己係臥底）`);
+  if (unds.length) lines.push(`臥底：${names(s, unds)}（${unds.length > 1 ? '佢哋' : '佢'}一開始都唔知自己係臥底）`);
   if (blanks.length) lines.push(`白板：${names(s, blanks)}`);
   // Mis-votes are what decides this game: say how many civilians the table threw out.
   const civOut = s.outs.filter((o) => o.role === 'civilian').map((o) => o.pid);

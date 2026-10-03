@@ -990,7 +990,9 @@ test('onuw: the non-acting seats get view.night and the same tappable decoy; the
     assert.ok(sim.legal(p).some((a) => a.type === 'ack'));
   }
   assert.equal(engine.view(st(sim), 'p1').my.night.awake, true);
-  for (const p of ['p2', 'p3', 'p4']) assert.deepEqual(engine.view(st(sim), p).my.night, { awake: false });
+  for (const p of ['p2', 'p3', 'p4']) assert.deepEqual(engine.view(st(sim), p).my.night, { awake: false, seen: JSON.parse(JSON.stringify(st(sim).notes[p])) });
+  assert.deepEqual(engine.view(st(sim), 'p2').my.night.seen, [], 'a seat that never woke has an empty 📓');
+  assert.equal(engine.view(st(sim), 'p3').my.night.seen[0].k, 'wolves', 'the lone wolf still has her werewolf-step note in a later step (#11)');
   assert.equal(engine.view(st(sim), null).night, true, 'the table view is night too');
   // no focus during the narration stage, nothing at begin/dawn
   const s2 = scenario({ p1: 'seer', p2: 'robber', p3: 'werewolf', p4: 'villager' }, ['villager', 'werewolf', 'troublemaker']);
@@ -1744,9 +1746,9 @@ test('onuw: 💡 hints — every phase gives a short first-timer line, built fro
   assert.equal(hint(sim, 'p5'), H.night.copy);
   assert.equal(hint(sim, 'p1'), H.night.sleep, 'nothing for you this step');
   act(sim, 'p5', { type: 'copy', target: 'p2' });
-  assert.equal(hint(sim, 'p5'), H.night.robber, 'copied the robber: rob now');
+  assert.equal(hint(sim, 'p5'), H.night.copied, 'copied the robber: the 💡 sheet only says "look behind the cover" (#8)');
   act(sim, 'p5', { type: 'rob', target: 'p4' });
-  assert.equal(hint(sim, 'p5'), H.night.info, 'done: look at what you learned');
+  assert.equal(hint(sim, 'p5'), H.night.copied, 'the same line once she has robbed');
   sim.advance();
   openStep(sim, 'werewolf');
   assert.equal(hint(sim, 'p3'), H.night.loneWolf);
@@ -1847,9 +1849,9 @@ test('onuw: 💡 view.hintRoleLabel — every seat view that shows the dealt rol
 // ============================================================
 
 const VIEW_KEYS = new Set(['seat', 'phase', 'n', 'title', 'subtitle', 'night', 'roleList', 'opts', 'deadline', 'timerLabel', 'ready',
-  'step', 'acks', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'hintRoleLabel', 'voided']);
+  'step', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'hintRoleLabel', 'voided']);
 const MY_KEYS = new Set(['dealt', 'ready', 'acked', 'night', 'notes']);
-const NIGHT_KEYS = new Set(['awake', 'info', 'ab', 'copied']);
+const NIGHT_KEYS = new Set(['awake', 'info', 'ab', 'copied', 'seen']);
 const SECRET_KEYS = ['cards', 'centre', 'orig', 'dop', 'log', 'votes', 'moves', 'final', 'report', 'why', 'recap', 'dealtCentre', 'counts', 'ringAgree'];
 
 /** Everything keyed `k` anywhere inside `obj`. */
@@ -1887,6 +1889,7 @@ function checkViews(sim) {
       if (v.my.night) for (const k of Object.keys(v.my.night)) assert.ok(NIGHT_KEYS.has(k), `unknown my.night.${k}`);
       if (v.my.notes) assert.deepEqual(v.my.notes.slice(1), JSON.parse(JSON.stringify(s.notes[pid])), 'my notes are exactly mine');
       if (v.my.night?.awake) assert.deepEqual(v.my.night.info, s.notes[pid].filter((n) => n.ix === s.ix), 'night info is mine and this step\'s');
+      if (v.my.night) assert.deepEqual(v.my.night.seen, JSON.parse(JSON.stringify(s.notes[pid])), 'the night 📓 is exactly my own notes so far, awake or not');
     }
     if (pre) {
       const hits = keysIn(v).filter(([k]) => SECRET_KEYS.includes(k) && !(k === 'counts'));
@@ -2559,7 +2562,7 @@ test('onuw ui: choosing — each ability goes through the grid / centre chips an
     pushViews(sim, seats);
     assert.equal(labels(d), S.T.ackMain, 'the selection was cleared for the second choice');
     assert.ok(d.root.textContent.includes('你睇咗 玩家2 張牌，係 🔮 預言家'));
-    assert.ok(d.root.textContent.includes(S.T.hint.doppelDo('seer')));
+    assert.ok(d.root.textContent.includes(S.T.hint.doppelNow('seer', false)));
     click(chip(d, 'on-centre', '中間 1'));
     click(chip(d, 'on-centre', '中間 2'));
     click(ackBtn(d));
@@ -2596,6 +2599,172 @@ test('onuw ui: what a seat learned is on its own screen only — never on anothe
     pushViews(sim, seats);
     assert.ok(text('p3').includes('爪牙：狼人係 玩家1、玩家2'));
     for (const o of ['p1', 'p2', 'p4', 'p5', 'p6', null]) assert.ok(!text(o).includes('爪牙：狼人係'), `${o ?? 'table'} sees nothing`);
+    for (const x of Object.values(seats)) x.handle.destroy();
+  });
+});
+
+/** The night screen's 📓 cover of one seat: { el, wrap, back, front } (the stub Cover keeps both faces in the tree). */
+function nightBookOf(seat) {
+  const wrap = findAll(seat.root, (n) => hasCls(n, 'on-peekwrap'))[0];
+  if (!wrap) return null;
+  const el = findAll(wrap, (n) => hasCls(n, 'c-cover'))[0];
+  return { wrap, el, back: findAll(el, (n) => hasCls(n, 'c-cover-back'))[0].textContent, front: findAll(el, (n) => hasCls(n, 'c-cover-front'))[0].textContent };
+}
+const plainLinesOf = (seat) => findAll(seat.root, (n) => hasCls(n, 'on-lines'))[0].textContent;
+
+test('onuw ui: every phone has the same 📓 cover at every night step; what a seat learned stays behind it all night (#11)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario({ p1: 'seer', p2: 'robber', p3: 'werewolf', p4: 'villager' }, ['villager', 'werewolf', 'troublemaker']);
+    const seats = mountAll(ui, sim, []);
+    const seerLine = '預言家：你睇咗 玩家3 張牌，係 🐺 狼人。';
+    toNight(sim);
+    let checked = 0;
+    let seerLooked = false;
+    while (st(sim).phase === 'night') {
+      for (const stage of ['cue', 'window']) {
+        pushViews(sim, seats);
+        const books = sim.players.map((p) => nightBookOf(seats[p.id]));
+        for (const b of books) {
+          assert.ok(b, 'every seat has the cover');
+          assert.equal(b.wrap.hidden, false);
+          assert.equal(b.wrap.cls.has('is-empty'), false, 'never hidden, never "empty"-styled');
+          assert.equal(b.back, S.T.nightPeekLabel, 'the same back on every phone');
+        }
+        // the seer's look is behind her cover from the moment she looks until dawn — never behind anybody else's
+        assert.equal(books[0].front.includes(seerLine), seerLooked, `${stepK(sim)}/${stage}: the seer's 📓`);
+        for (const b of books.slice(1)) assert.ok(!b.front.includes('預言家：'), 'nobody else has the seer\'s look');
+        assert.ok(books[3].front.includes(S.T.nightNothing), 'the villager\'s 📓 says 今晚未見過嘢 all night');
+        checked++;
+        if (stage === 'cue') sim.cueDone();
+        if (stage === 'window' && stepK(sim) === 'seer') {
+          act(sim, 'p1', { type: 'look-player', target: 'p3' });
+          seerLooked = true;
+          pushViews(sim, seats);
+          assert.ok(nightBookOf(seats.p1).front.includes(seerLine));
+          assert.ok(plainLinesOf(seats.p1).includes(S.T.hint.done), 'the done line');
+          assert.ok(!plainLinesOf(seats.p1).includes('玩家3'), 'the result itself is never in the plain lines');
+        }
+      }
+      sim.advance();
+    }
+    assert.ok(checked >= 10 && seerLooked);
+    // the done line points DOWN, at the cover, and the cover really is below the lines
+    assert.ok(S.T.hint.done.includes('下面') && !S.T.hint.done.includes('上面'));
+    assert.ok(S.T.hint.done.includes('天光'), 'and says the 📓 is still there in the day');
+    assert.ok(!S.HINT.night.info.includes('上面'));
+    for (const x of Object.values(seats)) x.handle.destroy();
+  });
+});
+
+test('onuw ui: the doppelgänger\'s copy and its instructions are only behind the cover; her plain line and confirm labels never name it (#8)', async () => {
+  await withFakeDom(async (ui) => {
+    const ROLE_WORDS = ['預言家', '強盜', '搗蛋鬼', '酒鬼', '狼人', '村民', '獵人', '守夜人', '失眠者', '爪牙', '皮匠', '🔮', '🗡️', '🌪️', '🍺', '🐺', '🧑‍🌾', '🏹'];
+    const run = (target, deal, centre, check) => {
+      const sim = scenario(deal, centre);
+      const sent = [];
+      const seats = mountAll(ui, sim, sent);
+      openStep(sim, 'doppelganger');
+      pushViews(sim, seats);
+      const d = seats.p1;
+      click(findAll(d.root, (n) => hasCls(n, 'on-grid'))[0].children.find((c) => c.textContent === sim.players.find((p) => p.id === target).name));
+      click(findAll(d.root, (n) => hasCls(n, 'on-ack'))[0]);
+      assert.deepEqual(sent.at(-1).a, { type: 'copy', target });
+      pushViews(sim, seats);
+      const plain = plainLinesOf(d);
+      assert.ok(plain.includes(S.T.hint.copied), 'the neutral line');
+      for (const w of ROLE_WORDS) assert.ok(!plain.includes(w), `the plain lines name ${w}: ${plain}`);
+      assert.equal(engine.view(st(sim), 'p1').hint, S.HINT.night.copied, 'the 💡 line is neutral too');
+      check(sim, d, sent);
+      const after = plainLinesOf(d);
+      for (const w of ROLE_WORDS) assert.ok(!after.includes(w), `after acting the plain lines name ${w}: ${after}`);
+      for (const x of Object.values(seats)) x.handle.destroy();
+    };
+    const label = (d) => findAll(d.root, (n) => hasCls(n, 'on-ack-main'))[0].textContent;
+    const chip = (d, cls, text) => findAll(d.root, (n) => hasCls(n, cls))[0].children.find((c) => c.textContent === text);
+
+    // copied the seer: the instructions are behind the cover; the confirm label is the pick, no 🔮
+    run('p2', { p1: 'doppelganger', p2: 'seer', p3: 'werewolf', p4: 'villager' }, ['tanner', 'werewolf', 'robber'], (sim, d, sent) => {
+      const book = nightBookOf(d).front;
+      assert.ok(book.includes('係 🔮 預言家'), 'the copy note');
+      assert.ok(book.includes(S.T.hint.doppelNow('seer', false)) && book.includes(S.HINT.night.seer), 'what to do now, behind the cover');
+      click(chip(d, 'on-centre', '中間 1'));
+      click(chip(d, 'on-centre', '中間 3'));
+      assert.equal(label(d), S.confirmNeutral(['中間第 1 張', '中間第 3 張']));
+      for (const w of ROLE_WORDS) assert.ok(!label(d).includes(w), `the confirm label names ${w}`);
+      click(findAll(d.root, (n) => hasCls(n, 'on-ack'))[0]);
+      assert.deepEqual(sent.at(-1).a, { type: 'look-centre', cards: [0, 2] });
+      pushViews(sim, { p1: d });
+      assert.ok(nightBookOf(d).front.includes('預言家：中間第 1 張係 🧵 皮匠'), 'the look lands behind the cover');
+      assert.ok(!nightBookOf(d).front.includes(S.T.hint.doppelNow('seer', false)), 'and the "act now" line is gone');
+    });
+    // the cover is a fixed 5:2 box held open by a finger (no scrolling on a phone): the copy note and the act-now line
+    // must fit together, so the act-now line is the short form (measured: copy note + it fit at 360–414 px)
+    for (const [ab, m] of [['seer', false], ['robber', false], ['troublemaker', false], ['drunk', true]]) {
+      const t = S.T.hint.doppelNow(ab, m);
+      assert.ok(t.length <= 40, `${ab}: the act-now line is short enough for the cover (${t.length}): ${t}`);
+      for (const w of ROLE_WORDS) assert.ok(!t.includes(w), `${ab}: the act-now line need not repeat the role (${w})`);
+      assert.ok(t.includes(m ? '時間到' : '唔使理'), `${ab}: says what happens if she does nothing`);
+    }
+    // copied the troublemaker: two players, neutral label
+    run('p2', { p1: 'doppelganger', p2: 'troublemaker', p3: 'werewolf', p4: 'villager' }, ['tanner', 'werewolf', 'robber'], (sim, d, sent) => {
+      click(chip(d, 'on-grid', '玩家3'));
+      click(chip(d, 'on-grid', '玩家4'));
+      assert.equal(label(d), S.confirmNeutral(['玩家3', '玩家4']));
+      click(findAll(d.root, (n) => hasCls(n, 'on-ack'))[0]);
+      assert.deepEqual(sent.at(-1).a, { type: 'swap', a: 'p3', b: 'p4' });
+    });
+    // copied a werewolf: "you wake again at 狼人" — behind the cover only
+    run('p3', { p1: 'doppelganger', p2: 'seer', p3: 'werewolf', p4: 'villager' }, ['tanner', 'werewolf', 'robber'], (sim, d) => {
+      assert.ok(nightBookOf(d).front.includes(S.T.hint.later('werewolf', S.STEP_TITLE.werewolf)));
+    });
+    // copied a villager: no night action — behind the cover only
+    run('p4', { p1: 'doppelganger', p2: 'seer', p3: 'werewolf', p4: 'villager' }, ['tanner', 'werewolf', 'robber'], (sim, d) => {
+      assert.ok(nightBookOf(d).front.includes(S.T.hint.noAction('villager')));
+    });
+  });
+});
+
+test('onuw ui: the seatless table screen has no night tap counter — it looks the same whoever is awake and whoever tapped (#18)', async () => {
+  await withFakeDom(async (ui) => {
+    // both werewolves in the centre: the werewolf step has nobody awake
+    const sim = scenario({ p1: 'seer', p2: 'robber', p3: 'villager', p4: 'villager' }, ['werewolf', 'werewolf', 'troublemaker']);
+    const seats = mountAll(ui, sim, []);
+    toNight(sim);
+    while (st(sim).phase === 'night') {
+      for (const stage of ['cue', 'window']) {
+        pushViews(sim, seats);
+        const before = serialize(seats.table.root);
+        assert.ok(!seats.table.root.textContent.includes('已㩒掣'), 'no counter');
+        assert.equal(engine.view(st(sim), null).acks, undefined, 'no counter in the table view');
+        for (const p of st(sim).order) assert.equal(engine.view(st(sim), p).acks, undefined, 'no counter in a seat view');
+        if (stage === 'window') {
+          const k = stepK(sim);
+          if (k === 'seer') act(sim, 'p1', { type: 'look-player', target: 'p2' });
+          if (k === 'robber') act(sim, 'p2', { type: 'rob', target: 'p3' });
+          act(sim, 'p4', { type: 'ack' });
+          pushViews(sim, seats);
+          assert.equal(serialize(seats.table.root), before, `${k}: an action or a decoy tap changes nothing on the table screen`);
+        } else sim.cueDone();
+      }
+      sim.advance();
+    }
+    for (const x of Object.values(seats)) x.handle.destroy();
+  });
+});
+
+test('onuw: every optional ability says what doing nothing means; the reveal cards say 贏 / 輸 in words', async () => {
+  for (const ab of ['seer', 'robber', 'troublemaker', 'loneWolf']) assert.ok(S.T.hint[ab].includes('時間到就當你唔'), `${ab}: what happens if you do nothing`);
+  assert.ok(S.T.hint.drunk.includes('時間到'), 'the mandatory one says so too');
+  await withFakeDom(async (ui) => {
+    const sim = play({ p1: 'robber', p2: 'werewolf', p3: 'seer', p4: 'villager' }, ['villager', 'werewolf', 'tanner'], { votes: { p1: 'p2', p2: 'p1', p3: 'p2', p4: 'p2' } });
+    const seats = mountAll(ui, sim, []);
+    pushViews(sim, seats);
+    const marks = findAll(seats.table.root, (n) => hasCls(n, 'on-win')).map((n) => n.textContent);
+    assert.equal(marks.length, 4);
+    for (const m of marks) assert.ok(m === S.T.revealWon || m === S.T.revealLost, m);
+    assert.equal(S.T.revealWon, '✅ 贏');
+    assert.equal(S.T.revealLost, '❌ 輸');
+    assert.ok(marks.includes(S.T.revealWon) && marks.includes(S.T.revealLost));
     for (const x of Object.values(seats)) x.handle.destroy();
   });
 });

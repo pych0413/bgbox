@@ -88,6 +88,10 @@ export function filterFocus(focus, seatIds) {
   if (!mine.length && !(anonymous && seatIds.length)) return null;
   const out = { pids: mine };
   if (anonymous) out.anonymous = anonymous;
+  // #14: a NAMED step that calls more than one seat (a deal, a vote) is everybody's at once, not this seat's
+  // turn — the header shows no 輪到你 for it. Never on an anonymous step: there it would say "you are not
+  // the only one awake".
+  else if (new Set(focus.pids).size > 1) out.together = true;
   return out;
 }
 
@@ -389,6 +393,10 @@ export class Room {
     if (isHost) {
       const cue = s && this.phase === 'playing' ? s.cue() : null;
       out.cue = cue ? { id: cue.id, text: cue.text } : null;
+      // #13: is the engine waiting on ANY seat (its whole focus, not just this device's)? The host's
+      // ⏭ 跳過呢步 then takes two taps. The host device only, and only a yes / no.
+      const f = s && this.phase === 'playing' ? (cache.focus ??= s.focus()) : null;
+      out.waiting = isObj(f) && ((Array.isArray(f.pids) && f.pids.length > 0) || !!f.anonymous);
       // the game's own host buttons (engine.hostActions) — the host device only; labels for the ⋯ menu
       out.hostActions = s && this.phase === 'playing' ? s.hostActions().map((a, i) => ({ i, label: a.label })) : [];
     }
@@ -1093,12 +1101,21 @@ export class Room {
         sb.points += Number(points[p.id]) || 0;
       }
     }
+    // #39: `noScore` — a tool that does not judge (通用派牌): the results say 「邊個贏由你哋講」, not 冇人贏;
+    // `linesTitle` — the recap's own heading where 「點解會咁」 does not fit (a scoring game's 分數點嚟)
+    const noScore = !voided && res.noScore === true;
+    const linesTitle = typeof res.linesTitle === 'string' && res.linesTitle.trim() ? res.linesTitle.trim().slice(0, 24) : null;
     this.lastResult = {
       gameId: this.gameId, winners, summary: String(res.summary ?? ''),
       lines: Array.isArray(res.lines) ? clone(res.lines) : [], points: clone(points),
       ...(voided ? { void: true } : {}),
+      ...(noScore ? { noScore: true } : {}),
+      ...(linesTitle ? { linesTitle } : {}),
     };
-    this.history.push({ gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary, ...(voided ? { void: true } : {}) });
+    this.history.push({
+      gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary,
+      ...(voided ? { void: true } : {}), ...(noScore ? { noScore: true } : {}),
+    });
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
     this.waiting.clear();
     this.#mark();

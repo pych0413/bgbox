@@ -188,7 +188,7 @@ export const rules = {
     '畫到令真畫家睇得明，但唔好太明顯。',
     '畫完同時投票，揪出邊個係假畫家。',
     '揪到假畫家，佢仲有一次機會估題目。',
-    '假畫家同出題者贏各 +2；真畫家贏每人 +1。',
+    '假畫家贏 +2（有出題者，佢都 +2）；真畫家贏每人 +1。',
   ],
   roles: [
     { id: 'artist', name: '真畫家', emoji: '🎨', team: 'good', teamLabel: '真畫家',
@@ -232,7 +232,8 @@ export const rules = {
       + '・亦可以改做打固定輪數，玩完比總分。\n'
       + '・「唔計分」（新版盒嘅玩法）：每輪淨係分邊隊贏；打完指定輪數，贏得最多輪嘅人贏。' },
     { title: '有人部手機冇電', body:
-      '房主可以㩒「呢鋪唔計」：呢輪作廢、冇人得分，換下一個出題者重新派過題目。輪數照計返。' },
+      '房主可以㩒「呢鋪唔計」：呢輪作廢、冇人得分，換下一個出題者重新派過題目。輪數照計返。\n'
+      + '睇緊結果嗰陣，呢輪已經計咗分，唔可以作廢；㩒「下一輪」就得。' },
     { title: '小貼士', body:
       '・真畫家：第一筆唔好太明顯，細節留返後面；睇吓邊個畫得似是而非。\n'
       + '・假畫家：先睇人哋畫乜，筆劃盡量延伸前面嘅線，唔好第一個落筆太具體。\n'
@@ -421,7 +422,9 @@ export const config = {
       { key: 'scoring', label: '計分', type: 'select',
         help: m.scoring === 'none'
           ? '新版盒冇分數：每輪淨係分邊隊贏。打完指定輪數，贏得最多輪嘅人贏。'
-          : '舊版盒有分：假畫家同出題者贏各 +2，真畫家贏每人 +1。',
+          : m.qm === 'player'
+            ? '舊版盒有分：假畫家同出題者贏各 +2，真畫家贏每人 +1。'
+            : '舊版盒有分：假畫家贏 +2，真畫家贏每人 +1。',
         options: [{ value: 'points', label: '計分（舊版）' }, { value: 'none', label: '唔計分（新版：每輪分勝負）' }] },
     ];
     if (m.scoring === 'points') {
@@ -1244,6 +1247,19 @@ function blocking(state, pid) {
   return !!f && typeof pid === 'string' && f.pids.includes(pid);
 }
 
+/**
+ * Would 呢鋪唔計 (@void-round) do anything right now? A scored round (result) or a finished game is left alone, and
+ * the host should hear why instead of 「呢個遊戲唔支援」. Optional hook for the shell:
+ * `engine.canVoid?.(state)` → { ok: true } | { ok: false, message } (the shape of a refused lobby op).
+ */
+function canVoid(state) {
+  const s = state;
+  // the result screen's button reads 睇總結 when this round decided the game (view.last)
+  if (s.phase === 'result') return { ok: false, message: `呢輪已經計咗分，㩒「${s.ending ? '睇總結' : '下一輪'}」就得` };
+  if (s.phase === 'over' || !s.round) return { ok: false, message: '遊戲已經完咗' };
+  return { ok: true };
+}
+
 function result(state) {
   const s = state;
   if (s.phase !== 'over') return null;
@@ -1275,4 +1291,4 @@ function result(state) {
   };
 }
 
-export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, result, canInk };
+export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, result, canInk, canVoid };

@@ -8,17 +8,21 @@
 //    that lives on this device, or the player switched seats by hand)
 //  - when to go dark and silent (that seat's view.night, unless focus names it)
 //  - host-only extras: pause / next / narration mode / auto-act for a stalled seat
+//  - every risky host tap (⏭ 跳過呢步 while somebody would be cut off, 🗑️ 呢輪作廢, 🚪 離開) is the in-page
+//    arm-then-confirm (sh.confirm, playtest #3/#13): never a native dialog on the phone that is the server
+//  - 「輪到你」 only for a real turn (logic.turnBadge, #14); `view.recent` folds under the game UI (#10)
 //
 // The game UI is mounted once per (game, seat). Switching seat destroys it and
 // mounts a fresh one, so api.me is always the seat being shown and no
 // half-picked target can leak from one seat's screen to the next on a shared phone.
 // ============================================================
 
-import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=1';
+import { el, toast, lockScroll, unlockScroll, sig } from '../dom.js?v=1';
 import { sfx } from '../../core/sfx.js?v=1';
-import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=1';
+import { components, NarratorBar, PassGate, RulesSheet, RecentFold, closeAllCovers } from '../components/index.js?v=1';
 import { HintSheet } from '../hints.js?v=1';
 import { textSize, setTextSize } from '../settings.js?v=1';
+import { turnBadge, skipNeedsConfirm, SKIP_CONFIRM } from '../logic.js?v=1';
 
 /** A failed action, in words a player understands (the core's own short Cantonese message wins). */
 function sendFailedText(err) {
@@ -49,6 +53,8 @@ export function mountPlay(sh) {
   let menuKind = null;
   let menuHtml = '';          // what the open menu currently shows (see refreshMenu)
   let wasMyTurn = null;       // null until the first update: a turn already under way is history, not news
+  let ackedCueId = null;      // the narration line the host last moved past with 下一步 (#13: 讀稿 needs no confirm for a fresh line)
+  let bannerSig = null;       // what the banners were last built from (a button is never swapped out from under a finger)
   const dismissedStalled = new Set();
 
   // ---------- skeleton ----------
@@ -69,11 +75,13 @@ export function mountPlay(sh) {
   const timerStrip = sh.timer.strip();
   const banners = el('div');
   const gameRoot = el('div', { class: 'play-game' });
+  // #10: the game's public 「📜 之前嘅投票」 / 「🌅 昨晚」 (view.recent), folded under its UI
+  const recent = RecentFold({});
   const narratorBar = NarratorBar({ hidden: true });
   const hints = HintSheet(sh, { onRules: () => openRules() });
 
   const root = el('section', { class: 'screen play', 'data-screen': 'play' },
-    top, seatChip, timerStrip, banners, gameRoot, narratorBar.el);
+    top, seatChip, timerStrip, banners, gameRoot, recent.el, narratorBar.el);
 
   // ---------- derived state ----------
   const currentSeat = (st) => st.activeSeat ?? st.mySeats?.[0] ?? null;
@@ -103,16 +111,47 @@ export function mountPlay(sh) {
     hints.open(game, viewFor(app.state));
   }
 
-  /** 🗑️ 呢輪作廢 — `@void-round` for a round a dead phone (or a mix-up) spoilt. Engines opt in. */
-  function voidRound() {
+  /**
+   * 🗑️ 呢輪作廢 — `@void-round` for a round a dead phone (or a mix-up) spoilt. Engines opt in.
+   * Two taps on `node` (sh.confirm, #3: never a native dialog on the room's server). Returns false while it
+   * is only armed, true once it is done with (acted, or refused with a toast).
+   */
+  function voidRound(node = null, onDisarm = null) {
     const st = app.state;
-    if (!st.isHost) return;
-    if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return; }
-    if (!sh.confirm('呢輪作廢、重新嚟過？\n（有人部手機死咗、或者搞錯咗先用）')) return;
+    if (!st.isHost) return true;
+    if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return true; }
+    if (!sh.confirm('呢輪作廢、重新嚟過？\n（有人部手機死咗、或者搞錯咗先用）', node, { key: 'void-round', onDisarm })) return false;
     let ok = false;
     try { ok = app.hostCtl?.voidRound?.() === true; } catch (err) { console.error(err); }
     // (no narrator.cancel() here: the app already stopped the old line and may be saying the new one)
     toast(ok ? '🗑️ 呢輪作廢咗，重新嚟過' : '呢個遊戲唔支援', 2200);
+    return true;
+  }
+
+  // ---------- ⏭ skip (#13) ----------
+  /** Would skipping now cut somebody off (an open vote, a night window)? Then it takes two taps. */
+  function skipNeedsTwo(st) {
+    return skipNeedsConfirm({
+      waiting: !!st.waiting,
+      focus: st.focus,
+      night: !!viewFor(st)?.night,
+      mode: st.room?.narration?.mode ?? 'voice',
+      cueId: st.cue?.id ?? null,
+      ackedCueId,
+    });
+  }
+
+  function doSkip() {
+    ackedCueId = app.state.cue?.id ?? null;
+    narrator.cancel();
+    app.hostCtl.next();
+  }
+
+  /** ⋯ → ⏭ 跳過呢步. Returns false while it is only armed. */
+  function skipFromMenu(node) {
+    if (skipNeedsTwo(app.state) && !sh.confirm(SKIP_CONFIRM, node, { key: 'skip-step', onDisarm: refreshSoon })) return false;
+    doSkip();
+    return true;
   }
 
   function togglePause() {
@@ -150,6 +189,8 @@ export function mountPlay(sh) {
         }
         return res;
       },
+      // #3: arm-then-confirm, never window.confirm (it freezes the host phone, which is the room's server)
+      confirm: (text, node = null, opts = {}) => sh.confirm(text, node, opts),
       ink(payload) { if (seat) return app.ink(seat, payload); },
       now: () => app.clock.now(),
       sfx,
@@ -293,11 +334,14 @@ export function mountPlay(sh) {
   }
 
   const menuBtnRow = (label, onclick, cls = '') => el('button', { class: `btn btn-ghost ${cls}`.trim(), type: 'button', onclick }, label);
+  const refreshSoon = () => queueMicrotask(() => refreshMenu());
 
   function refreshMenu() {
     if (!menuEl) return;
     const st = app.state;
     const panel = menuEl.firstElementChild;
+    // a row armed for its second tap (「再㩒一次」) keeps its node until the arm ends (onDisarm refreshes)
+    if (panel.querySelector?.('.armed')) return;
     const nodes = menuKind === 'seats' ? seatMenu(st) : mainMenu(st);
     // state changes stream in all the time (timers); only touch the DOM when the menu itself changed,
     // so a button is never swapped out from under a finger
@@ -335,8 +379,8 @@ export function mountPlay(sh) {
 
     if (st.isHost) {
       list.push(menuBtnRow(room.paused ? '▶ 繼續' : '⏸ 暫停', () => { togglePause(); closeMenu(); }));
-      list.push(menuBtnRow('⏭ 下一步（跳過今個步驟）', () => { narrator.cancel(); app.hostCtl.next(); closeMenu(); }));
-      list.push(menuBtnRow('🗑️ 呢輪作廢', () => { closeMenu(); voidRound(); }));
+      list.push(menuBtnRow('⏭ 跳過呢步', (e) => { if (skipFromMenu(e.currentTarget)) closeMenu(); }));
+      list.push(menuBtnRow('🗑️ 呢輪作廢', (e) => { if (voidRound(e.currentTarget, refreshSoon)) closeMenu(); }));
       // the game's own host buttons (engine.hostActions), e.g. 你畫我猜 ＋30 秒 / 呢題作廢
       for (const h of st.hostActions ?? []) {
         list.push(menuBtnRow(`🎛️ ${h.label}`, () => {
@@ -382,7 +426,7 @@ export function mountPlay(sh) {
         type: 'button', class: textSize() === v ? 'on' : '',
         onclick: () => { setTextSize(v); refreshMenu(); },
       }, label))));
-    list.push(menuBtnRow('🚪 離開房間', () => { closeMenu(); sh.leave(); }, 'btn-danger'));
+    list.push(menuBtnRow('🚪 離開房間', (e) => { if (sh.leave(e.currentTarget, { onDisarm: refreshSoon })) closeMenu(); }, 'btn-danger'));
     return [...rows, el('div', { class: 'sheet-list' }, list)];
   }
 
@@ -404,6 +448,10 @@ export function mountPlay(sh) {
   // ---------- banners ----------
   function paintBanners(st) {
     const room = st.room;
+    const shownStalls = st.isHost ? (room.stalled ?? []).filter((s) => !dismissedStalled.has(`${s.pid}@${s.since}`)) : [];
+    const bannerKey = sig([!!room.paused, !!st.isHost, shownStalls.map((s) => [s.pid, s.since, nameOf(st, s.pid)])]);
+    if (bannerKey === bannerSig) return;       // unchanged: keep the nodes (an armed 呢鋪唔計 keeps its label)
+    bannerSig = bannerKey;
     const rows = [];
 
     if (room.paused) {
@@ -419,7 +467,7 @@ export function mountPlay(sh) {
         rows.push(el('div', { class: 'banner err' },
           el('span', { class: 'grow', text: `⚠️ ${nameOf(st, s.pid)} 斷咗線，成個遊戲等緊佢` }),
           el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => app.hostCtl.autoAct(s.pid) }, '代佢做'),
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => voidRound() }, '呢鋪唔計'),
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: (e) => voidRound(e.currentTarget) }, '呢鋪唔計'),
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => { dismissedStalled.add(key); paintBanners(app.state); } }, '再等')));
       }
     }
@@ -458,7 +506,9 @@ export function mountPlay(sh) {
         else if (line) narrator.speak(line);
       },
       onSkip: typeof nar.skip === 'function' ? () => { narrator.cancel(); nar.skip(); } : null,
-      onNext: () => { narrator.cancel(); app.hostCtl.next(); },
+      // #13: a skip that would cut somebody off takes two taps (the bar arms itself)
+      confirmNext: skipNeedsTwo(st) ? SKIP_CONFIRM : null,
+      onNext: () => doSkip(),
       onPause: () => togglePause(),
       onMode: (m) => { if (m === 'silent') narrator.cancel(); app.narration.setMode(m); },
     });
@@ -480,11 +530,13 @@ export function mountPlay(sh) {
     emojiEl.textContent = meta.emoji ?? '🎲';
     titleEl.textContent = view?.title ?? meta.name ?? '';
 
-    // no bright 輪到你 pill at night: it is the brightest thing on a lit phone across a dark table (qa:cheese-thief)
-    const myTurn = !!seat && !!st.focus?.pids?.includes(seat) && !view?.night;
+    // 輪到你 only for a real turn (#14, logic.turnBadge): never at night (the brightest thing on a lit phone
+    // across a dark table), never in a secret step (focus.anonymous), never in a step everybody does at once.
+    // Before the subtitle, so a long subtitle's ellipsis never cuts it off.
+    const myTurn = turnBadge(st.focus, seat, { night: !!view?.night });
     subEl.replaceChildren(...[
+      myTurn ? el('span', { class: 'turn-badge', style: { marginRight: view?.subtitle ? '.5rem' : '0' }, text: '輪到你' }) : null,
       view?.subtitle || null,
-      myTurn ? el('span', { class: 'turn-badge', style: { marginLeft: view?.subtitle ? '.5rem' : '0' }, text: '輪到你' }) : null,
     ].filter(Boolean));
 
     const anon = !!st.focus?.anonymous;
@@ -534,6 +586,9 @@ export function mountPlay(sh) {
       chimeForTurn(st, view, seat);
       paintBanners(st);
       paintNarrator(st, view);
+      try {
+        recent.update({ recent: view?.recent ?? null, players: room.players });
+      } catch (err) { console.error('[play] recent folds failed', err); }
 
       // dark and silent between this seat's own steps (decoys stay tappable underneath)
       const inFocus = !!seat && !!st.focus?.pids?.includes(seat);
@@ -562,6 +617,7 @@ export function mountPlay(sh) {
       ui?.destroy?.();
       ui = null;
       narratorBar.destroy();
+      recent.destroy();
     },
   };
 }

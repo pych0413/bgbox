@@ -1098,16 +1098,23 @@ function roleList(s) {
 
 function clonePlain(x) { return JSON.parse(JSON.stringify(x ?? null)); }
 
-/** What this seat sees on its phone during the current night step. Only ever its own information. */
+/**
+ * What this seat sees on its phone during the current night step. Only ever its own information.
+ * `seen` = every note this seat has had tonight, for EVERY seat in every step and stage: the night screen keeps it
+ * behind one 📓 cover that every phone has, so a result outlives the window it came in (playtest #11), and a seat
+ * that learned nothing has the same cover (「今晚未見過嘢」) — the cover itself says nothing about who woke.
+ */
 function nightFor(s, pid) {
   const st = stepOf(s);
-  if (s.stage !== 'window' || !awakeFor(s, st.k).includes(pid)) return { awake: false };
+  const seen = clonePlain(s.notes[pid] || []);
+  if (s.stage !== 'window' || !awakeFor(s, st.k).includes(pid)) return { awake: false, seen };
   const ab = abilityOf(s, pid);
   const out = {
     awake: true,
     info: clonePlain((s.notes[pid] || []).filter((n) => n.ix === s.ix)),
     ab: ab ? { name: ab.ab, via: ab.via, mandatory: ab.mandatory, mode: MODE[ab.ab] } : null,
     copied: st.k === 'doppelganger' && s.dop && s.dop.pid === pid ? s.dop.copied : null,
+    seen,
   };
   return out;
 }
@@ -1151,7 +1158,8 @@ function buildView(s, pid) {
       const st = stepOf(s);
       v.night = st.k !== 'dawn';
       v.step = { ix: s.ix, total: s.steps.length, k: st.k, stage: s.stage };
-      v.acks = prog(s.acked.length, s.n);
+      // no night counter in any view (playtest #18): an action counts as an ack, so 「n / m」 would tell a seatless
+      // table screen how many seats are awake (0 / 5 at the werewolf step = no player holds a werewolf)
       if (seat) v.my = { dealt: s.orig[seat], acked: s.acked.includes(seat), night: nightFor(s, seat) };
       break;
     }
@@ -1204,6 +1212,8 @@ function hintFor(s, seat, v) {
       if (s.stage !== 'window') return H.night.cue;
       const nf = v.my.night;
       if (!nf.awake) return H.night.sleep;
+      // a Doppelgänger who has copied: what she became stays behind the cover, the 💡 sheet included (playtest #8)
+      if (k === 'doppelganger' && nf.copied != null) return H.night.copied;
       if (nf.ab) return H.night[nf.ab.name] ?? H.night.awake;
       return nf.info.length ? H.night.info : H.night.awake;
     }

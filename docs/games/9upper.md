@@ -124,6 +124,8 @@ it the card is redrawn — **before** the 9-second step.
 | 諗樣 | term + hint; 「有人已經識呢個詞？出聲就換題，身份唔變。冇人識就開始。」; big 「開始睇卡」; `有人識呢條？換題（仲有 3 次）` (two taps) |
 | 玩家 / table | term + hint; 「已經識呢個詞？即刻出聲，諗樣會換題。」 · 「等 阿明 開始睇卡…」 |
 
+After a 換題 every phone's term card shows 「🔄 換咗題（仲可以換 2 次）」 for 4 s (silent play has no cue to say so).
+
 Cue `r{n}:term:{swaps}`: 「第 3 輪，阿明做諗樣。題目係「{term}」。{hint}有冇人已經識？識就出聲換題；冇人識就由阿明㩒開始睇卡。」
 (round intro only when there was no `level` step; after a swap it starts 「換咗題。」).
 Hint speech: level 1 「提示：同地理有關。」 · level 2 「提示：地理、科學、歷史，三個入面得一個啱。」 · level 3 「冇提示。」
@@ -140,10 +142,20 @@ nothing scores. No clock runs in `term`, so nobody's peek is eaten by reading th
 | who | screen |
 |---|---|
 | 老實人 | a big hold-to-peek card. Back: 🃏 「㩒住睇卡」. Front: `你係老實人 🙋` / the true explanation / `用自己嘅講法講，唔好照讀。` |
-| 9upper | the same card, same size and back. Front: `你係 9upper 🤥` / `作一個解釋，要講得似真㗎！` / `你睇唔到真正解釋，靠你把口。` |
-| 諗樣 | the same sort of card, so every phone is busy: `你係諗樣 🧠` / `你唔會見到解釋，靜靜哋睇住大家。` / … |
+| 9upper | the same card, same size and back. Front: `你係 9upper 🤥` / a bluffing-prompt block built from the public term and hint (`S.bluffDecoy`, e.g. 「即場作！「深水埗」點嚟、幾時開始有，記住佢同「香港冷知識」有關；加個人名或者地方，細節愈具體愈似真。」) / `你睇唔到真正解釋，靠你把口。` |
+| 諗樣 | the same sort of card, so every phone is busy: `你係諗樣 🧠` / a block of question ideas (`S.judgeDecoy`) / `等佢哋睇完，就逐個解釋俾你聽。` |
 | table | 「大家望住自己部電話睇卡。」 |
-| everyone | countdown (`Timer`, label 「睇卡時間」, warns at 5 s); note 「㩒住張卡睇，放手就冚返。睇卡嗰陣唔好露出表情。」 |
+| everyone | countdown (`Timer`, label 「睇卡時間」, warns at 5 s); note 「㩒住張卡睇，倒數完先好擡頭。唔好露出表情。」 |
+
+The decoy blocks are about as long as a real explanation (bank: 17–67 characters, median 36; decoys 28–75, most 30–50, the
+template picked per round and seat so the length varies like a real one) and every card uses one font size and a text
+box that always reserves four lines, so neither a glance at a neighbour's card nor who is still reading heads-down
+names the 老實人. The window opens with the **same `deal` sound and a screen flash on every phone** (諗樣 and table
+too; an iPhone on silent plays no Web Audio, so the flash is the cue) — not again when a phone re-mounts mid-window.
+Each phone notes whether its card was opened during the window (`Cover` `onOpen`). A 老實人 whose phone watched the
+whole window without an open is not told 「你睇過真正解釋喇」 afterwards; the reminder card says
+「你冇打開到張卡，問到就答「張卡冇寫」。」 / 「唔好話俾人知你冇睇到。」 instead (same three-line shape,
+private to that phone). A phone that (re)mounted after the start of the window cannot know and shows the usual line.
 
 Cue `r{n}:read`: 「開始睇卡！大家一齊數 9 秒。」 (rulebook: everybody counts the 9 seconds together).
 When the window ends every card closes at the same instant → `explain` (`@next` from the host skips the rest).
@@ -158,7 +170,7 @@ Cue `r{n}:read`: 「部手機由阿B開始逐個傳，每人睇 9 秒，夠鐘�
 
 ### 3.4 `explain` — the 諗樣 runs the questioning, the order depends on `speakOrder`
 
-Every seat's screen: the term + hint, the speaking list (`round.explainers`: `✅ 已講` / `🎤 講緊` / `⏳ 等緊`), the 收皮啦
+Every seat's screen: the term + hint, the speaking list (`round.explainers`: `✅ 已講` / `⏭ 跳過咗` / `🎤 講緊` / `⏳ 等緊`), the 收皮啦
 marker (`🛑`), an optional per-speaker countdown and, for a 玩家, the small hold-to-peek card (front `你係老實人` /
 `你係 9upper`, plus the explanation when `rePeek`; back 「㩒住睇返我係咩」). The 諗樣's 「我決定咗，要揀人」 (`decide`, any
 time — the rulebook allows the accusation before everybody has spoken) and the 收皮啦 row (§3.5) are in every mode. What differs:
@@ -169,12 +181,13 @@ time — the rulebook allows the accusation before everybody has spoken) and the
 | on the floor | `turn.pid` = current speaker (🎤 講緊) | same, dealt by the phone | nobody (`turn.pid` = `null`), no clock |
 | announcement | the list only | a banner 「🎤 輪到 阿B」 / 「🎤 輪到你講！」 (soft `turn` chime on that phone) + 「下一位：阿C」 (last: 「之後就到諗樣揀人」); list rows numbered `1.` … | none; note 「大家自己傾好邊個先講；講完㩒「我講完」。」 |
 | speaker | big 「我講完」 | big 「我講完」 | every 玩家 not yet ticked off sees 「我講完」 (ticks themselves) |
-| 諗樣 | each waiting name is `👉 叫佢講` (`call`); 「下一位」 ends the turn | no `call`; 「下一位」 ends the turn; note 「電話隨機派人，次序同邊個係老實人冇關。有人講完就㩒「下一位」。…」 | each waiting name is `👆 講完喇` (ticks that 玩家 off); no 「下一位」 |
+| 諗樣 | each waiting name is `👉 叫佢講` (`call`), a skipped one `⏭ 跳過咗 · 叫返佢`; 「下一位」 skips the speaker | no `call`; 「下一位」 skips the speaker; note 「電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「下一位」跳過，佢最尾會再輪到。…」 | each waiting name is `👆 講完喇` (ticks that 玩家 off); no 「下一位」 |
 | leaves `explain` | the last speaker ends | the last speaker ends | the last 玩家 is ticked off |
 
 Cues. `judge`: `r{n}:explain` 「睇卡完。收起電話，由阿B開始解釋「{term}」。阿明可以叫人、追問，但唔可以問人係咩身份。」
 `system`: `r{n}:explain` 「睇卡完。收起電話，今輪由電話隨機派人，第一位係阿B，解釋「{term}」。阿明可以追問，但唔可以問人係咩身份。」,
-then one short line per turn, id `r{n}:explain:{k}` (k = how many have spoken): 「輪到阿C。」 / 「最後一位，輪到阿D。」
+then one short line per turn, id `r{n}:explain:{k}` (k = `turnNo`, turns ended so far): 「輪到阿C。」 / 「最後一位，輪到阿D。」
+(「最後一位」 = nobody, not even a skipped player, is left after them)
 (minMs 1200). `free`: `r{n}:explain` 「睇卡完。收起電話，大家自己傾好邊個先講，逐個解釋「{term}」，講完㩒「我講完」。阿明可以追問，
 但唔可以問人係咩身份。」 (nobody is named, nobody is first). Every cue is public: the dealt order of a 系統派 round is public
 to everybody.
@@ -182,16 +195,25 @@ to everybody.
 Turns. `judge` / `system`: a turn ends when the speaker (or the 諗樣) taps, or at the per-speaker deadline if
 `speakSecs > 0`; the next speaker is the first waiting one in queue order; after the last → `judge`. In `judge` only,
 `call` makes the target the current speaker (fresh `speakSecs`); the interrupted speaker goes back to waiting (not marked ✅).
-The UI sends `done` with the turn number it saw (`spoken.length`): a 我講完 and a 下一位 tapped at the same moment end one
-turn, not two (the engine ignores a `done` whose `turn` is stale). `free`: `done` ticks one 玩家 off (✅ 已講) — a 玩家 can
+The UI sends `done` with the turn number it saw (`turn.no` = `round.turnNo`, which counts every ended turn and call): a
+我講完 and a 下一位 tapped at the same moment end one turn, not two (the engine ignores a `done` whose `turn` is stale).
+
+**Skips (#23).** A turn ended FOR the speaker — the 諗樣's 下一位, or the host's ⏭ 下一步 — is a skip, not a 我講完: the
+row shows `⏭ 跳過咗` (`round.skipped`, public as `turn.skipped`). Once nobody new is waiting, each skipped player gets the
+floor back **once** (`round.back`), in the order they were skipped; skipped again after that, they stay skipped and the
+round moves on. In 諗樣揀 the 諗樣 can also call a skipped player back at any time (`call`). A speaking clock that runs
+out is not a skip (they had the floor for the whole time). `free`: the host's ⏭ ticks the first waiting 玩家 off as
+skipped; they come back onto the list once nobody else is waiting. `view.turn.next` is who is up after the current
+speaker (the 系統派 banner's 「下一位」). `free`: `done` ticks one 玩家 off (✅ 已講) — a 玩家 can
 only tick themselves, the 諗樣 can tick anybody with `target` (one shared phone, a flat phone); once everybody is ticked off
 → `judge`. No clock runs in `free` (`speakSecs` is ignored; `validate` warns).
 
 ### 3.5 收皮啦 (callout)
 
 Allowed to the 諗樣 in `explain` and `judge` (after the peek, before the pick), once per target, at most `callouts`
-per round (default 1), never on self. UI: a row 「收皮啦」 with one chip per 玩家; tap a chip → 「確定？再㩒一下」 for
-3 s (a wrong call costs 3) → action. Played cards are public at once: banner `🛑 阿明 對 阿B 出咗收皮啦！`, `deny`
+per round (default 1), never on self. UI: a row 「🛑 收皮啦 · 剩 1 張」 with one chip per 玩家 **in seat
+order** (the same order as the 揀人 list above it) and a red outline that sets it apart from the picker; tap a chip →
+「確定收皮 大熊？」 for 3 s (a wrong call costs 3) → action. Played cards are public at once: banner `🛑 阿明 對 阿B 出咗收皮啦！`, `deny`
 sound, and the target's own phone adds 「俾人 call 咗，繼續撐落去。」 The target's role stays hidden until the reveal.
 The card cannot be taken back. **It does not silence anybody** (muting is the online app's house rule; no
 rulebook source has it), so the current speaker keeps the floor.
@@ -203,7 +225,7 @@ break-even at p = 0.75; a blind callout is −EV at 3–4 players, 0 at 5, +EV a
 | who | screen |
 |---|---|
 | 諗樣 | 「邊個係老實人？」 PlayerPicker (the 玩家), confirm 「就係佢！」; note 「揀之前仲可以繼續問（唔可以問身份）。揀咗就改唔到。」; 收皮啦 row |
-| 玩家 | 「阿明 諗緊邊個係老實人…」 + the role-reminder card + the 收皮啦 banner |
+| 玩家 | 「阿明 諗緊邊個係老實人…」, 「諗樣仲可以追問，大家都可以互相質疑。」 + the role-reminder card + the 收皮啦 banner |
 | table | same, no card |
 
 Cue `r{n}:judge`: 「阿明，決定咗就揀邊個係老實人；揀之前仲可以繼續問。」
@@ -214,7 +236,9 @@ No timer. Only the 諗樣 picks (nobody votes). A stalled 諗樣 is auto-acted w
 - **Fixed windows** — together: one host deadline for everybody, all cards close together; pass: every reader gets
   exactly `readSecs`, started by their own tap, ended by the clock. No 「睇完」 button and no early end anywhere.
 - **Identical cards** — 老實人, 9upper and 諗樣 get the same back art, the same card size (the shared `Cover`, fixed
-  5:3), the same three-line front structure and the same peek sound.
+  5:3), the same three-line front structure, the same peek sound, one font size, a four-line text box, and a text block
+  of about the same length (decoys for the 9upper and the 諗樣, see §3.3).
+- **One start for everybody** — the read window opens with the same sound and flash on every phone.
 - **Everybody looks down** — the 諗樣 holds a decoy card too in the together window.
 - **No explanation outside the window** (unless `rePeek`) — the 老實人's phone drops the text, so the 老實人 must speak
   from memory like in the box game; the role reminder that stays has the same shape for every role.
@@ -228,11 +252,12 @@ Everyone gets the same screen. Two beats (CSS delay): 「阿明 揀咗 阿B…�
 
 ```
 老實人係 阿B 🙋
+🤥 9upper：阿C、阿D                                    (every card face up, seat order)
 ✅ 阿明 揀中老實人：阿明 同 阿B 各 +2
    (or) ❌ 阿明 揀咗 阿C，但 阿C 係 9upper：阿C 呃到諗樣 +2，阿明 同 阿B 冇分
 🛑 收皮啦 → 阿D：真係 9upper，阿D −1、阿明 +1      (or)  🛑 收皮啦 → 阿B：佢係老實人！阿明 −3
 （分數唔會低過 0：阿明 實際扣少咗）                   (only with scoreFloor, when it clipped)
-真正解釋 · ⭐⭐ / {term} / {explain} / 來源：{src}
+真正解釋 · ⭐⭐ / {term} / {explain} / 來源：維基百科：深水埗   (S.srcLabel: a readable label, a link for a web source)
 分數變動：阿明 +3 · 阿B +2 · 阿D −1        (then the new score chips)
 ```
 
@@ -259,7 +284,7 @@ Lines: first **why each player has their score** (winners first, 🏆), then awa
 　老實人係 阿B；阿明 揀咗 阿C（9upper）→ 阿C 呃到諗樣 +2
 　🛑 收皮啦 → 阿D：係 9upper → 阿D −1、阿明 +1
 　真正解釋：{explain}
-　來源：{src}
+　來源：{srcLabel}
 ```
 
 Every reason sums back to the final score (tested). Reasons: 做諗樣估中 · 做老實人被揀中 · 呃到諗樣 · 收皮啦中 9upper ·
@@ -296,7 +321,8 @@ history [round summaries incl. parts[] = why each point moved — after reveal o
 round: {
   n, judge, explainers [pid…] (speaking queue — by cfg.speakOrder: rotation from a random start / random permutation / seat order), readers [pid…] (seat order from the judge's left),
   honest (PRIVATE), term {term, explain (PRIVATE), cat, level, src, hint}, levelWanted, swaps,
-  reader, readStarted, readDone [pid…] (pass mode), speaker (null in 自己決定), spoken [pid…], called [pid…], pick, reveal
+  reader, readStarted, readDone [pid…] (pass mode), speaker (null in 自己決定), spoken [pid…], skipped [pid…] (turn ended
+  for them), back [pid…] (already had their one come-back), turnNo, called [pid…], pick, reveal
 }
 ```
 
@@ -311,15 +337,15 @@ round: {
 | `{type:'swap'}` | judge | `term` | `swaps < 3`; new term of `levelWanted`; honest, explainers unchanged |
 | `{type:'start'}` | judge | `term` | → `read` |
 | `{type:'peek'}` | the current reader | `read`, `passPhone` | starts that reader's `readSecs` window (once) |
-| `{type:'done', turn?}` | current speaker or judge | `explain`, `judge` / `system` | speaker → spoken; next waiting in queue; none left → `judge`. Optional `turn` (number) must equal `spoken.length`, else ignored |
-| `{type:'done', target?}` | a 玩家 (self) or the judge (`target`) | `explain`, `free` | ticks that 玩家 off (a 玩家's `target` is ignored); already ticked / not a 玩家 / judge without `target` → unchanged; all ticked → `judge` |
-| `{type:'call', target}` | judge | `explain`, `judge` mode only | target is a 玩家, not speaking, not spoken → current speaker (fresh turn timer). Refused in `system` and `free` |
+| `{type:'done', turn?}` | current speaker or judge | `explain`, `judge` / `system` | speaker → spoken (sent by the 諗樣: also → skipped); next waiting in queue, else a skipped player once; none left → `judge`. Optional `turn` (number) must equal `round.turnNo`, else ignored |
+| `{type:'done', target?}` | a 玩家 (self) or the judge (`target`) | `explain`, `free` | ticks that 玩家 off (a 玩家's `target` is ignored); already ticked / not a 玩家 / judge without `target` → unchanged; all ticked → `judge` (a host-skipped 玩家 is back on the list once first) |
+| `{type:'call', target}` | judge | `explain`, `judge` mode only | target is a 玩家, not speaking, not spoken (or skipped) → current speaker (fresh turn timer). Refused in `system` and `free` |
 | `{type:'decide'}` | judge | `explain` | → `judge` |
 | `{type:'callout', target}` | judge | `explain`, `judge` | target is a 玩家, not yet called, `called.length < callouts`; nobody is muted |
 | `{type:'pick', target}` | judge | `judge` | target is a 玩家 → scores settle → `reveal` |
 | `{type:'next'}` | judge | `reveal` | next round, or `over` after the last |
 | `@cue-done {id}` | host | any | acknowledges the cue if `id` matches |
-| `@next` | host | any | acknowledges a pending cue first; otherwise skips the wait: `level` → random level, `term` → `read`, `read` together → `explain`, `read` pass → start the reader's window, then end it (never skips a reader), `explain` → end turn (`free`: tick the first 玩家 still waiting), `judge` → nothing, `reveal` → `next` |
+| `@next` | host | any | acknowledges a pending cue first; otherwise skips the wait: `level` → random level, `term` → `read`, `read` together → `explain`, `read` pass → start the reader's window, then end it (never skips a reader), `explain` → end turn as a skip (`free`: tick the first 玩家 still waiting, as a skip), `judge` → nothing, `reveal` → `next` |
 
 `@auto` is handled by the session via `autoAct`.
 
@@ -334,7 +360,7 @@ round: {
 
 Common: `me, phase, title ('第 3/12 輪'), subtitle ('阿明 做諗樣'), deadline?, timerLabel?, round {n,total}, judge,
 explainers, scores, term {text, level, hint}|null, readMode ('together'|'pass'), readSecs,
-reading {pid, started, done, order}|null (pass mode, read phase), turn {pid, spoken, total}|null (explain; `pid` is `null`
+reading {pid, started, done, order}|null (pass mode, read phase), turn {pid, spoken, total, skipped, no, next}|null (explain; `pid` is `null`
 in `free`), speakOrder ('judge'|'system'|'free', public), callouts {max,left,used}, canSwap, swapsLeft, last, rePeek, mine,
 myRole, reveal, hint`.
 
@@ -392,8 +418,16 @@ Tests named `rule: …` pin a research rule. Covered in `tests/9upper.test.mjs`:
   clock, self-tick / judge-tick rules, last tick → `judge`, legal actions, `autoAct`, `@next`, one cue naming nobody; hints
   ≤ 40 chars for every mode with the mode's own wording; the scripted leak check and the fuzzers run in both modes; a fake-DOM
   UI test for the announcement, the chime, the missing 叫佢講 and the tick buttons.
+- Skips (#23): the 諗樣's 下一位 and the host's ⏭ mark ⏭ 跳過咗; a skipped player comes back once after everybody else
+  (系統派 / 諗樣揀 / 自己決定), the 諗樣 can call them back in 諗樣揀, a second skip is final, a clock that runs out is not
+  a skip, and the turn number survives a come-back (a stale double tap never ends the wrong turn).
+- Cards (#16, #21): every card holds a block of similar length during the read; the read window opens with one `deal`
+  sound and a flash on every phone, once; a 老實人 whose phone saw an unopened window is told so; a phone that joined
+  later shows the usual line.
 - 收皮啦: once per round by default, 2 as an option (distinct targets), 0 disables, not during term/read, not self,
-  does not mute the speaker.
+  does not mute the speaker; the chips follow seat order and the armed chip names its target (#22).
+- Reveal: names the 9uppers; the source is a readable label (`srcLabel`: 維基百科 / Wikipedia / 萌典 / … or the host
+  name, never percent-encoded, at most 32 characters of title) and a link; a 換題 is announced on every phone.
 - Scoring: the seven golden vectors (N = 5, D = 2), D by level, floor on/off, netting per player.
 - End: `next` after the last reveal → `over`; winners / tie / points; every round's term, explanation, source;
   per-player breakdown sums to the final score (#10); reveal lines name the 老實人 and every reason.

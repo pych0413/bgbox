@@ -49,6 +49,10 @@ export function mount(root, api) {
   let bodyKey = '';
   let body = null;
   let callSeen = null;       // { round, count } — so a new 收皮啦 sounds once, not on every update
+  let termSeen = null;       // { round, text } — so a 換題 is announced on every phone, once
+  // `${round}|${seat}` → did this seat open its card during its read window? Set when this phone watched the window;
+  // missing (a reload after it) means "don't know", and the card then says what it always said.
+  const readLog = new Map();
   const timers = new Set();  // setTimeout handles owned by the UI
 
   const later = (fn, ms) => {
@@ -82,7 +86,10 @@ export function mount(root, api) {
   const termKicker = h('div', { class: 'g9-term-kicker' });
   const termText = h('div', { class: 'g9-term-text' });
   const termHint = h('div', { class: 'g9-term-hint' });
-  const termCard = h('div', { class: 'g9-term' }, termKicker, termText, termHint);
+  const swapNote = h('div', { class: 'g9-term-swap', role: 'status' });
+  swapNote.hidden = true;
+  let swapHandle = null;
+  const termCard = h('div', { class: 'g9-term' }, termKicker, termText, termHint, swapNote);
 
   const bodyHost = h('div', { class: 'g9-body' });
   const scoreStrip = h('div', { class: 'g9-scores', role: 'list', 'aria-label': '分數' });
@@ -102,6 +109,15 @@ export function mount(root, api) {
     termKicker.textContent = `題目 · ${S.stars(v.term.level)} ${L.name} · ${L.pts} 分`;
     termText.textContent = v.term.text;
     termHint.textContent = S.hintText(v.term.hint);
+    // 換題: the term just changes under everybody's eyes, so say so on every phone (silent play has no cue)
+    if (v.phase === 'term' && termSeen?.round === v.round.n && termSeen.text !== v.term.text) {
+      swapNote.textContent = v.swapsLeft > 0 ? `🔄 換咗題（仲可以換 ${v.swapsLeft} 次）` : '🔄 換咗題（唔可以再換）';
+      swapNote.hidden = false;
+      clearTimeout(swapHandle);
+      swapHandle = later(() => { swapNote.hidden = true; }, 4000);
+    }
+    if (v.phase !== 'term') swapNote.hidden = true;
+    termSeen = { round: v.round.n, text: v.term.text };
   }
 
   function paintScores(v) {
@@ -127,20 +143,22 @@ export function mount(root, api) {
 
   // ---------- small shared builders ----------
 
-  /** A hold-to-peek card. `set(face)` repaints it; the Cover keeps the same front node. */
-  function makeCard(backLabel) {
+  /**
+   * A hold-to-peek card. `set(face)` repaints it; the Cover keeps the same front node. Every role's card has the same
+   * three lines, the same font and a text box of the same height (#16), so its shape says nothing.
+   */
+  function makeCard(backLabel, onOpen = null) {
     const roleEl = h('div', { class: 'g9-face-role' });
     const textEl = h('div', { class: 'g9-face-text' });
     const noteEl = h('div', { class: 'g9-face-note' });
     const front = h('div', { class: 'g9-face' }, roleEl, textEl, noteEl);
-    const props = { front, backArt: '🃏', backLabel, lockMode: 'none', locked: false };
+    const props = { front, backArt: '🃏', backLabel, lockMode: 'none', locked: false, onOpen: onOpen ?? undefined };
     const cover = Cover(props);
     return {
       el: cover.el,
       set(face) {
         roleEl.textContent = face.role;
         textEl.textContent = face.text;
-        textEl.classList.toggle('long', face.text.length > 52);
         noteEl.textContent = face.note;
         cover.update(props);
       },
@@ -149,19 +167,28 @@ export function mount(root, api) {
     };
   }
 
-  /** What is written on my card. Same three-line shape for every role (see §3.6 anti-tell). */
+  /**
+   * What is written on my card. Same three-line shape for every role (see §3.6 anti-tell). Whenever the 老實人's card
+   * can hold the real explanation (the read window; later too with rePeek), the 諗樣's and the 9uppers' cards hold a
+   * block of about the same length (S.judgeDecoy / S.bluffDecoy) — never a single short line.
+   */
   function faceFor(v) {
+    const key = `${v.round.n}|${v.me}`;
+    const full = v.phase === 'read' || (!!v.rePeek && (v.phase === 'explain' || v.phase === 'judge'));
     if (v.me === v.judge) {
-      return { role: '你係諗樣 🧠', text: '你唔會見到解釋，靜靜哋睇住大家。', note: '等佢哋睇完，就逐個解釋俾你聽。' };
+      return { role: '你係諗樣 🧠', text: S.judgeDecoy(key), note: '等佢哋睇完，就逐個解釋俾你聽。' };
     }
     if (v.mine?.honest) {
-      return {
-        role: '你係老實人 🙋',
-        text: v.mine.explain ?? '你睇過真正解釋喇，用自己嘅講法講。',
-        note: v.mine.explain ? '用自己嘅講法講，唔好照讀。' : '唔記得嘅細節可以話「張卡冇寫」。',
-      };
+      if (v.mine.explain) return { role: '你係老實人 🙋', text: v.mine.explain, note: '用自己嘅講法講，唔好照讀。' };
+      // this phone watched the whole window and the card was never opened: do not pretend it was read
+      if (readLog.get(key) === false) {
+        return { role: '你係老實人 🙋', text: '你冇打開到張卡，問到就答「張卡冇寫」。', note: '唔好話俾人知你冇睇到。' };
+      }
+      return { role: '你係老實人 🙋', text: '你睇過真正解釋喇，用自己嘅講法講。', note: '唔記得嘅細節可以話「張卡冇寫」。' };
     }
-    return { role: '你係 9upper 🤥', text: '作一個解釋，要講得似真㗎！', note: '你睇唔到真正解釋，靠你把口。' };
+    return full
+      ? { role: '你係 9upper 🤥', text: S.bluffDecoy(v.term, key), note: '你睇唔到真正解釋，靠你把口。' }
+      : { role: '你係 9upper 🤥', text: '作一個解釋，要講得似真㗎！', note: '你睇唔到真正解釋，靠你把口。' };
   }
 
   function makeTimer() {
@@ -238,7 +265,9 @@ export function mount(root, api) {
       const sig = JSON.stringify([v.explainers, v.callouts, armed, v.me]);
       if (sig === drawn) return;
       drawn = sig;
-      chips.replaceChildren(...v.explainers.map((pid) => {
+      // seat order — the same order as the 揀人 list right above it, never this round's speaking order
+      const targets = api.players.map((p) => p.id).filter((pid) => v.explainers.includes(pid));
+      chips.replaceChildren(...targets.map((pid) => {
         const used = v.callouts.used.includes(pid);
         const isArmed = armed === pid;
         const b = h('button', {
@@ -246,7 +275,7 @@ export function mount(root, api) {
           type: 'button',
           disabled: used || v.callouts.left === 0,
           style: `--seat:${colorOf(pid)}`,
-          text: used ? `🛑 ${nameOf(pid)}` : isArmed ? `確定？再㩒一下` : nameOf(pid),
+          text: used ? `🛑 ${nameOf(pid)}` : isArmed ? `確定收皮 ${nameOf(pid)}？` : nameOf(pid),
         });
         b.addEventListener('click', () => {
           if (armed === pid) {
@@ -305,7 +334,7 @@ export function mount(root, api) {
     const guard = sendGuard(rerender);
     const startBtn = role === 'judge' ? h('button', { class: 'btn btn-primary btn-lg', type: 'button', text: '開始睇卡' }) : null;
     startBtn?.addEventListener('click', () => {
-      guard.fire(() => { startBtn.disabled = true; api.sfx('deal'); api.send({ type: 'start' }); });
+      guard.fire(() => { startBtn.disabled = true; api.send({ type: 'start' }); });   // the read window sounds on every phone
     });
     const swap = role === 'judge' ? confirmButton({
       cls: 'btn btn-ghost btn-sm g9-swap',
@@ -337,10 +366,17 @@ export function mount(root, api) {
    * `read`, pass: one phone goes round; `sub` is this seat's part — 'ready' (my turn, not started),
    * 'peek' (my window is running) or 'wait' (somebody else is reading, or I am the 諗樣 / the table).
    */
-  function readBody(role, sub) {
+  function readBody(role, sub, v0) {
     const together = sub === 'together';
     const showCard = together ? role !== 'table' : sub === 'peek';
-    const card = showCard ? makeCard('㩒住睇卡') : null;
+    // mounted at (about) the start of the window, not re-mounted half way through it
+    const fresh = v0.deadline != null && v0.deadline - api.now() > (v0.readSecs - 2) * 1000;
+    // did this seat open its card in its window? (the 老實人's reminder must not claim a read that never happened)
+    // Only a phone that watched the window from its start can say "never opened": a reload mid-window does not know
+    // whether the card was opened before it, so it records nothing and the usual line stays.
+    const key = `${v0.round.n}|${v0.me}`;
+    if (showCard && role === 'player' && fresh && !readLog.has(key)) readLog.set(key, false);
+    const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(key, true); }) : null;
     const timer = makeTimer();
     const note = h('p', { class: 'g9-note' });
     const wait = sub === 'wait' ? waitBlock('📱', '') : null;
@@ -353,6 +389,12 @@ export function mount(root, api) {
     const el = h('div', { class: 'g9-stack' },
       h('h2', { class: 'g9-h', text: '睇卡時間' }),
       wait?.el, card?.el, startBtn, timer.el, note);
+    // the window opens with the SAME sound and flash on every phone (諗樣 and table too): nobody loses seconds looking
+    // at the table, and an iPhone on silent (no Web Audio) still flashes. Not again when a phone re-mounts mid-window.
+    if (together && fresh) {
+      el.classList.add('g9-flash');
+      api.sfx('deal');
+    }
     return {
       el,
       update(v, c) {
@@ -374,7 +416,7 @@ export function mount(root, api) {
             ? (together ? '大家都喺度睇卡，你都要望住電話，等佢哋睇完。' : '部手機逐個傳，大家睇完就交返俾你。')
             : sub === 'ready'
               ? '準備好先㩒。夠鐘張卡會自動冚返，然後交俾下一位。'
-              : sub === 'wait' ? '輪到你嗰陣會叫你。' : '㩒住張卡睇，放手就冚返。睇卡嗰陣唔好露出表情。';
+              : sub === 'wait' ? '輪到你嗰陣會叫你。' : '㩒住張卡睇，倒數完先好擡頭。唔好露出表情。';
       },
       destroy() { card?.destroy(); timer.destroy(); },
     };
@@ -396,7 +438,7 @@ export function mount(root, api) {
     const callRow = role === 'judge' ? makeCalloutRow() : null;
     const card = role === 'player' ? makeCard('㩒住睇返我係咩') : null;
     const guard = sendGuard(rerender);
-    const turnKey = (v) => (v?.turn ? `${v.turn.spoken.length}|${v.turn.pid}` : '');
+    const turnKey = (v) => (v?.turn ? `${v.turn.no ?? v.turn.spoken.length}|${v.turn.pid}` : '');
     let sentTurn = '';   // one 「done」 per turn, whoever taps it
     const sendDone = () => {
       const v = view;
@@ -405,7 +447,7 @@ export function mount(root, api) {
       const k = turnKey(v);
       if (!k || sentTurn === k) return;
       // the turn number rides along, so a 我講完 and a 下一位 tapped together end one turn, not two
-      guard.fire(() => { sentTurn = k; api.send({ type: 'done', turn: v.turn.spoken.length }); });
+      guard.fire(() => { sentTurn = k; api.send({ type: 'done', turn: v.turn.no ?? v.turn.spoken.length }); });
     };
     const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', text: '我講完' });
     doneBtn.addEventListener('click', sendDone);
@@ -416,7 +458,7 @@ export function mount(root, api) {
     const ASK = '可以問任何關於個詞嘅嘢，但唔可以問人係咩身份。';
     const noteText = role === 'judge'
       ? { judge: `㩒名叫佢講，次序由你話事。${ASK}`,
-        system: `電話隨機派人，次序同邊個係老實人冇關。有人講完就㩒「下一位」。${ASK}`,
+        system: `電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「下一位」跳過，佢最尾會再輪到。${ASK}`,
         free: `大家自己傾邊個先講，講完㩒佢個名。${ASK}` }[mode]
       : role === 'player'
         ? { system: '電話隨機派人，次序同邊個係老實人冇關。', free: '大家自己傾好邊個先講；講完㩒「我講完」。' }[mode]
@@ -437,7 +479,7 @@ export function mount(root, api) {
     function paintAnnounce(v) {
       const now = v.turn?.pid ?? null;
       const spoken = v.turn?.spoken ?? [];
-      const next = v.explainers.find((p) => !spoken.includes(p) && p !== now) ?? null;
+      const next = v.turn && 'next' in v.turn ? v.turn.next : v.explainers.find((p) => !spoken.includes(p) && p !== now) ?? null;
       const key = `${now}|${next}|${v.me}`;
       if (key === announceKey) return;
       announceKey = key;
@@ -452,15 +494,19 @@ export function mount(root, api) {
       el,
       update(v, c) {
         const spoken = v.turn?.spoken ?? [];
+        const skipped = v.turn?.skipped ?? [];
         const now = v.turn?.pid ?? null;
         if (announce) paintAnnounce(v);
-        const sig = JSON.stringify([v.explainers, spoken, now, v.callouts.used, v.me]);
+        const sig = JSON.stringify([v.explainers, spoken, skipped, now, v.callouts.used, v.me]);
         if (sig !== listSig) {
           listSig = sig;
           list.replaceChildren(...v.explainers.map((pid, i) => {
-            const state = spoken.includes(pid) ? 'done' : pid === now ? 'now' : 'todo';
+            // ⏭ 跳過咗: the turn was ended FOR them — they come back once at the end (and in 諗樣揀 can be called back)
+            const state = pid === now ? 'now' : skipped.includes(pid) ? 'skipped' : spoken.includes(pid) ? 'done' : 'todo';
             const called = v.callouts.used.includes(pid);
-            const act = role === 'judge' && state === 'todo' ? (free ? 'done' : system ? null : 'call') : null;
+            const act = role !== 'judge' ? null
+              : state === 'todo' ? (free ? 'done' : system ? null : 'call')
+                : state === 'skipped' && !free && !system ? 'call' : null;
             const row = h(act ? 'button' : 'div', {
               class: `g9-speaker ${state}${act ? ' callable' : ''}`, style: `--seat:${colorOf(pid)}`,
               type: act ? 'button' : null,
@@ -468,7 +514,8 @@ export function mount(root, api) {
             h('span', { class: 'g9-speaker-dot' }),
             h('span', { class: 'g9-speaker-name', text: (system ? `${i + 1}. ` : '') + seatName(pid, v.me) }),
             h('span', { class: 'g9-speaker-state',
-              text: state === 'done' ? '✅ 已講' : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
+              text: state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗') : state === 'done' ? '✅ 已講'
+                : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
             called ? h('span', { class: 'g9-speaker-call', text: '🛑' }) : null);
             if (act) {
               row.addEventListener('click', () => {
@@ -518,7 +565,8 @@ export function mount(root, api) {
     const el = h('div', { class: 'g9-stack' },
       h('h2', { class: 'g9-h', text: role === 'judge' ? '邊個係老實人？' : '等緊諗樣揀人' }),
       role === 'judge' ? picker.el : wait.el,
-      role === 'judge' ? h('p', { class: 'g9-note', text: '揀之前仲可以繼續問（唔可以問身份）。揀咗就改唔到。' }) : null,
+      h('p', { class: 'g9-note',
+        text: role === 'judge' ? '揀之前仲可以繼續問（唔可以問身份）。揀咗就改唔到。' : '諗樣仲可以追問，大家都可以互相質疑。' }),
       banner.el, callRow?.el, card?.el);
     return {
       el,
@@ -531,6 +579,13 @@ export function mount(root, api) {
       },
       destroy() { picker?.destroy(); callRow?.destroy(); card?.destroy(); },
     };
+  }
+
+  /** 「來源：維基百科：深水埗」, a link when the source is a web page (never the raw, percent-encoded URL). */
+  function srcLine(src) {
+    const { text, href } = S.srcLabel(src);
+    const label = href ? h('a', { href, target: '_blank', rel: 'noopener noreferrer', text }) : text;
+    return h('div', { class: 'g9-truth-src' }, '來源：', label);
   }
 
   function revealBody(role) {
@@ -558,7 +613,7 @@ export function mount(root, api) {
           h('div', { class: 'g9-truth-label', text: `真正解釋 · ${S.stars(rv.level)}` }),
           h('div', { class: 'g9-truth-term', text: rv.term }),
           h('div', { class: 'g9-truth-text', text: rv.explain }),
-          rv.src ? h('div', { class: 'g9-truth-src', text: `來源：${rv.src}` }) : null);
+          rv.src ? srcLine(rv.src) : null);
         changes.textContent = `分數變動：${S.changeLine(rv.changes, nameOf)}`;
         nextBtn.textContent = v.last ? '睇總結' : '下一輪';
         nextBtn.disabled = guard.busy;
@@ -598,7 +653,7 @@ export function mount(root, api) {
           ? levelJudgeBody()
           : waitingBody((x) => `${nameOf(x.judge)} 揀緊題目難度…`);
       case 'term': return termBody(role);
-      case 'read': return readBody(role, sub);
+      case 'read': return readBody(role, sub, v);
       case 'explain': return explainBody(role, v.speakOrder ?? 'judge');
       case 'judge': return judgeBody(role);
       case 'reveal': return revealBody(role);

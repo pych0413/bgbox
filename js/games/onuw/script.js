@@ -676,24 +676,51 @@ export function sleepLines(step) {
 /** The roles a Doppelgänger wakes for later, and the step they are called in. */
 const LATER = { werewolf: STEP_TITLE.werewolf, mason: STEP_TITLE.mason, minion: STEP_TITLE['doppelganger-minion'], insomniac: STEP_TITLE['doppelganger-insomniac'] };
 
-/** The lines an awake seat sees (instructions only; what it LEARNED sits behind a cover). */
+/**
+ * The lines an awake seat sees (instructions only; what it LEARNED sits behind a cover).
+ * A Doppelgänger who has copied gets ONE neutral line for the rest of her step, whatever she copied and whether or not
+ * she has acted: the copied role is a hidden team change, so it and its instructions live behind the cover (playtest #8).
+ */
 export function awakeLines(step, night) {
   const out = [['head', T.awakeHead]];
   const ab = night.ab;
   const learned = night.info.length > 0;
   if (step.k === 'doppelganger') {
-    const c = night.copied;
-    if (c == null) out.push(['role', T.hint.copy]);
-    else if (ab) out.push(['role', `${T.hint.doppelDo(c)}${T.hint[ab.name]}`]);
-    else if (night.info.some((n) => n.k !== 'copy')) out.push(['note', T.hint.done]);
-    else if (LATER[c]) out.push(['note', T.hint.later(c, LATER[c])]);
-    else out.push(['note', T.hint.noAction(c)]);
+    out.push(['role', night.copied == null ? T.hint.copy : T.hint.copied]);
     return out;
   }
   if (ab) out.push(['role', T.hint[ab.name]]);
   else if (learned) out.push(['note', T.hint.done]);
   return out;
 }
+
+/**
+ * What the Doppelgänger's copy means for her, said only behind the cover: act now (and how), wake later, or nothing.
+ * Kept short: it sits under the copy note (which already names the role) in a fixed 5:2 cover that a finger holds
+ * open, so it cannot scroll on a phone — copy note + this line must fit in about four lines at 360–414 px.
+ */
+export function doppelLine(step, night) {
+  if (step.k !== 'doppelganger' || !night?.awake || night.copied == null) return null;
+  const c = night.copied;
+  if (night.ab) return T.hint.doppelNow(night.ab.name, night.ab.mandatory);
+  if (night.info.some((n) => n.k !== 'copy')) return null;   // she used the copied ability: its note is in the list already
+  return LATER[c] ? T.hint.later(c, LATER[c]) : T.hint.noAction(c);
+}
+
+/**
+ * Behind the night screen's 📓 cover, the same cover on every phone at every step (playtest #11): everything this seat
+ * learned tonight so far, then — for a Doppelgänger in her own step — what her copy means. [text, cls] pairs.
+ */
+export function nightBook(step, night, nm) {
+  const out = (night?.seen ?? []).map((n) => [noteLine(n, nm), '']).filter(([t]) => t);
+  const d = doppelLine(step, night);
+  if (d) out.push([d, 'do']);
+  if (!out.length) out.push([T.nightNothing, 'none']);
+  return out;
+}
+
+/** The confirm label of a Doppelgänger's copied ability: the pick only, never the role's verb or emoji (playtest #8). */
+export const confirmNeutral = (picks) => `👆 確定：${picks.join('、')}`;
 
 // ---------- 💡 hints (view.hint): one line each, for a first-timer, never more than the view knows ----------
 
@@ -707,8 +734,9 @@ export const HINT = {
     cue: '閉住眼聽報；叫到你嘅角色先睜眼。',
     sleep: '呢輪冇你份：照㩒大掣，扮有嘢做。',
     awake: '你醒咗：記住見到嘅嘢，再㩒大掣。',
-    info: '㩒住上面格仔睇你見到乜，記住佢。',
+    info: '㩒住 📓 格仔睇你見到乜，記住佢。',
     copy: '揀一個人睇佢張牌，你就變成佢嘅角色。',
+    copied: '㩒住 📓 格仔睇你變咗乜、仲要唔要做嘢。',
     seer: '睇一個人張牌，或者中間兩張（二揀一）。',
     robber: '可以同一個人換牌，再睇你新嗰張。',
     troublemaker: '可以對調另外兩個人嘅牌，唔准睇。',
@@ -765,19 +793,22 @@ export const T = {
   ackConfirm: '㩒落去就定案',
   helpVoice: '夜晚唔好講嘢。個掣有冇用都照㩒，咁就冇人知邊個醒。',
   helpSilent: '靜音模式：唔使閉眼，望住自己部機 — 輪到你嗰陣佢會自動亮起。',
-  nightPeekBack: '👁', nightPeekLabel: '㩒住睇結果',
+  nightPeekBack: '📓', nightPeekLabel: '㩒住睇你今晚見過乜',
+  nightNothing: '今晚未見過嘢。',
   awakeHead: '👀 你醒咗',
   hint: {
     copy: '你係化身幽靈：揀一個人睇佢張牌，你就變成佢嘅角色（唔會換牌）。喺下面揀人，再㩒大掣。',
-    seer: '🔮 你可以睇一個人張牌，或者睇中間兩張（二揀一）。喺下面揀，再㩒大掣。唔想睇就唔使理，時間到自動跳過。',
-    robber: '🗡️ 你可以同一個人換牌，然後睇你換返嚟嗰張。揀人，再㩒大掣。唔想換就唔使理。',
-    troublemaker: '🌪️ 你可以將另外兩個人嘅牌對調（唔准睇）。揀兩個人，再㩒大掣。唔想換就唔使理。',
+    seer: '🔮 你可以睇一個人張牌，或者睇中間兩張（二揀一）。喺下面揀，再㩒大掣。唔想睇就唔使理，時間到就當你唔睇。',
+    robber: '🗡️ 你可以同一個人換牌，然後睇你換返嚟嗰張。揀人，再㩒大掣。唔想換就唔使理，時間到就當你唔換。',
+    troublemaker: '🌪️ 你可以將另外兩個人嘅牌對調（唔准睇）。揀兩個人，再㩒大掣。唔想換就唔使理，時間到就當你唔換。',
     drunk: '🍺 你一定要同中間一張牌對調（唔准睇）。揀一張，再㩒大掣。時間到仲未揀，系統幫你隨機揀。',
-    loneWolf: '🐺 淨係得你一隻狼人醒：可以睇中間一張牌（只得一次）。揀一張，再㩒大掣。唔想睇就唔使理。',
-    doppelDo: (role) => `你而家係 ${roleTag(role)}，即刻用佢嘅能力：`,
-    noAction: (role) => `你複製咗 ${roleTag(role)}，呢個角色夜晚冇行動。照㩒下面個掣就得（當假動作）。`,
-    later: (role, step) => `你複製咗 ${roleTag(role)}。到「${step}」嗰一輪你會再醒，部機會自動亮起。`,
-    done: '✓ 搞掂。你見到嘅嘢喺上面，㩒住睇。',
+    loneWolf: '🐺 淨係得你一隻狼人醒：可以睇中間一張牌（只得一次）。揀一張，再㩒大掣。唔想睇就唔使理，時間到就當你唔睇。',
+    // behind the cover only, right under the copy note: the short 💡 form of the ability, so the whole cover fits
+    doppelNow: (ab, mandatory) => `即刻用新角色嘅能力：${HINT.night[ab]}${mandatory ? '時間到系統幫你揀。' : '唔想用就唔使理。'}`,
+    noAction: (role) => `你複製咗 ${roleTag(role)}，呢個角色夜晚冇行動。照㩒大掣就得（當假動作）。`,
+    later: (role, step) => `你複製咗 ${roleTag(role)}。到「${step}」嗰一輪你會再醒。`,
+    copied: '你複製咗一個角色 — 㩒住下面 📓 睇係乜、仲要唔要做嘢。',
+    done: '✓ 搞掂。㩒住下面 📓 睇返；天光之後都仲睇到。',
   },
   confirmCopy: (n) => `👥 複製 ${n}`,
   confirmLookPlayer: (n) => `🔮 睇 ${n} 張牌`,
@@ -791,7 +822,6 @@ export const T = {
   // table
   tableNightTitle: (s) => `🌙 ${s}`,
   tableNightBody: '夜晚入面。邊個醒、做咗乜，只有佢自己知。',
-  tableAcks: (d, t) => `已㩒掣 ${d} / ${t}`,
   // day
   dayBanner: '☀️ 天光喇！',
   dayLead: '自由討論，可以講大話。唔准再睇自己張牌 — 你而家張牌可能已經換咗。',
@@ -821,6 +851,7 @@ export const T = {
   revealWhy: '點解會咁',
   revealRecap: '夜晚記錄（邊個做咗乜）',
   revealDealt: '派到', revealFinal: '最後',
+  revealWon: '✅ 贏', revealLost: '❌ 輸',
   won: '🎉 你贏咗！', lost: '😿 你輸咗', watching: '🐺 開牌',
   revealDone: '睇完整個結果', revealDoneAck: '✓ 等緊房主…',
   revealCount: (d, t) => `睇完：${d} / ${t}（房主㩒就即刻去結果頁）`,

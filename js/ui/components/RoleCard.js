@@ -8,6 +8,8 @@
 // Optional extras: `backArt` (default 🎴), `backLabel`, `onOpen(open)` (fires
 // when the card is lifted — games use it to report "seen"), and on `role`:
 // `color` (any CSS colour, wins over the team table) and `teamLabel`.
+// For a card that is not a role (誰是臥底's word): `lockLabels` ({ lock, locked, message } — the 🔓 button,
+// its locked face and the refusal toast) and `ariaLabel` (the cover's label). `hint: ''` hides the hint line.
 //
 // `team` is whatever the game uses. The common ids below get a colour and a
 // Cantonese label; anything else renders neutral unless the role carries
@@ -71,17 +73,18 @@ export function RoleCard(props = {}) {
         backLabel: p.backLabel ?? '㩒住睇',
         lockMode: 'peek',
         locked: !!p.locked,
-        lockedMessage: '角色牌鎖咗，要自己解鎖',
-        ariaLabel: '㩒住睇角色牌',
+        lockedMessage: p.lockLabels?.message ?? '角色牌鎖咗，要自己解鎖',
+        ariaLabel: p.ariaLabel ?? '㩒住睇角色牌',
         openSound: 'flip',
         onOpen: (o) => p.onOpen?.(o),
       });
 
       hintEl.textContent = p.hint ?? (p.locked ? '已鎖定，㩒下面解鎖' : '㩒住先睇到，放手即刻冚返');
+      hintEl.hidden = !hintEl.textContent;
 
       lockBtn.hidden = !p.onLockToggle;
       lockBtn.disabled = !p.role;
-      lockBtn.textContent = p.locked ? '🔒 已鎖 — 㩒一下解鎖' : '🔓 鎖定角色牌';
+      lockBtn.textContent = p.locked ? (p.lockLabels?.locked ?? '🔒 已鎖 — 㩒一下解鎖') : (p.lockLabels?.lock ?? '🔓 鎖定角色牌');
       lockBtn.classList.toggle('btn-locked', !!p.locked);
     },
     close: () => cover.close(),

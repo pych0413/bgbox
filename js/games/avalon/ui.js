@@ -417,7 +417,9 @@ export function mount(root, api) {
         const mine = vo.mine;
         if (mine !== lastMine) { lastMine = mine; changing = false; pending = null; }
         const locked = seat && mine && !changing;
-        const shown = locked ? mine : pending;
+        // a locked vote is never on screen (neither tile lit, no 贊成/反對 in the status): a neighbour who has not voted
+        // yet could read it and follow. Your own choice shows only while you pick it, or after 改票 reopens it.
+        const shown = locked ? null : pending;
         for (const [b, kind] of [[approve, 'approve'], [reject, 'reject']]) {
           b.classList.toggle('on', shown === kind);
           b.setAttribute('aria-pressed', shown === kind ? 'true' : 'false');
@@ -428,7 +430,7 @@ export function mount(root, api) {
         confirm.disabled = !pending || guard.busy;
         confirm.textContent = pending === 'approve' ? T.vote.confirmApprove : pending === 'reject' ? T.vote.confirmReject : T.vote.pick;
         status.hidden = !locked;
-        status.textContent = locked ? `${T.vote.voted(mine)}　${T.vote.waiting}` : '';
+        status.textContent = locked ? `${T.vote.voted}　${T.vote.waiting}` : '';
         changeBtn.hidden = !locked;
         progress.textContent = T.vote.progress(vo.progress.done, vo.progress.total);
       },

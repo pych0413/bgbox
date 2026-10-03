@@ -4,6 +4,7 @@
 //   analyse(text, entry, strictness) → { kind, rule, g }
 //     kind: 'right' | 'close' | 'near' | 'wrong'
 //     entry: { w, alt?: string[], near?: string[] }
+//   maskAnswer(text, entry, revealed) → the drawer's on-screen copy of a private guess (answer characters → ＊)
 //
 // What it does (docs/research/draw-guess.md, "Voting & resolution A"):
 //  1. normalise the guess: NFKC (full-width letters/digits), lower-case, drop whitespace,
@@ -108,6 +109,36 @@ export function answersOf(entry) {
     if (a) for (const v of spellings(a)) set.add(v);
   }
   return [...set];
+}
+
+// ---------- the drawer's copy of a private guess ----------
+
+const STAR = '＊';
+
+/**
+ * A near-miss guess as the DRAWER's feed shows it. The drawer's phone sits on the table (typed + paper play) or is
+ * held out while drawing, so a private (close / near) text must not spell the answer to whoever glances at it: every
+ * character that occurs in the word or an alias (compared after the fold, the ambiguous groups expanded) becomes ＊,
+ * unless the hint mask already made it public (`revealed`: the revealed characters). The drawer knows the word, so
+ * 「＊龍化石」 still reads as the near miss it was and can still be ✔'d.
+ *
+ * Only for private texts. A WRONG guess is shown verbatim on every phone, so masking it on the drawer's phone alone
+ * would let anyone compare the two screens and read off which characters are in the answer.
+ */
+export function maskAnswer(text, entry, revealed = []) {
+  const s = String(text ?? '');
+  const secret = new Set();
+  for (const a of answersOf(entry)) for (const c of cp(a)) secret.add(c);
+  const pub = new Set();
+  for (const r of revealed) {
+    for (const c of cp(normalise(String(r ?? '')))) for (const v of GROUP_OF.get(c) ?? [c]) pub.add(v);
+  }
+  let out = '';
+  for (const c of s) {
+    const n = cp(normalise(c));
+    out += n.some((x) => secret.has(x) && !pub.has(x)) ? STAR : c;
+  }
+  return out;
 }
 
 // ---------- distance helpers ----------

@@ -121,19 +121,25 @@ same for all; peeking is local (hold, no sound).
 Every seat sees the same public screen plus its own card.
 
 1. **Clock.** The Timer component counts to `view.deadline` (the true end of the clock). It beeps at 60 s,
-   10 s and zero. 「剩餘時間」.
-2. **Who asks next.** A card 「輪到 阿明 問」 with 「唔可以問返 阿華」 and a grid of seats. The seat holding the
-   floor taps the person they ask; that person becomes the holder and the previous holder is blocked. The
-   heading for the holder reads 「你問邊個？」. 「↩ 撤銷」 takes back the last pass (8 deep). A small trail shows
-   the last passes: 「阿明 → 阿華 → 阿B」.
+   10 s and zero. 「剩餘時間」. During play it is a compact bar that sticks under the app header while the page
+   scrolls (the location list is long), with a 「🙋 指控」 shortcut on every seat's phone (「🙋 用咗」 once used): it
+   opens the accusation picker and scrolls it into view. When play starts the page scrolls back to the top.
+2. **Who asks next.** A card 「阿明 答完就問下一個」 (the first question: 「阿明 問第一條問題」; your own turn: 「你答完就問下一個」)
+   with 「唔可以問返 阿華」 and a grid of seats. The card turns to a person the moment they are asked, while they are
+   still answering, hence the wording. The seat holding the floor taps the person they ask; that person becomes the
+   holder and the previous holder is blocked. The hint for the holder reads 「你問邊個？㩒佢個名」. 「↩ 撤銷」 takes back
+   the last pass (8 deep). A small trail shows the last passes: 「阿明 → 阿華 → 阿B」. A seat that has used its
+   accusation carries a small 🙋✓ (public, from `view.accUsed`).
 3. **Accuse** 「🙋 指控」: one per player per round (the button shows 「已用咗指控」 afterwards). Opens a picker
    (everyone except you), confirm with 「指控佢」. Spies may use theirs as a feint.
-4. **Spy button** 「🕵️ 我係間諜」: exists on every phone. A non-spy gets a private toast 「你唔係間諜，唔使㩒」
-   and nothing is sent. A spy gets a confirmation 「確定？㩒落去鐘會停，全場即刻知你係間諜，然後你要喺清單揀
-   一個地點。」 [取消] [我係間諜，停鐘].
+4. **Spy button** 「🕵️ 我係間諜」: exists on every phone and behaves the same on every phone: no sound, no toast,
+   the confirmation 「🕵️ 確定要亮身分？㩒落去鐘會即刻停，全場都知你係間諜，然後你要喺清單揀一個地點。…」
+   [取消] [我係間諜，停鐘]. Only a spy's 停鐘 sends `spy-stop`; for a non-spy it closes the panel exactly like 取消.
+   No screen ever says 「你唔係間諜」, so a phone cannot be held up as proof of innocence (the rules sheet adds
+   「唔好俾人睇你部手機證明身分」). A non-spy can still *say* nothing happened; that is the same as in the box game.
 5. **Accusation log** under the buttons: 「阿明 → 阿華 ✗ 唔通過」.
-6. My card and the location list (collapsed by default during play). Tap a location to strike it out; the strike
-   is local to your phone.
+6. My card and the location list. The list is open during the look (`reveal`) and folds once when play starts; the
+   📍 toggle reopens it. Tap a location to strike it out; the strike is local to your phone.
 
 **Narration:** at one minute left (cue `warn`, only if the round is longer than 75 s): 「仲有一分鐘。」
 
@@ -213,7 +219,8 @@ Shown to everyone, no secrets left:
 - location (emoji, name), headline (see 5.6), 「間諜：🕵️ 阿華」
 - the explanation lines (why, point by point)
 - a table: every seat, its role (or 🕵️ 間諜), `+points` this round, running total
-- button 「下一局」 (last round: 「睇總分」), enabled 2.5 s after the screen appears so a stray tap cannot skip it. Any seat can press it.
+- button 「下一局」 (last round: 「睇總分」), enabled 2 s after the screen appears so a stray tap cannot skip it; until
+  then a line counts down 「睇清楚先，2 秒後先㩒得」. Any seat can press it (who may advance is open decision D5).
 
 **Narration (cue `end`, 4 s):** 「{headline}。地點係{location}，間諜係{names}。」
 
@@ -439,10 +446,12 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
   game one tap.
 - **Hands mode** and the PassGate walk make one-phone play practical; the question tracker works from any seat.
 - **Undo** for a mistaken question pass; **confirm** for the spy stop and the accusation; the reveal button is
-  delayed 2.5 s.
+  delayed 2 s, with the countdown on screen.
+- **The clock and 🙋 stay in reach**: a compact clock bar sticks under the header while the location list scrolls.
 - The clock is **exact across pauses**; the Timer beeps at 60 s, 10 s and zero; the host's pause freezes it.
-- **No tells**: same card and button layout for spy and non-spy, the spy button exists on every phone, the vote waits
-  for everyone, the narrator never says anything secret.
+- **No tells**: same card and button layout for spy and non-spy, the spy button exists on every phone and opens the
+  same silent panel on every phone (a non-spy's 停鐘 just closes it), the vote waits for everyone, the narrator never
+  says anything secret.
 - **The reveal explains every point**, including the first-accuser bonus and why it was NOT paid (caught only at the
   final vote, or the spy guessed wrong), and the hidden role of an innocent who was convicted.
 - **Presets with a reason** per head-count; the final vote reminds everyone not to name the location.

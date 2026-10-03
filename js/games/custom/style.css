@@ -36,6 +36,13 @@
 }
 .cu-head h3 { margin: 0; font-size: .9375rem; font-weight: 700; letter-spacing: .02em; }
 .cu-hint { color: var(--text-dim, #a2977f); font-size: .75rem; font-weight: 400; text-align: right; }
+/* a locked cup: a state badge, not a disabled button */
+.cu-badge {
+  font-size: .75rem; font-weight: 700; line-height: 1.2; padding: .25rem .625rem; border-radius: 99px; white-space: nowrap;
+  background: var(--surface-2, #2f2819); color: var(--text-dim, #a2977f);
+}
+.cu-badge.lock { background: rgba(245,197,24,.16); color: #ffdc5e; border: 1px solid rgba(245,197,24,.4); }
+.cu-head h3 + .cu-badge { margin-right: auto; }
 .cu-slot { min-width: 0; }
 .cu-notecard { text-align: center; font-size: .9375rem; line-height: 1.7; color: var(--text-dim, #a2977f); }
 
@@ -91,6 +98,7 @@
 .cu-tag.role, .cu-tag.peek { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }   /* long-press = explain */
 .cu-tag.peek   { background: rgba(45,212,191,.16); color: #5eead4; }
 .cu-tag.dice   { font-variant-numeric: tabular-nums; }
+.cu-tag.dice.many { background: rgba(228,87,61,.14); color: #ff9b86; }   /* rolled again and again before the lock */
 .cu-pill {
   font-size: .75rem; padding: .25rem .6875rem; border-radius: 99px; flex: none;
   background: var(--surface-2, #2f2819); color: var(--text-dim, #a2977f);

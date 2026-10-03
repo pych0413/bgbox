@@ -333,6 +333,8 @@ function after(order, pid) {
 }
 
 const speaker = (s) => (s.phase === 'explain' ? s.round.speaker ?? null : null);
+/** 諗樣揀: who may be called — anybody still waiting, or somebody who was skipped. */
+const callable = (r, pid) => !r.spoken.includes(pid) || (r.skipped ?? []).includes(pid);
 
 function usable(e) {
   return !!e && typeof e.term === 'string' && e.term !== '' && typeof e.explain === 'string' && e.explain !== '';
@@ -433,6 +435,9 @@ function startExplain(s, ctx) {
   s.phase = 'explain';
   r.reader = null;
   r.spoken = [];
+  r.skipped = [];
+  r.back = [];
+  r.turnNo = 0;
   r.speaker = s.cfg.speakOrder === 'free' ? null : r.explainers[0];
   setTurnTimer(s, ctx);
 }
@@ -444,23 +449,54 @@ function toJudge(s) {
 }
 
 /**
+ * Who gets the floor next: the first one in the queue who has not had a turn — and once nobody is left, a SKIPPED
+ * player, once (`back`): a friend who was in the bathroom still gets to explain. `except` = the one talking now.
+ */
+function nextUp(r, except = null) {
+  return r.explainers.find((p) => !r.spoken.includes(p) && p !== except)
+    ?? (r.skipped ?? []).find((p) => !(r.back ?? []).includes(p) && p !== except)
+    ?? null;
+}
+
+const drop = (list, pid) => { const i = list.indexOf(pid); if (i >= 0) list.splice(i, 1); };
+
+/**
  * Close a turn. judge / system: the current speaker is done and the next one in the queue is up.
  * free: nobody is "up" — `who` (default: the first one still waiting) is ticked off the list.
+ * `skip`: the turn was ended FOR the speaker (the 諗樣's 下一位, the host's 下一步), not by their own 我講完. They show
+ * as ⏭ 跳過咗 and come back once after everybody else (in 諗樣揀 the 諗樣 can also call them back at any time).
+ * A speaking clock that runs out is not a skip: they had the floor for the whole time.
  */
-function endTurn(s, ctx, who = null) {
+function endTurn(s, ctx, who = null, skip = false) {
   const r = s.round;
   const free = s.cfg.speakOrder === 'free';
+  r.skipped ??= [];
+  r.back ??= [];
   const done = free ? who ?? r.explainers.find((p) => !r.spoken.includes(p)) : r.speaker;
+  r.turnNo = (r.turnNo ?? 0) + 1;
   if (done && !r.spoken.includes(done)) r.spoken.push(done);
-  const next = r.explainers.find((p) => !r.spoken.includes(p)) ?? null;
+  if (done && skip && !r.skipped.includes(done)) r.skipped.push(done);
+  if (done && !skip) drop(r.skipped, done);
+  const next = nextUp(r);
+  if (next && r.spoken.includes(next)) {   // nobody new is waiting: a skipped player gets the floor back, once
+    drop(r.spoken, next);
+    drop(r.skipped, next);
+    r.back.push(next);
+  }
   r.speaker = free ? null : next;
   if (!next) toJudge(s);
   else setTurnTimer(s, ctx);
 }
 
-/** The 諗樣 decides who speaks next (rulebook: any order he likes). The interrupted speaker goes back to waiting. */
+/**
+ * The 諗樣 decides who speaks next (rulebook: any order he likes). The interrupted speaker goes back to waiting;
+ * a skipped player called back gets a full turn again.
+ */
 function callSpeaker(s, ctx, target) {
-  s.round.speaker = target;
+  const r = s.round;
+  if (r.skipped?.includes(target)) { drop(r.skipped, target); drop(r.spoken, target); }
+  r.turnNo = (r.turnNo ?? 0) + 1;
+  r.speaker = target;
   setTurnTimer(s, ctx);
 }
 
@@ -499,7 +535,7 @@ function startRound(s, ctx) {
     honest: chooseHonest(s, ctx, ring),
     term: null, levelWanted: 0, swaps: 0,
     reader: null, readStarted: false, readDone: [],
-    speaker: null, spoken: [], called: [], pick: null, reveal: null,
+    speaker: null, spoken: [], skipped: [], back: [], turnNo: 0, called: [], pick: null, reveal: null,
   };
   clearTimer(s);
   if (s.cfg.levelMode === 'judge') {
@@ -558,6 +594,7 @@ function resolve(s, target) {
     judge: r.judge, honest: r.honest, pick: target, correct, d,
     term: r.term.term, explain: r.term.explain, src: r.term.src, cat: r.term.cat, level: d,
     called, changes,
+    bluffers: s.order.filter((p) => r.explainers.includes(p) && p !== r.honest),   // every card face up (seat order)
   };
   rv.lines = S.revealLines(rv, namer(s));
   r.pick = target;
@@ -589,11 +626,11 @@ function rawCue(s) {
       return { id: `r${r.n}:read`, minMs: 1500,
         text: S.cueRead({ readSecs: s.cfg.readSecs, pass: s.cfg.passPhone, first: nm(r.readers[0]) }) };
     case 'explain': {
-      const k = r.spoken.length;
+      const k = r.turnNo ?? r.spoken.length;
       // 系統派: the phone announces every speaker (one cue per turn; a new id each time somebody finishes)
       if (s.cfg.speakOrder === 'system' && k > 0 && r.speaker) {
         return { id: `r${r.n}:explain:${k}`, minMs: 1200,
-          text: S.cueNextSpeaker({ name: nm(r.speaker), last: k === r.explainers.length - 1 }) };
+          text: S.cueNextSpeaker({ name: nm(r.speaker), last: nextUp(r, r.speaker) === null }) };
       }
       return { id: `r${r.n}:explain`, minMs: 2500,
         text: S.cueExplain({ mode: s.cfg.speakOrder, term: r.term.term, first: nm(r.explainers[0]), judge: nm(r.judge) }) };
@@ -619,7 +656,7 @@ function skipStep(s, ctx) {
       else if (r.readStarted) endPeek(s, ctx);
       else startPeek(s, ctx);   // never skip a reader: the 老實人 must get to see the card
       break;
-    case 'explain': endTurn(s, ctx); break;
+    case 'explain': endTurn(s, ctx, null, true); break;   // the host moved past a stuck speaker: a skip
     case 'reveal': nextRound(s, ctx); break;
     default: break;   // `judge` needs a real decision; use autoAct for a stalled 諗樣
   }
@@ -681,14 +718,14 @@ function act(state, msg, ctx) {
       }
       if (!isJudge && pid !== speaker(s)) return s;
       // the UI sends the turn it saw, so the speaker's 我講完 and the 諗樣's 下一位 tapped together end ONE turn, not two
-      if (typeof a.turn === 'number' && a.turn !== r.spoken.length) return s;
-      endTurn(s, ctx);
+      if (typeof a.turn === 'number' && a.turn !== (r.turnNo ?? 0)) return s;
+      endTurn(s, ctx, null, pid !== speaker(s));   // the 諗樣's 下一位 skips; the speaker's own 我講完 does not
       return s;
     }
     case 'call':
-      // only 諗樣揀: in 系統派 and 自己決定 nobody can pick the next speaker
+      // only 諗樣揀: in 系統派 and 自己決定 nobody can pick the next speaker. A skipped player can be called back.
       if (s.phase === 'explain' && s.cfg.speakOrder === 'judge' && isJudge && isTarget(a.target)
-        && a.target !== r.speaker && !r.spoken.includes(a.target)) callSpeaker(s, ctx, a.target);
+        && a.target !== r.speaker && callable(r, a.target)) callSpeaker(s, ctx, a.target);
       return s;
     case 'decide':
       if (s.phase === 'explain' && isJudge) toJudge(s);
@@ -784,7 +821,12 @@ function view(state, pid) {
       ? { pid: r.reader, started: r.readStarted, done: r.readDone.slice(), order: r.readers.slice() }
       : null,
     turn: s.phase === 'explain'
-      ? { pid: r.speaker, spoken: r.spoken.slice(), total: r.explainers.length }
+      ? {
+        pid: r.speaker, spoken: r.spoken.slice(), total: r.explainers.length,
+        skipped: (r.skipped ?? []).slice(),   // ended FOR them (⏭ 跳過咗): they come back once, or the 諗樣 calls them
+        no: r.turnNo ?? 0,                    // turns so far: 我講完 / 下一位 carry it, so two taps together end one turn
+        next: s.cfg.speakOrder === 'free' ? null : nextUp(r, r.speaker),
+      }
       : null,
     speakOrder: s.cfg.speakOrder,
     callouts: {
@@ -832,6 +874,7 @@ function view(state, pid) {
     speakingNow: !!seat && speaker(s) === seat,
     speakOrder: s.cfg.speakOrder,
     spokenMe: !!seat && s.phase === 'explain' && r.spoken.includes(seat),
+    skippedMe: !!seat && s.phase === 'explain' && (r.skipped ?? []).includes(seat),
     callouts: s.cfg.callouts,
     judgeName: nameOf(s, r.judge),
     readerName: r.reader ? nameOf(s, r.reader) : '',
@@ -889,7 +932,7 @@ function legalActions(state, pid) {
         out.push({ type: 'decide' });
         if (s.cfg.speakOrder === 'judge') {
           for (const t of r.explainers) {
-            if (t !== r.speaker && !r.spoken.includes(t)) out.push({ type: 'call', target: t });
+            if (t !== r.speaker && callable(r, t)) out.push({ type: 'call', target: t });
           }
         }
         callouts();

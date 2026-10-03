@@ -134,6 +134,7 @@ setup ── deal (round 1) ──▶ play ◀── next-round (round+1, new de
 | before the first view of this game arrives | 載入緊… |
 | my card not yet looked at | 輪到你睇牌 👇 㩒住張牌 |
 | others still to look | 等緊 N 個人睇牌 |
+| dice opened (and my card looked at) | 👁 開咗盅 — 睇下面「開盅」 |
 | everybody looked | 大家都睇咗牌 ✓ |
 | roles revealed | 🔓 角色已經公開 |
 | game ended | 🏁 遊戲完咗 |
@@ -143,11 +144,16 @@ setup ── deal (round 1) ──▶ play ◀── next-round (round+1, new de
 1. **骰盅** — `DiceCup`: hold to lift the cup, 🎲 搖我嘅骰, 🔓 鎖定點數, shake to roll (the cup's own hints:
    㩒住掀起個盅 · 㩒住睇得，但搖唔到新骰 when locked). The card header adds the reason when rolling is off
    altogether: 已經開盅，要主持再搖 (revealed) · 今次淨係主持幫大家搖 (`selfRoll` off). In both cases the cup hides its roll button.
-2. **我嘅角色牌** — `RoleCard` (hold to peek, release to cover): emoji, name, the role's `做乜：… 點贏：…` text
+   A **locked** cup is a state, not two greyed-out buttons: the roll and lock buttons go (`canRoll: false`, no
+   `onLock`), the cup keeps its corner lock badge, and the header shows a badge 「🔒 鎖定咗點數 · 主持先解得」
+   (the host's own seat: 「🔒 鎖定咗點數」 — the host controls unlock it). The cup still lifts: it is your own number.
+2. **開盅 🎲** (only after the host opened the dice) — everyone's dice as real faces, with `= sum` for 2+ dice. It sits
+   right under the cup, on the first screen (the cup stays ABOVE the role card, as asked).
+3. **我嘅角色牌** — `RoleCard` (hold to peek, release to cover): emoji, name, the role's `做乜：… 點贏：…` text
    (no team label — the roles are the group's own). Hint: 㩒住先睇到，放手即刻冚返 · 已鎖定，㩒下面解鎖 · 大家嘅角色都公開咗.
    Button: 🔓 鎖定角色牌 / 🔒 已鎖 — 㩒一下解鎖 (gone after the reveal, nothing left to hide).
-3. **開盅 🎲** (only after the host opened the dice) — everyone's dice as real faces, with `= sum` for 2+ dice.
-4. **場上玩家** — roster in seat order. Tags: 主持 · 已睇牌 / 未睇牌 · 🎲 已搖 · 🔒骰 · 🔒牌, and after the
+4. **場上玩家** — roster in seat order. Tags: 主持 · 已睇牌 / 未睇牌 · 🎲 已搖 (rolled more than once this round:
+   🎲 已搖 ×3, in red — a roll-until-it-fits shows before the lock) · 🔒骰 · 🔒牌, and after the
    reveal `🎭 內鬼`. Never a number a die shows, never a role before the reveal. **Long-press** (≈ ½ s, a scroll
    or tap does nothing) a role tag → a toast with its `做乜：… 點贏：…` line (U1); the tag's `title` says the same.
 5. **主持控制** (host seat only, see below).
@@ -237,7 +243,8 @@ all tolerated (the shell itself toasts a failed send).
 
 This game has no night, so the tells are about the *table*:
 
-- The public roster carries only neutral flags: `seenRole`, `rolled`, `roleLocked`, `diceLocked`. No value,
+- The public roster carries only neutral flags: `seenRole`, `rolled`, `rolls` (how many times this round — the log
+  already says each roll, the count only makes it visible at a glance), `roleLocked`, `diceLocked`. No value,
   no role, no count of pips, before the host opens them. `me.dice` is only ever the viewer's own.
 - `seen` fires on release, so how long you looked is not broadcast; the flag is binary and is public on purpose
   (it is how the group knows everybody has seen their card).
@@ -312,12 +319,12 @@ applicable (the app does not run turns).
 | `lock-role` `{on: bool}` | seat | holds a card, roles not revealed, `on` is a boolean that differs from the current latch |
 | `roll` | seat | holds a cup, cup not locked, dice not revealed, and (`selfRoll` or host) |
 | `lock-dice` | seat | has rolled, cup not locked, dice not revealed |
-| `roll-all` | host | there is a card holder. Rolls every holder (lifts their locks), hides revealed dice |
+| `roll-all` | host | there is a card holder. Rolls every holder (lifts their locks), hides revealed dice, sets every holder's `rolls` to 1 |
 | `unlock-dice` `{pid?}` | host | some cup is locked (or the named seat's is) |
 | `reveal-dice` | host | not revealed and someone has rolled |
 | `reveal-roles` | host | not revealed. Clears every card latch |
 | `redeal` | host | always. New shuffle, same round, flags reset, **dice untouched** |
-| `next-round` | host | always. Round + 1, new shuffle, flags reset, **dice cleared, locks cleared, dice reveal off** |
+| `next-round` | host | always. Round + 1, new shuffle, flags reset, **dice cleared, locks cleared, dice reveal off, `rolls` back to 0** |
 | `end` | host | always. `phase = 'ended'`, everything revealed |
 
 `pid: '@host'` messages and `@next` / `@cue-done` / `@auto` are ignored (nothing host-internal is needed).
@@ -331,7 +338,7 @@ phase, round, dealId, title '通用派牌', subtitle '第 N 回合'
 controller            // this seat is the host
 selfRoll, dice {count, sides}, roles [...]            // public
 revealRoles, revealDice
-seats: [{ id, name, playing, seenRole, rolled, roleLocked, diceLocked,
+seats: [{ id, name, playing, seenRole, rolled, rolls, roleLocked, diceLocked,   // rolls = this round's rolls
           roleId?   // only when revealRoles
           dice?     // only when revealDice and the seat rolled }]
 me: { id, playing, role {id,name,emoji,desc}|null, dice|null, rollSeq,
@@ -402,6 +409,9 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 | UI renders every seat + table through random games, idempotent, never shows the hint, host controls only on the host | `custom ui: every seat and the table render…` |
 | UI ignores a foreign view (the statusLine crash), defaults a partial one, tolerates odd api | `custom ui: a view that is not ours is ignored…` |
 | UI taps → engine-accepted actions (seen on release, latch, roll, lock, per-seat unlock, every host button) | `custom ui: taps send the actions…` |
+| per-round roll count: counts every roll (after an unlock too), kept by a lock and a re-deal, 1 after roll-all, 0 next round | `the roster counts this round's rolls…` |
+| UI: 🎲 已搖 ×N, the 開盅 status line, the locked-cup badge (no greyed-out buttons), 開盅 under the cup | `custom ui: 已搖 ×N, the 開盅 status line…` |
+| the rules name the lock like its button (鎖定點數) | `the rules call the dice lock by the button's name…` |
 | long-press a role tag explains it; tap / scroll / jitter handled | `custom ui: U1 — long-pressing a role name…` |
 | fuzz n = 2–16 × 100 seeds × presets/dice/moderator/modSees/selfRoll/antiStreak with per-step invariants and leak sweeps | `fuzz — every head-count x 100 seeds…`, `fuzz — long games with many rounds…` |
 

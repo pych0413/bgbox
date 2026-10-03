@@ -122,7 +122,7 @@ number is on every chip and roster row, and 「3號阿明」 reads badly aloud),
 
 | who | screen |
 |---|---|
-| player | the 🃏 stage card with the line below; a hold-to-peek **RoleCard** (`做乜：… 點贏：…`; a wolf's card adds 「第一晚你會知邊個係隊友」, a guard / witch card the 同守同救 note); the board card (roles × counts, and the board's reason); 「睇完喇」 button; 「n / N 人睇完」 (a count, never who). The card has the shared 🔒 lock. |
+| player | the 🃏 stage card with the line below; a hold-to-peek **RoleCard** (`做乜：… 點贏：…`; 點贏 states **this table's rule for the player's side** — a wolf 「今局屠城，要殺晒所有好人…」 or 「今局屠邊，…」, the good side 「所有狼人出局。（今局屠城：…）」 — never 「睇設定」; a wolf's card adds 「第一晚你會知邊個係隊友」, a guard / witch card the 同守同救 note); the board card (roles × counts, and the board's reason); 「睇完喇」 button; 「n / N 人睇完」 (a count, never who). The card has the shared 🔒 lock. The 📖 rules sheet (no table) names both rules. |
 | moderator | 「你係上帝：唔攞牌，睇到全場身份」; the god panel (§3.10); no card |
 | table / spectator | the board card and the count |
 
@@ -162,6 +162,9 @@ same function for real actors and decoys; the UI never knows which it is.
 Interaction (identical for everybody): tap a chip → tentative pick (tap it again to un-pick); 確定 → lock it; the skip button →
 lock "nobody". A locked seat is frozen (its chips go dark) — except a wolf, who may change his mind and unlocks by re-picking.
 Whatever is tentative when the window closes counts. Nothing is optimistic: the screen changes when the host echoes the view.
+During a step's opening line every phone's chips are grey and the hint reads 「準備緊…旁白讀完先㩒得。」 (same words for every seat), so a
+tap in the cue is never dropped without a word. Chips carry the class `can` when tappable (not `on`, which tools read as "selected")
+and `aria-pressed="true"` only on the picked or locked chip.
 
 What each seat's info card says:
 
@@ -169,12 +172,13 @@ What each seat's info card says:
 |---|---|---|---|
 | 守衛 (alive) | 「上一晚你守咗 X，今晚唔可以再守佢。」 / first night 「你可以守任何人，包括自己。」 / after a skip 「上一晚你空守…」 | every living seat except last night's target (tagged 🚫上晚) | 空守（今晚唔守人） |
 | 狼人 (alive) | 「🐺 隊友：6號阿F、7號阿G」(+ 已出局 mates) and 「揀今晚要殺邊個。你揀嘅同隊友揀嘅會即時顯示。」; hint = the `wolfVote` rule. Chips show a coloured dot per wolf who currently picked it; mates carry a 🐺 tag | every living seat (a mate or himself = 自刀) | 空刀（唔殺人） |
-| 女巫 (alive, a potion left) | while the antidote is unused: 「今晚被狼人襲擊嘅係：X」 (「（你自己）」, 「呢個規則你唔可以自救」) or 「今晚冇人被狼人襲擊」; once used: 「解藥已經用咗，唔會再知道邊個被襲擊」; always 「解藥：有　毒藥：有」. The victim's chip is tagged 💊 | the victim chip = **antidote** (when allowed); every other living seat except herself = **poison** (when the poison is left). One tentative pick, so one potion a night. | 唔用藥 |
+| 女巫 (alive, a potion left) | while the antidote is unused: 「今晚被狼人襲擊嘅係：X」 (「（你自己）」, 「呢個規則你唔可以自救」) or 「今晚冇人被狼人襲擊」; once used: 「解藥已經用咗，唔會再知道邊個被襲擊」; always 「解藥：有　毒藥：有」. The victim's chip is tagged 💊. **Her pick names the potion**: 確定 becomes 「💊 用解藥救 X」 / 「☠️ 用毒藥毒 X」 and the potions line gives way to 「☠️ 揀咗毒 X：時間到都會用，再㩒佢一次取消。」 (after 確定: 「☠️ 已確定：用毒藥毒 X」 / 「已確定：今晚唔用藥」) — it takes that line's place, so her panel never grows a line when she taps. The hint follows what she can still do (both · 「㩒一個人＝用毒藥…」 · 「…毒藥已經用咗」 · 「今晚冇藥用得…」). Her closing line says what was spent: 「💊 今晚你用咗解藥救 X。」 / 「☠️ …」 / 「今晚你冇用藥。」 | the victim chip = **antidote** (when allowed); every other living seat except herself = **poison** (when the poison is left). One tentative pick, so one potion a night. | 唔用藥 |
 | 預言家 (alive) | 「揀一個人驗…」; after 確定: 「X 係：🐺 狼人 / ✅ 好人」. Past results are tags on the chips (✅/🐺) | living seats except himself and anybody already checked | 今晚唔驗 |
 | 獵人 (alive) | 「你今晚冇被毒 👍 如果你出局，可以開槍…」 or 「你今晚被毒咗 👎 就算出局都開唔到槍」 (decoy chips) | decoy: every living seat | 知道喇 |
 | **decoy** (everybody else; a dead role holder; a witch with both potions spent) | 「呢一步同你冇關係，繼續閉眼。」 / 「你已經出局，今晚冇得揀。」 / 「兩支藥都用晒喇…」 + 「想㩒就㩒：揀個人、㩒確定，扮有嘢做都得。」 | every living seat | 跳過 |
 
 Decoy taps are stored like real ones (so the state and the legal actions are uniform) and are ignored when the window closes.
+The witch's potion labels change only her own panel's words; every phone keeps the same boxes, chips and buttons.
 No night window ever *blocks* (`engine.blocking`, §5): its clock ends it, so a dead phone is never flagged at night — flagging
 the holders of the called role would point at them. The wolves' live picks, the witch's victim, the seer's result and the hunter's poison note are the only
 differences, and none of them is visible to another seat.
@@ -199,6 +203,9 @@ kills, and a victim who is both attacked and poisoned dies with cause 毒 (a hun
 Cue (public, no cause): 「天光喇，請大家開眼。昨晚死咗嘅係阿明同阿B。」 sorted by **ascending seat**; a quiet night:
 「天光喇，請大家開眼。昨晚係平安夜，冇人死。」 With 出局亮牌 a sentence follows: 「阿明係獵人，阿B係平民。」
 Screen (everybody): 🌅 「昨晚出局」 and a chip per dead player, or 「平安夜，冇人死」.
+The dawn cue stays up for **at least 8 s** (`S.DAWN_MIN_MS`, also in 語音; other cues keep `cueMinMs`): in 靜音 it is the only place the
+night's result is said, and the playtest's ≈3 s card was missed by half the table. After the dawn every day screen keeps it in the
+stage card — 「🌅 昨晚：平安夜」 / 「🌅 昨晚出局：2號阿明、5號阿強」 (seat order, no cause; public `view.lastNight`) — until night falls.
 The win check runs here, **before** any death trigger: if the game is decided, the dawn is still announced and then the game ends.
 
 ### 3.4 Death triggers: 遺言 and 最後行動
@@ -211,8 +218,9 @@ ends it.
 
 **最後行動 (`final`).** Present **iff a hunter is on the board**, for **every** dead player (poisoned, wolf-killed, exiled,
 shot, exploded), always the same fixed length. Cue: 「阿明出局。最後行動時間，有技能嘅人請喺 12 秒內使用。」
-Only the dead seat gets a panel (the night layout: the hunter 「你係獵人，可以開槍」, anybody else 「最後行動時間 … 照㩒都得，唔會有任何效果」,
-a poisoned hunter 「你被毒死，開唔到槍」); everyone else sees 🏹 「3號阿明 出局，最後行動時間」 and a timer. The window never ends
+Only the dead seat gets a panel (the night layout). It is daytime and the table is watching, so the panel is **word for word the same**
+for a hunter, a poisoned hunter and anybody else: 「🏹 最後行動時間」 / 「獵人可以揀一個人開槍帶走（被毒死就開唔到）。其他人等時間過，照㩒都冇效果。」,
+skip 「唔開槍」; his 💡 line is the same for everybody too (「最後行動：獵人揀一個人開槍（被毒死除外），其他人等時間過。」); everyone else sees 🏹 「3號阿明 出局，最後行動時間」 and a timer. The window never ends
 early. If the shooter picked a living player (tentative counts) the shot happens at the end: the victim dies at once, his own
 steps (遺言, 最後行動) go **in front of** the rest of the queue (a chain), and a public line follows:
 「阿C係獵人，開槍帶走咗阿D！」 (明牌: 「阿D係預言家。」 follows). A hunter who holds fire or times out announces nothing — exactly like a non-hunter.
@@ -222,7 +230,8 @@ Shot victims always get 遺言 (a daytime death; research default).
 
 One `speech` step per living player (a flipped idiot included), once each. Order: `speakOrder`; direction flips every day (a
 random bit on day 1); with `dead` the start is the first living seat after the single dead player in today's direction, else a
-random living seat. Cues: first 「而家開始發言，按座位號由細到大，由阿E開始。每人 60 秒。」 then 「阿F請發言。」 and
+random living seat. Cues: first 「而家開始發言，由阿E開始，跟住係阿F、阿G，之後按座位號順數落去。每人 60 秒。」 (倒數 the other way; the
+next two speakers are NAMED because 「由大到細，由阿聰開始」 read wrong when 阿聰 was seat 1 and the order wrapped to 6, 5, 4…) then 「阿F請發言。」 and
 「最後一位，阿I請發言。」 (the clock is read once; it is on every screen). Screen: the whole order with ✅ 已講 / 🎙 講緊 / ⏳ 等緊, the clock in the stage card, 我講完 on the
 speaker's phone, and — for every **living** seat — the **💥 自爆** control (a 1 s hold). It is the same control on every
 living phone; a non-wolf's hold sends the same message and the engine ignores it, with identical on-screen feedback.
@@ -248,6 +257,12 @@ Public tally screen: the VotePanel's reveal with 票型 (who voted whom), the ab
   then 「到阿H PK 發言。」), then a second vote among **only the tied players** by everyone who is not tied (and not a flipped idiot).
   Cue 「再投一次，淨係可以揀阿G或者阿H。PK 嘅人今次唔投。」 If nobody is left to vote → 「…除咗同票嘅人，冇人可以再投，今日係平安日。」
 - **Second tie, or everybody abstains** → 平安日 (「第二次都係平票，今日係平安日，冇人出局。」), nobody exiled, no further PK, straight to night.
+  The tally screen's verdict line says why it is a 平安日: 「第二次都平票：今日平安日」 / 「除咗同票嘅人冇人可以投：今日平安日」 / 「今日平安日，冇人出局」.
+
+**🗳 之前嘅投票（票型）.** The tally is up for a few seconds, so every day screen (not the night) also carries the shell's public fold
+(`view.recent`, rendered by the play screen's **RecentFold** under the game, closed until tapped): every vote so far, newest first — entry
+「第 1 日・PK 投票」, lines 「4號阿D 3 票（1號阿A、2號阿B、3號阿C）」 · 「棄權：7號阿G」 · 「➜ 1號阿A 被放逐」 (the recap's grouping). It is built
+from the public `view.voteLog` (resolved votes only — an open ballot never shows).
 
 ### 3.8 Self-explode
 
@@ -270,6 +285,8 @@ stays put; it never appears in an app-moderated game, where the host plays.
 
 - **Wolves win** (屠邊: all gods dead *or* all villagers dead; 屠城: all gods *and* villagers dead) or **good wins** (all wolves
   dead). If both qualify at once the **wolves win** (狼刀優先). The check runs after every death batch and **before** any trigger.
+  When that win also took the last wolf (`state.winBoth`), the why adds 「最後一隻狼同一晚都出咗局，不過狼人嘅條件同時達成：兩邊一齊達成，
+  算狼人贏（狼刀優先）。」 — the roles list shows every wolf dead, and without it the win reads like a bug (playtest p5).
 - **Draw (a safeguard we added, not in the research):** six consecutive day+night rounds in which nobody left the game.
   Without it a table of passive wolves and abstaining voters could play forever. Summary 「打和：連續幾日夜都冇人出局」.
 
@@ -375,17 +392,21 @@ and 下一步.
 
 ### Views (whitelist)
 
-Common: `me, mod, isMod, phase, n, d, seq, title, subtitle, night, say, hint, board, opts, seats, alive, stage, deadline?, span?,
-timerLabel?`. `seats` = `[{pid, no, alive, flipped, how?, at?, role?}]`: `role` only for the viewer's own seat, dead seats with
-出局亮牌, and everybody at `over` / for the moderator / for dead spectators (`spectate`); `how` only for public causes (exile, shot,
-explode) until `over`. Per-seat `my = { role, alive, flipped, ready, canVote, notes[], mates?, potion? }` (`mates` wolves only,
+Common: `me, mod, isMod, phase, n, d, seq, title, subtitle, night, say, hint, board, opts, seats, alive, stage, voteLog, lastNight?, recent?,
+deadline?, span?, timerLabel?`. `seats` = `[{pid, no, alive, flipped, how?, at?, role?}]`: `role` **only when public** — dead seats with
+出局亮牌, and everybody at `over` / for the moderator / for dead spectators (`spectate`). **Never the viewer's own seat**: it is in `my`,
+and the UI keeps it behind a cover (a role glyph on your own chip was readable from the next seat all day — playtest #2). `how` only for
+public causes (exile, shot, explode) until `over`. `lastNight = { n, deaths[] }` (seat order, no cause) on the day phases after that
+dawn; `voteLog = [{ d, round, votes[{by,to}], outcome, pid, tied }]`, every resolved vote (public 票型), present in every view;
+`recent` (day phases, once a vote has happened) = the shell's fold shape `[{ id: 'ww-votes', title, entries[{ title, lines }] }]` built from it. Per-seat `my = { role, alive, flipped, ready, canVote, notes[], mates?, potion? }` (`mates` wolves only,
 `potion` the witch only, `notes` = the seat's own seer / guard / witch records). Phase blocks: `ready` · `nt` (the panel:
 `step stage chips[{pid on mark tag by}] info hint skip ok pick set lock`, **same keys for every seat**) · `dawn` · `words` ·
 `final` (`nt` only for the dead seat) · `sayInfo` · `speech` (with the public `order`) · `vote` (`cands voters progress myVote?`) · `over`.
 `view.roleId` = the seat's own role id (players only; never for the table or the moderator) — the shell's 💡 sheet reads it.
 `view.hint` is one line (≤ 40 characters) for the 💡 sheet, built only from what that seat may know: its own panel at night
 (real actor → the role's how-to, decoy → 「呢一步冇你份…」, dead → 「你已經出局…」), its own turn by day, otherwise the public
-step; a dead seat gets 「你已經出局：可以睇，但唔好出聲。」 except for its own 遺言 / 最後行動; a non-voter is told why
+step — **by day never the seat's card** (the sheet's 而家要做咩 is plain text on a face-up phone; only its role box is covered), so the
+lines are worded for both sides (「聽人發言：記低邊個講咩，諗吓邊個似狼、邊個似神職。」, 「揀一個你想放逐嘅人…」) and a dead hunter's 最後行動 line is everybody's; a dead seat gets 「你已經出局：可以睇，但唔好出聲。」 except for its own 遺言 / 最後行動; a non-voter is told why
 (翻咗牌 / PK); the moderator and the table get their own lines.
 
 ### Focus
@@ -447,6 +468,13 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
   eight rule variants, dead-phone `autoAct`-only games, balance sanity (both camps win, every seat wins and sees every role).
 - **UI** (fake DOM): every phase renders for every seat idempotently; one night shape; no `sfx` at night; a whole game finished by tapping;
   deal / god / explode / vote / final screens.
+- **Playtest fixes (2026-10).** No role in the roster for its owner (明牌 dead excepted); by day no secret outside a cover — 我嘅身份 starts
+  closed, no glyph on the own chip, mates / potions / notes only on the 📓 cover, and (metamorphic) **a phone's uncovered screen through a
+  whole day does not change when its own card is swapped**; the dead player's final panel is word for word the same for a hunter; dawn
+  `minMs ≥ 8000`; `lastNight` / `voteLog` public and identical on every phone, no open ballot in the log; the 昨晚 line and the 票型 fold
+  on screen; the witch's potion labels, undo by re-tap, potion-state hints, closing line and the cue's 「準備緊…」; 狼刀優先 explained;
+  the role card's table rule; the day 💡 line is the same for a wolf and a good seat, and for a hunter and anybody else in 最後行動; the witch's
+  pick line replaces her potions line (a tap never grows her panel); the speaking-order cue names the next speakers; chip `can` / `aria-pressed`.
 
 ## 7. 貼心 touches
 
@@ -457,6 +485,12 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
 - 💥 自爆 on every living phone with a 1 s hold (no accidental explode) and an honest note that it does nothing for non-wolves.
 - Wolves see each other's picks live (dots on the chips) and may change their minds until the window closes — no gestures needed.
 - The witch's one-tap logic (「㩒被襲擊嗰位 = 救，㩒其他人 = 毒」) shows her potions at all times and tells her honestly when she is the victim and may not save herself.
+  Her button names the potion a tap would spend (「☠️ 用毒藥毒 X」), a second tap on the chip takes a stray pick back, and her closing line says what she did.
+- A face-up phone by day shows no secret: 「我嘅身份」 starts folded, your own chip has only the gold ring, and a wolf's mates, the witch's potions
+  and every night record sit on a hold-to-peek 📓 cover that every card holder has (a villager's says 「冇夜晚記錄」) and that shares the card's 🔒.
+- The night's result and every past 票型 can be found again all day (「🌅 昨晚…」 in the stage card, the shell's 🗳 之前嘅投票 fold under the game).
+- The role card says this table's win rule for your side, and the day 💡 lines serve both sides (a wolf is not told to hunt wolves) without
+  ever depending on your card — the sheet is plain text on a face-up phone.
 - The seer's board remembers his results (✅/🐺 on the chips) and cannot waste a night on a repeat or on himself.
 - A 💡 hint for every phase and every seat, and role text split into 做乜 / 點贏.
 - Public stage line on every phone, so 靜音 and 讀稿 modes never need the host's speaker.

@@ -43,7 +43,9 @@ The group is a handful of Cantonese-speaking friends, all on iPhone, often trave
 5. **One dead phone must not stop the table.** A device can hold several seats; a whole
    game can run on one device. Stalled players can be auto-acted by the host.
 6. **iPhone first.** No vibration (Safari has none), sound and animation carry feedback,
-   every gesture-gated API (speech, audio, motion) is primed from a real tap.
+   every gesture-gated API (speech, audio, motion) is primed from a real tap. **No native dialogs**
+   (`confirm`, `alert`, `prompt`): on the host phone they stop the room's server (guests see 冇送到 after 4 s and
+   同房主斷咗 after 12 s). A risky tap asks twice in the page instead (`sh.confirm` / `api.confirm`, §15.8).
 7. **Nothing repeats.** Content is drawn without replacement and remembered across
    evenings on the host device.
 
@@ -179,6 +181,10 @@ engine.canInk?(state, pid) → boolean                 // drawing games, §11
   phone or in the centre — so a shared phone cannot tell where the role is. A named (non-anonymous) focus goes
   only to the devices it names; a spectator-only device gets `null`. An engine must therefore keep an
   anonymous step in `focus` even when its role is dead or in the centre (the narrator still calls it).
+  A **named** focus that calls more than one seat reaches each named device with `together: true` (a deal, a
+  vote: everybody's at once, so no 「輪到你」 pill, §15.11); never on an anonymous step. An engine may also set
+  `simultaneous: true` itself. Separately, the **host device** gets `waiting` (bool, `views`): does the engine's
+  whole focus name any seat (or an anonymous step) right now — its ⏭ 跳過呢步 then takes two taps.
 - `result(state)` is polled after every state change while playing; it returns `null` until the game is over,
   and the first non-null value ends the game (room → `results`, session stopped). Fields:
   `winners: [pid]`, `summary` (one line), `lines` (the 「點解會咁」 recap, see 15.2 *Result fields*),
@@ -326,7 +332,7 @@ Host → client
 |---|---|
 | `welcome` | `{ v, build, device, seats: [{ id, token, name }], room, views }` — re-sent when this device's seat list changes |
 | `room` | room view (15.3): players, seats, colours, game, config summary, phase, scores, narration, `singleDevice`, timer … — `stalled`, `claims`, `versionMismatch` carry data for the host device only |
-| `views` | `{ rev, hostNow, bySeat: { pid: view }, table: view, focus, canInk }` — only this device's playing seats; `focus` is filtered to them (§4); `canInk` = those of them `engine.canInk` allows to draw now. **Host device only:** `cue` (`{ id, text }`), `hostActions` (`[{ i, label }]`, §4) |
+| `views` | `{ rev, hostNow, bySeat: { pid: view }, table: view, focus, canInk }` — only this device's playing seats; `focus` is filtered to them (§4); `canInk` = those of them `engine.canInk` allows to draw now. **Host device only:** `cue` (`{ id, text }`), `hostActions` (`[{ i, label }]`, §4), `waiting` (bool, §4) |
 | `ack` | `{ id, ok }` — after the views the action produced; `ok` = it changed the game (false = refused) |
 | `claimWait` | `{ pid, name }` — the claim waits for the host's approval |
 | `notice` | `{ text }` — non-fatal message for the toast |
@@ -493,6 +499,7 @@ Every relative import and every `href`/`src` to our own files carries `?v=N`
 | `roleId` | 💡 sheet | the seat's **own** role id, matched against `rules.roles` — never anybody else's; omit it (undercover) when the role is secret even from its holder, and the sheet lists every role instead |
 | `hintRoleLabel` | 💡 sheet | relabels the 「你嘅角色」 heading (≤ 20 chars), e.g. 「你派到嘅角色」 where cards change hands |
 | `canDraw` | game UI, play screen | this seat may ink now (the UI passes it to `Canvas`); the play screen prefers `state.canInk` and falls back to `view.canDraw` / `view.draw.canDraw` to fold the narrator bar. (`canInk` itself is **not** a view field: it travels beside the views, `views.canInk` → `state.canInk`, computed from `engine.canInk`) |
+| `recent` | play screen (`RecentFold`, under the game UI) | **public** "what just happened" folds, so a result that flashed for a few seconds can be found again (#10): one fold or an array (max 4) of `{ id?, title, lines?, entries?: [{ title?, lines }], open? }`; a line is a string, `{ text }`, or a ballot `{ from: pid, to: pid \| null }` (shown 「阿明 → 小美」, null = 棄權). E.g. `[{ id: 'votes', title: '📜 之前嘅投票', entries: [{ title: '第 2 日', lines: [{ from, to }, …] }, …] }, { id: 'night', title: '🌅 昨晚', lines: ['2號阿明 出局'] }]`. Newest entry first; empty folds are dropped; a fold starts **closed** unless `open: true` and keeps its open/closed state across updates. Must be identical in every seat's view (and the table view) — never a secret. A game that wants the fold somewhere else in its own layout renders `api.components.RecentFold` itself from another field instead |
 
   Fallbacks the 💡 sheet also tries for the own role, in order: `role`, `mine.role`, `my.role`, `me.role`,
   `my.dealt` (an id string, or `{ id, name, emoji, team, text }` for custom decks); `mine.follower === true`
@@ -506,6 +513,8 @@ Every relative import and every `href`/`src` to our own files carries `?v=N`
 | `lines` | the 「點解會咁」 recap: strings; or `{ text }`. A **section heading** is `{ h: '標題' }` or a string `'── 標題 ──'` (dashes trimmed); lines under it form a foldable section. Lines before the first heading are an untitled section that is always shown; an empty heading is dropped. A recap of **more than 8 lines starts folded except its first section**; a short one starts fully open |
 | `void: true` | 呢鋪唔計: no scoreboard change at all (not even `played`), `winners`/`points` ignored, `lastResult.void` and the history line marked `void`; results hero says 呢鋪唔計, no points card |
 | `spectators: [pid]` | seats that did not play (a human moderator): no `played` / `wins` / `points` for them |
+| `noScore: true` | a tool that does not judge (通用派牌): results headline 「邊個贏由你哋講」 (never 冇人贏), the history line reads 唔計輸贏, no medals; `lastResult.noScore` and the history entry carry it |
+| `linesTitle` | the recap card's heading (≤ 24 chars) where 「點解會咁」 does not fit, e.g. 「分數點嚟」 for a scoring game; `lastResult.linesTitle` |
 | `carry` | any JSON; kept per game id on the host (snapshot included) and handed to the next `setup({ carry })` of that game — anti-streak memory. Never sent to a phone, never in `lastResult` |
 
 ### 15.3 `createApp(opts)` → `app`  (js/core/client.js)
@@ -539,15 +548,17 @@ app.state = {
     stalled: [{ pid, since }],                         // host only: seats the session is waiting on
     claims: [{ pid, name, deviceId, at }],             // host only: phones asking for an offline seat back
     versionMismatch: [{ pid, build }],                 // host only: seats on a phone with another build stamp
-    lastResult: null | { gameId, winners, summary, lines, points, void? },   // void: 呢鋪唔計
+    lastResult: null | { gameId, winners, summary, lines, points, void?, noScore?, linesTitle? },   // void: 呢鋪唔計
   },
   views: { [pid]: view },          // only this device's playing seats
   table: view | null,              // engine.view(state, null)
-  focus: null | { pids: [], anonymous: '' },   // filtered to this device (§4): an anonymous step is
-                                               // { pids: [], anonymous } on every device with a playing seat
+  focus: null | { pids: [], anonymous: '', together: true },   // filtered to this device (§4): an anonymous
+                                               // step is { pids: [], anonymous } on every device with a playing
+                                               // seat; `together` = a named step calls more than one seat
   canInk: ['p_x'],                 // this device's seats engine.canInk lets draw right now (§15.2)
   cue: null | { id, text },        // host only: the current narration line
   hostActions: [{ i, label }],     // host device only: the game's own buttons right now (engine.hostActions, §4)
+  waiting: false,                  // host device only: the engine's whole focus names a seat / an anonymous step (§4)
   ink: { epoch: 0, strokes: [] },  // drawing games: the current picture
   pictures: [{ epoch, strokes }],  // earlier pictures of THIS game, oldest first, max 24 (older ones fall off).
                                    // A picture is kept when the ink epoch moves on mid-game; the list is cleared
@@ -717,21 +728,27 @@ full props again. All styles live in css/base.css under `.c-<name>`.
 
 | component | props |
 |---|---|
-| `Cover` | `{ front: Node, backArt: string, backLabel, lockMode: 'none' \| 'peek', locked, onOpen(open) }` — hold to peek; with lockMode 'peek' and locked, a press is refused with a shake |
-| `RoleCard` | `{ role: { emoji, name, team, text } \| null, locked, onLockToggle, hint }` — Cover + 🔒 button underneath |
+| `Cover` | `{ front: Node, backArt: string, backLabel, lockMode: 'none' \| 'peek', locked, onOpen(open) }` — hold to peek; with lockMode 'peek' and locked, a press is refused with a shake. While closed the front is `aria-hidden` and every die face in it loses its 「N 點」 label (#37); both come back only while held open |
+| `RoleCard` | `{ role: { emoji, name, team, text } \| null, locked, onLockToggle, hint, lockLabels?, ariaLabel? }` — Cover + 🔒 button underneath. For a card that is not a role (誰是臥底's word): `lockLabels: { lock, locked, message }` rewords the 🔓 button, its locked face and the refusal toast; `ariaLabel` the cover's label; `hint: ''` hides the hint line |
 | `DiceCup` | `{ dice: [n] \| null, sides, rollSeq, canRoll, lockedRoll, onRoll, onLock, shakeToRoll: true }` — cup art, hold to peek, roll button, lock-roll button, shake detector |
 | `PlayerPicker` | `{ players, me, count: 1, exclude: [pid], selected: [pid], disabled, onChange(sel), confirmLabel, onConfirm(sel) }` |
-| `VotePanel` | `{ players, candidates: [pid], me, myVote, allowAbstain, progress: { done, total }, reveal: null \| { counts, top }, onVote(pid \| null) }` |
+| `VotePanel` | `{ players, candidates: [pid], me, myVote, allowAbstain, progress: { done, total }, reveal: null \| { counts, top, votes? }, onVote(pid \| null), allowChange?, title?, colorOf?, secretChoice? }` — the progress line (「已投 2/5」 + pips) is updated **in place**; rows and 確定 are rebuilt only when candidates, `myVote`, the local pick, the options or the reveal change, so a ballot arriving mid-press never swallows a tap (#15). `colorOf(pid)` → the dot colour (假畫家's pen colours), falling back to `player.color`. `secretChoice` (default **off**, decision D14): the button reads 「確定投票」 and the voted state 「已投 ✓」, with no name and no row lit |
 | `Timer` | `{ deadline, now: () => ms, label, paused, warnAt: [60, 10] }` — plays sfx at warnings/zero |
 | `RulesSheet` | `RulesSheet.open(game)` / `.close()` — modal from `game.rules` |
-| `NarratorBar` | `{ cue, mode, onReplay, onNext, onMode, paused?, onPause?, onSkip?, stalled?, line?, reason?, compact?, hidden? }` — `stalled` (+ `line`, `reason`) = the phone was asked to speak and nothing came out: big text, 🔁 重講, ⏭ 跳過 (`onSkip`), 下一步. `compact` (the play screen sets it while this phone's seat can draw — `state.canInk` / `view.canDraw`) folds the bar to one line (icon, line, 下一步) with a ▴ to open it for this turn. 下一步 ignores a second tap within 1.5 s |
+| `NarratorBar` | `{ cue, mode, onReplay, onNext, onMode, paused?, onPause?, onSkip?, stalled?, line?, reason?, compact?, hidden?, confirmNext? }` — `stalled` (+ `line`, `reason`) = the phone was asked to speak and nothing came out: big text, 🔁 重講, ⏭ 跳過 (`onSkip`), 下一步. `compact` (the play screen sets it while this phone's seat can draw — `state.canInk` / `view.canDraw`) folds the bar to one line (icon, line, 下一步) with a ▴ to open it for this turn. The host's skip is a small **ghost** 「⏭ 跳過呢步」 (#13); only the 讀稿 narrator with a line to read (or a stalled line) gets the big primary 「下一步 ⏭」. `confirmNext` (string) = skipping now would cut somebody off: the first tap arms the button 「再㩒一次：…」, only a second tap within ~3 s calls `onNext`. 下一步 ignores a second tap within 1.5 s of a real one |
 | `PassGate` | `PassGate.show({ title, subtitle, button? }) → Promise<void>` (resolves when the receiver taps, or when `hide()` / another `show()` replaces it) · `PassGate.hide()` · `PassGate.isOpen()` |
 | `SeatEditor` | `{ players, me, isHost, onMove(pid, index), onColor(pid, color), onKick(pid), mySeats?, palette?, orderHint? }` — `mySeats` = every seat on THIS device (default `[me]`); `orderHint` (string) replaces the host-only default hint and shows it emphasised to everyone (turn-order games, §7). Reorder: host only (▲ ▼ or drag the ⠿ handle); colour: host or the seat's own device; ✕: host on others' seats, any device on its own extra seats — `onKick` is called either way and the lobby picks kick vs removeSeat |
-| `Scoreboard` | `{ players, scoreboard, history, games?, me?, showHistory? }` — `history` = `[{ gameId, winners, summary, void? }]` oldest first (a `void` row reads 「🚫 唔計」); `games` = `{ gameId: meta }` for emoji + name; `me` highlights your row. Sorted by points, then wins, then fewer games played, then seat; ties share a rank |
+| `Scoreboard` | `{ players, scoreboard, history, games?, me?, showHistory? }` — `history` = `[{ gameId, winners, summary, void?, noScore? }]` oldest first (a `void` row reads 「🚫 唔計」, a `noScore` row 「唔計輸贏」); `games` = `{ gameId: meta }` for emoji + name; `me` highlights your row. Sorted by points, then wins, then fewer games played, then seat; ties share a rank. Columns 局 · 贏 · 分數; **分數 is left out on a night where no game awarded points** (decision D13), and a medal 🥇🥈🥉 goes only to a row that won something (points above 0, or wins on a night without points) — everyone else shows `·` (`logic.scoreboardMode`) |
+| `RecentFold` | `{ recent, players, colorOf? }` — the public 「📜 之前嘅投票」 / 「🌅 昨晚」 folds (`view.recent` shape, §15.2): one `<details>` per fold, closed by default, open state kept across updates; ballots with seat dots. The play screen renders `view.recent` with it automatically |
 | `ConfigForm` | `{ fields, value, onChange(cfg), bag?, onBagChange? }` — renders §3 Field[] (int, bool, select, seconds, roles, categories) |
 | `Canvas` | `{ ink, canDraw, tools: 'none' \| 'full', color, width, oneStroke, minStrokeLen, me?, rearm?, touchGuard?, colorOf(pid), onInk(payload), onStrokeEnd({ strokeId, length }), onShort() }` — see 15.10 |
 
-Helpers in `js/ui/dom.js`: `el(tag, attrs, ...kids)`, `$`, `$$`, `toast(text)`, `dieFace(value, sides)`.
+Helpers in `js/ui/dom.js`: `el(tag, attrs, ...kids)`, `$`, `$$`, `toast(text)`, `dieFace(value, sides)` (a face
+carries `role="img"` + `aria-label="N 點"`; `labelDice(root, on)` adds / strips them — `Cover` does it), and the
+**arm-then-confirm** (#3) every risky tap uses instead of a native dialog: `confirmTap(text, { node, key, inline,
+ms, onDisarm }) → bool` — the first call arms (`node` reads 「再㩒一次：<first line of text>」 for ~3 s, class
+`armed`; `inline: false` keeps an icon's face and toasts instead) and returns false; the same key tapped again
+on the same button after 0.35 s and within ~3 s returns true. `isArmed(key, node?)`, `disarmConfirm()`.
 
 ### 15.8 Game UI `api` (passed to `mount`)
 
@@ -745,7 +762,11 @@ api = {
   ink(payload),       // app.ink(me, payload)
   now(),              // app.clock.now()
   sfx(name), toast(text),
-  components,         // { Cover, RoleCard, DiceCup, PlayerPicker, VotePanel, Timer, Canvas, dieFace }
+  confirm(text, node?, opts?),   // arm-then-confirm (dom.js confirmTap): `if (!api.confirm('開晒所有角色？', btn)) return;`
+                      // — false on the first tap (btn reads 「再㩒一次：…」), true on the second. NEVER window.confirm:
+                      // it freezes the host phone, which is the room's server (the shell turns any window.confirm
+                      // into this as a safety net, on the button just tapped)
+  components,         // { Cover, RoleCard, DiceCup, PlayerPicker, VotePanel, Timer, Canvas, RecentFold, dieFace }
 }
 ```
 `update(view, ctx)` — `ctx = { focus, paused, narrationMode, ink }` (`focus` already filtered to this device, §4).
@@ -815,6 +836,11 @@ Optional props (safe to omit):
 | `pictureFileName(gameName, index, date)` | `假畫家-2026-10-03-2.png` (index 0 has no suffix) |
 | `roleFor(view, rules)`, `roleParts(text)` | the 💡 sheet's own-role card and its 「做乜」 / 「點贏」 split (text written `做乜：… 點贏：…`) |
 | `fmtDuration`, `fmtClock`, `TIMER_PRESETS`, `timerStep`, `clampTimerSec`, `timerLeftMs`, `timerCue`, `inAppBrowser` | table-timer maths and sounds; in-app browser detection |
+| `turnBadge(focus, seat, { night })` | the header's 「輪到你」: only when focus names this seat ALONE — never at night, never for `anonymous`, `together` or `simultaneous` focus (#14) |
+| `skipNeedsConfirm({ waiting, focus, night, mode, cueId, ackedCueId })`, `SKIP_CONFIRM` | does the host's ⏭ 跳過呢步 take two taps: when the engine waits on a seat (`state.waiting`), an anonymous step, the host's own seat is called, or night — except the 讀稿 narrator's tap on a line it has not moved past yet (#13) |
+| `scoreboardMode(rows)` | `{ points, earned(row) }`: is there a 分數 column tonight; may a row wear a medal (#39) |
+| `resultHero(result, meta)`, `confettiSet(meta)` | the results headline (#39, see below); confetti with the game's own emoji |
+| `recentFolds(recent)` | `view.recent` → `[{ key, title, open, entries: [{ title, lines }] }]` (§15.2) |
 
 **💡 sheet** (`js/ui/hints.js`, `HintSheet(sh, { onRules }) → { open(game, view), update(game, view), close(), isOpen() }`)
 — **on demand only**: it opens when the player taps 💡 (top bar or ⋯ menu) and never by itself. Sections:
@@ -824,14 +850,28 @@ behind the same hold-to-peek `Cover` as a role card, so a glance from the next s
 of the game instead. It follows the live view while open and **closes whenever the phone changes hands** (seat
 switch, pass gate).
 
-**Play screen** (`screens/play.js`), host ⋯ menu: ▶/⏸ · 下一步 · 🗑️ 呢輪作廢 (confirm → `hostCtl.voidRound()`; toast
+**Play screen** (`screens/play.js`), host ⋯ menu: ▶/⏸ · ⏭ 跳過呢步 · 🗑️ 呢輪作廢 (two taps → `hostCtl.voidRound()`; toast
 「呢個遊戲唔支援」 when it returns false, 「暫停緊 — 先㩒「繼續」」 while paused) · one 「🎛️ label」 per
 `state.hostActions` entry (`hostCtl.hostAction(i, label)`; toast 「而家做唔到」 on false) · ⏱️ · narration mode ·
-「🤖 代 X 做」 per stalled seat. A stalled seat also gets a banner: **代佢做 · 呢鋪唔計 · 再等**. The narrator bar is
-compact while `state.canInk` (or `view.canDraw`) names this phone's seat. Shared-phone behaviour: §7.
+「🤖 代 X 做」 per stalled seat · 🚪 離開房間 (two taps). Every confirm is the in-page arm-then-confirm (`sh.confirm`,
+never a native dialog, #3): the row stays open on the first tap and reads 「再㩒一次：…」. ⏭ 跳過呢步 (menu and narrator
+bar) takes two taps when `logic.skipNeedsConfirm` says skipping would cut somebody off (#13). A stalled seat also gets
+a banner: **代佢做 · 呢鋪唔計 · 再等** (rebuilt only when it changes, so an armed 呢鋪唔計 keeps its label). The narrator
+bar is compact while `state.canInk` (or `view.canDraw`) names this phone's seat. The header's 「輪到你」 follows
+`logic.turnBadge` and sits **before** the subtitle (a long subtitle's ellipsis never hides it). Under the game UI,
+`view.recent` renders as `RecentFold` (#10). Shared-phone behaviour: §7.
 
-**Results screen** (`screens/results.js`): hero (🏆 winners · 🤝 nobody · 🚫 呢鋪唔計 for `lastResult.void`),
-`summary`, 「點解會咁」 as foldable sections (`result.lines`), points card, the evening scoreboard, and for drawing
+**Connection bar** (`shell.js`, #4): when it shows, `body.has-netbar` + `--netbar-h` (its measured height, safe area
+included) push the page and the sticky play header down, so 💡 📖 ⋯ → 🚪 stay reachable. A **guest** stuck behind it
+for 30 s (the host has gone) also gets 🚪 離開 inside the bar (two taps). `sh.leave(node?)` / `sh.confirm(text, node?,
+opts?)` are the shell's own arm-then-confirm entry points (lobby ‹ and ✕ 踢走 and results 🚪 go through them; ConfigForm's
+↺ 重置 calls `confirmTap` itself).
+
+**Results screen** (`screens/results.js`): hero (#39, `logic.resultHero`) — the game's emoji + name as a small
+kicker line, then the **result** as the headline: the game's `summary` (every scoring game writes it as the result,
+「貪瞓鼠贏 — 大盜 阿明 畀人揪出」), 🚫 呢鋪唔計 for `lastResult.void`, 「邊個贏由你哋講」 for `noScore`, else 🏆 贏家 /
+🤝 冇人贏 — never 「<game> — 贏家」; then the winners' chips. Confetti (winners only) uses the game's own emoji.
+「點解會咁」 (or `result.linesTitle`) as foldable sections (`result.lines`), points card, the evening scoreboard, and for drawing
 games a **keepsake** card: `app.keepsake()` pictures, view-only, thumbnails when there are several, 「💾 儲存圖片」
 (PNG files, 1080 px + a caption strip; the share sheet where `navigator.canShare` allows, else downloads). The PNGs
 are rendered as soon as the screen opens so the tap itself can call `navigator.share` (iOS needs a real tap).

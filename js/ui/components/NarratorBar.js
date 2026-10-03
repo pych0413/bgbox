@@ -7,7 +7,7 @@
 //
 //   cue   { id, text } | null      mode   'voice' | 'read' | 'silent'
 //
-// Optional extras: `paused` + `onPause` (a ⏸ button) and `hidden`.
+// Optional extras: `paused` + `onPause` (a ⏸ button), `hidden`, and `confirmNext` (see #13 below).
 //
 // Watchdog (BACKLOG #1): `stalled: true` (+ `line`, `reason`) means the phone was asked
 // to speak and nothing came out (no start within 1.5 s, the length timeout hit,
@@ -15,21 +15,26 @@
 // big text for a human to read out, with 🔁 重講, ⏭ 跳過 (`onSkip`, finishes
 // just this line) and 下一步.
 //
-//  - voice  the phone speaks; the line is shown small, 🔁 replays it, 下一步 skips.
+//  - voice  the phone speaks; the line is shown small, 🔁 replays it, ⏭ 跳過呢步 skips.
 //  - read   a human narrator reads the big text aloud and presses 下一步.
-//  - silent on-screen prompt only; steps advance on timers (下一步 still skips).
+//  - silent on-screen prompt only; steps advance on timers (⏭ 跳過呢步 still skips).
 //
 // The bar never speaks by itself: the app speaks cues and reports them done.
 //
 // 下一步 ignores a second tap within NEXT_COOLDOWN_MS (qa:werewolf): in 讀稿 a double tap would
 // otherwise acknowledge the line AND cut the night window that follows it short.
 //
+// #13: the host's skip is not the screen's main action. It is a ghost 「⏭ 跳過呢步」 — except for the
+// 讀稿 narrator (and a stalled line), whose big 「下一步 ⏭」 IS the main action. `confirmNext` (a string,
+// the play screen sets it while skipping would cut somebody off: an open vote, a night window) makes the
+// first tap arm the button (「再㩒一次：…」, dom.js confirmTap) and only the second one call onNext.
+//
 // `compact: true` (the play screen sets it while this phone's seat can draw on a Canvas) folds the
 // bar to ONE line — icon, the line cut short, 下一步 — so it never covers the drawing sheet. A ▴
 // button opens it for this turn; the next time `compact` switches on it folds again.
 // ============================================================
 
-import { el } from '../dom.js?v=1';
+import { el, confirmTap, isArmed, disarmConfirm } from '../dom.js?v=1';
 
 /** Why the line did not come out (app.state.narration.reason) → what the host is told. */
 const STALL_TEXT = {
@@ -39,6 +44,9 @@ const STALL_TEXT = {
 };
 const STALL_DEFAULT = '⚠️ 部手機冇讀出聲 — 麻煩你讀出嚟：';
 const NEXT_COOLDOWN_MS = 1500;
+const NEXT_KEY = 'narrator-next';
+const SKIP_LABEL = '⏭ 跳過呢步';
+const READ_LABEL = '下一步 ⏭';
 
 const MODES = [
   ['voice', '🔊 語音'],
@@ -58,7 +66,7 @@ export function NarratorBar(props = {}) {
   const replayBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'aria-label': '再讀一次' }, '🔁 重講');
   const skipBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'aria-label': '跳過呢句' }, '⏭ 跳過');
   const pauseBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' });
-  const nextBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button' }, '下一步 ⏭');
+  const nextBtn = el('button', { class: 'btn btn-ghost btn-sm c-narratorbar-next', type: 'button' }, SKIP_LABEL);
   const foldBtn = el('button', { class: 'c-narratorbar-fold', type: 'button' });
   const actions = el('div', { class: 'c-narratorbar-actions' }, replayBtn, skipBtn, pauseBtn, nextBtn);
   const modeRow = el('div', { class: 'c-narratorbar-modes', role: 'group', 'aria-label': '旁白方式' },
@@ -79,6 +87,8 @@ export function NarratorBar(props = {}) {
   nextBtn.addEventListener('click', () => {
     const now = Date.now();
     if (now - nextAt < NEXT_COOLDOWN_MS) return;          // a double tap: the first one already moved the table on
+    // skipping would cut somebody off: the first tap only arms (#13)
+    if (p.confirmNext && !confirmTap(p.confirmNext, { node: nextBtn, key: NEXT_KEY, onDisarm: () => paintNext() })) return;
     nextAt = now;
     root.classList.add('cooling');
     clearTimeout(coolTimer);
@@ -86,6 +96,32 @@ export function NarratorBar(props = {}) {
     p.onNext?.();
   });
   pauseBtn.addEventListener('click', () => p.onPause?.());
+
+  /**
+   * 下一步 / 跳過呢步. The 讀稿 narrator with a line to read (or a stalled line someone reads out) moves the
+   * table on with it: big and primary, 「下一步 ⏭」. Anywhere else it is the host skipping a step: a small ghost
+   * 「⏭ 跳過呢步」, never the brightest thing on the screen. An armed button keeps its 「再㩒一次」 label.
+   */
+  function paintNext() {
+    // nothing to confirm any more (the last ballot came in): an armed label would only mislead
+    if (!p.confirmNext && isArmed(NEXT_KEY, nextBtn)) { disarmConfirm(); return; }   // (onDisarm repaints)
+    const mode = p.mode ?? 'voice';
+    const stalled = !!p.stalled && mode === 'voice';
+    const line = (stalled && p.line) || p.cue?.text || '';
+    const reading = (mode === 'read' && !!line) || stalled;
+    const compact = !!p.compact && !unfolded;
+    const big = reading && !compact;                    // a skip with no line to read stays small, even in 讀稿
+    nextBtn.hidden = !p.onNext;
+    nextBtn.disabled = !line && mode !== 'read';
+    nextBtn.classList.toggle('btn-primary', reading);
+    nextBtn.classList.toggle('btn-ghost', !reading);
+    nextBtn.classList.toggle('btn-lg', big);
+    nextBtn.classList.toggle('btn-sm', !big);
+    if (!isArmed(NEXT_KEY, nextBtn)) {
+      const label = reading ? READ_LABEL : SKIP_LABEL;
+      if (nextBtn.textContent !== label) nextBtn.textContent = label;
+    }
+  }
 
   const api = {
     el: root,
@@ -109,11 +145,6 @@ export function NarratorBar(props = {}) {
       skipBtn.hidden = !stalled || !p.onSkip;
       pauseBtn.hidden = !p.onPause || stalled;
       pauseBtn.textContent = p.paused ? '▶ 繼續' : '⏸ 暫停';
-      nextBtn.hidden = !p.onNext;
-      const big = mode === 'read' || stalled;
-      nextBtn.classList.toggle('btn-lg', big);
-      nextBtn.classList.toggle('btn-sm', !big);
-      nextBtn.disabled = !line && mode !== 'read';
 
       for (const b of modeRow.children) b.classList.toggle('on', b.dataset.mode === mode);
       modeRow.hidden = !p.onMode;
@@ -132,9 +163,8 @@ export function NarratorBar(props = {}) {
         pauseBtn.hidden = true;
         modeRow.hidden = true;
         stallEl.hidden = true;                 // the 📢 icon still says it; ▴ shows the whole story
-        nextBtn.classList.remove('btn-lg');
-        nextBtn.classList.add('btn-sm');
       }
+      paintNext();
 
       // a new line gets a little entrance so a read-aloud narrator notices it
       if (p.cue?.id !== lastCueId) {
@@ -144,7 +174,11 @@ export function NarratorBar(props = {}) {
         if (p.cue) root.classList.add('fresh');
       }
     },
-    destroy() { clearTimeout(coolTimer); root.remove(); },
+    destroy() {
+      clearTimeout(coolTimer);
+      if (isArmed(NEXT_KEY, nextBtn)) disarmConfirm();
+      root.remove();
+    },
   };
 
   api.update(p);

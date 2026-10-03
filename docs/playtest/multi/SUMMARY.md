@@ -85,3 +85,20 @@ No app blocker survived verification in any game. 8 of 10 matches finished on th
 - D15 骰盅: add a lockOnRoll option for liar's dice? Add one 「點玩」 line per preset behind 💡?
 - D16 Re-runs to complete 'every game, one match': 9upper with preset 'quick', and custom after fix #0 or #3, using sonnet players only. Run them now, or after the P1 fixes?
 - D17 Help-on-demand: several fixes add always-visible lines (芝士大盜 「睇唔切唔緊要…」, 9upper 「諗樣仲可以追問」, 阿瓦隆 「唔使趕…」). Confirm that short status facts may stay inline and that anything teaching goes behind 💡 or into 📖.
+
+## Decisions (user, 2026-10-04 — "全部照你建議")
+
+| asked as | summary item | decision |
+|---|---|---|
+| D1 | D1 night brightness in 靜音 | One readable partial dim (~70%) on every phone all night in 靜音; no lift for the awake seat. Voice / 讀稿 keep today's behaviour. |
+| D2 | D3 誰是臥底 end of discussion | A majority of alive seats must want to vote; dead seats cannot end it. |
+| D3 | D5 result screens (間諜, 假畫家, 誰是臥底) | Advance when every seat has tapped 睇完; the host can force it. Drop 誰是臥底's 20 s auto-advance. |
+| D4 | D7 + D6 a seat that stops responding | The host can mark a seat absent (generic `@absent` host action; votes and unanimity count present seats only). 9upper supports 呢輪作廢: redeal with the same 諗樣, or move on when the 諗樣 is the stuck seat. |
+| D5 | D8 9upper default for travel | 快玩 (4 rounds) is the default preset; 官方玩法 stays one tap away. 「我識呢條」 only flags the 諗樣's swap button. |
+| D6 | D14 your own vote on screen | Hidden-role games show 已投 ✓ without the name (VotePanel secretChoice). |
+| D7 | D9 狼人殺 timing | 遺言 60 s (official); dawn result on screen ≥ 8 s; 票型 4 s + 0.8 s per voter, max 15 s. |
+| D8 | D10 阿瓦隆 | assassinSecs 120 s soft timer by default; keep showing who played which quest card in the results (documented deviation). |
+| D9 | D11 你畫我猜 close rule | For 2-character words no 好接近 from a same-position match before a hint has revealed that position. |
+| — | D16 re-runs | After the fixes: re-run 9upper (快玩) and custom with sonnet players. |
+| — | D17 help on demand | Short status facts may stay inline; anything that teaches goes behind 💡 / 📖. |
+| — | D2, D4, D12, D13, D15 | Not asked: keep current behaviour (D12 fake-artist tally: 7 s; D13 done in round 1). |

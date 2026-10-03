@@ -2,7 +2,7 @@
 // SeatEditor — the lobby's seat list: reorder it to match who really sits
 // where, pick colours, remove people.
 //
-//   SeatEditor({ players, me, isHost, onMove(pid, index), onColor(pid, color), onKick(pid) })
+//   SeatEditor({ players, me, isHost, onMove(pid, index), onColor(pid, color), onKick(pid, button) })
 //     → { el, update(props), destroy() }
 //
 // Optional extras: `mySeats` ([pid], every seat on THIS device; default [me]),
@@ -143,7 +143,7 @@ export function SeatEditor(props = {}) {
     if (canRemove(pl)) {
       li.append(el('button', {
         class: 'c-seateditor-btn del', type: 'button', 'aria-label': `移走 ${pl.name}`,
-        onclick: () => p.onKick(pl.id),
+        onclick: (e) => p.onKick(pl.id, e?.currentTarget ?? null),
       }, '✕'));
     }
     return li;

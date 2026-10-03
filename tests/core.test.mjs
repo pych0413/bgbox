@@ -2956,3 +2956,87 @@ test('room: meta.narrationDefault picks a quiet game\'s mode while it is selecte
   assert.equal(back.narration.mode, 'read', 'the preference survives a host refresh');
   back.dispose();
 });
+
+// ============================================================
+// playtest fixes (docs/playtest/multi/SUMMARY.md #13, #14, #39) — what the room tells each device
+// ============================================================
+
+test('room #14: a named step calling several seats is `together` on each named device; a lone turn and an anonymous step never are', async () => {
+  const g = makeCentreGame();
+  let shape = 'two';
+  g.engine.focus = (st) => {
+    if (st.phase !== 'night') return null;
+    if (shape === 'two') return { pids: ['p2', 'p3'] };
+    if (shape === 'one') return { pids: ['p2'] };
+    return { pids: ['p2', 'p3'], anonymous: '狼人請拎起部手機' };
+  };
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  hello(t.room, 'peer_b', 'dev_b', '阿強');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  const focusOf = (dev) => lastTo(t.sent, dev, 'views').focus;
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'], together: true }, 'a deal / a vote: everybody\'s at once');
+  assert.deepEqual(focusOf('dev_b'), { pids: ['p3'], together: true });
+  assert.equal(focusOf('dev_host'), null, 'a device not named still learns nothing');
+  shape = 'one';
+  assert.equal(t.room.act('dev_b', 'p3', { type: 'tap' }), true);
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'] }, 'a lone turn: 輪到你');
+  shape = 'anon';
+  assert.equal(t.room.act('dev_b', 'p3', { type: 'tap' }), true);
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'], anonymous: '狼人請拎起部手機' }, 'eyes closed: never "you are not the only one awake"');
+  assert.deepEqual(focusOf('dev_host'), { pids: [], anonymous: '狼人請拎起部手機' });
+});
+
+test('room #13: only the host device learns whether the engine waits on anyone (its ⏭ then takes two taps)', async () => {
+  const g = makeCentreGame();
+  let waitOn = ['p3'];
+  g.engine.focus = (st) => (st.phase === 'night' && waitOn ? { pids: waitOn } : null);
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  hello(t.room, 'peer_b', 'dev_b', '阿強');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  const host = () => lastTo(t.sent, 'dev_host', 'views');
+  assert.equal(host().focus, null, 'the host\'s own focus is filtered to its own seat…');
+  assert.equal(host().waiting, true, '…but it is told the table waits on somebody');
+  assert.equal('waiting' in lastTo(t.sent, 'dev_a', 'views'), false, 'other devices never get it');
+  waitOn = null;
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'tap' }), true);
+  assert.equal(host().waiting, false);
+  waitOn = [];
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'tap' }), true);
+  assert.equal(host().waiting, false, 'an empty named focus waits on nobody');
+});
+
+test('room #39: result.noScore and result.linesTitle reach lastResult; the history line is marked noScore', async () => {
+  const g = makeCentreGame();
+  g.engine.result = (st) => (st.phase === 'day' ? { winners: [], summary: '玩咗 1 回合', lines: ['a'], noScore: true, linesTitle: '  記錄  ' } : null);
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'see' }), true);
+  assert.equal(t.room.phase, 'results');
+  const snap = t.room.snapshot();
+  assert.equal(snap.lastResult.noScore, true);
+  assert.equal(snap.lastResult.linesTitle, '記錄');
+  assert.equal(snap.history.at(-1).noScore, true);
+  assert.equal(snap.scoreboard.p2.wins, 0, 'nothing changes in how it scores');
+});
+
+test('app #13: state.waiting reaches the host app only, and follows the table', async () => {
+  const f = await hostAndTwo();
+  const { host, a } = f;
+  assert.equal(host.state.waiting, false, 'nothing to wait on in the lobby');
+  await host.lobby.selectGame('fake');
+  host.lobby.start();
+  await settle();
+  assert.equal(host.state.waiting, true, 'the pick step waits on every seat');
+  assert.equal(a.state.waiting, false, 'a guest never learns it');
+  await host.act('p1', { type: 'pick', n: 1 });
+  await a.act('p2', { type: 'pick', n: 2 });
+  await f.b.act('p3', { type: 'pick', n: 3 });
+  await settle();
+  assert.equal(host.state.waiting, false, 'every pick is in: a skip now cuts nobody off');
+});
