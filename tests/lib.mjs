@@ -33,6 +33,7 @@ export function makePlayers(n) {
 /**
  * In-memory content bag with the same contract as js/core/bag.js:
  *   draw(bankId, filter?) → entry | null   (without replacement; refills when the filtered pool runs out)
+ *   release(bankId, key) → bool          (put an offered-but-unused entry back)
  *   stats(bankId, filter?) → { used, total }
  * `banks` = { bankId: entries[] }  (draw-words should be passed already flattened to {w, alt, level, cat}).
  */
@@ -49,6 +50,13 @@ export function makeBag(banks = {}, rng = mulberry32(99)) {
       const e = pool[Math.floor(rng() * pool.length)];
       u.add(key(e));
       return clone(e);
+    },
+    /** Put an entry back by its key (draw-guess: the word `w`), as core bag.release does. */
+    release(bankId, k) {
+      const u = used[bankId];
+      if (!u || typeof k !== 'string') return false;
+      const hit = [...u].find((s) => s === k || JSON.parse(s)?.w === k);
+      return hit !== undefined && u.delete(hit);
     },
     stats(bankId, filter = () => true) {
       const all = (banks[bankId] || []).filter(filter);

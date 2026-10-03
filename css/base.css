@@ -203,6 +203,9 @@ input[type=range] { width: 100%; accent-color: var(--cheese); height: 2rem; marg
 
 /* ---------- 4. buttons ---------- */
 
+/* A long press or a drag across buttons (name chips, word cards) must never start an iOS text selection or callout. */
+button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
 .btn {
   display: flex; align-items: center; justify-content: center; gap: .5rem;
   width: 100%; min-height: var(--tap);

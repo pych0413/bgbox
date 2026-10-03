@@ -321,10 +321,10 @@ export function mountLobby(sh) {
     }
   }
 
-  /** One-tap presets with a reason (BACKLOG #8): `config.presets?(n) → [{ id, label, reason, cfg }]`. */
+  /** One-tap presets with a reason (BACKLOG #8): `config.presets?(n, { singleDevice }) → [{ id, label, reason, cfg }]`. */
   function paintPresets(room, game, n) {
     let list = [];
-    try { list = typeof game?.config?.presets === 'function' ? (game.config.presets(n) ?? []) : []; } catch (err) { console.error('config.presets failed', err); }
+    try { list = typeof game?.config?.presets === 'function' ? (game.config.presets(n, { singleDevice: !!room.singleDevice }) ?? []) : []; } catch (err) { console.error('config.presets failed', err); }
     list = list.filter((p) => p && p.label && p.cfg && typeof p.cfg === 'object');
     const cfg = room.config ?? {};
     const current = list.find((p) => presetMatches(cfg, p.cfg))?.id ?? null;

@@ -321,7 +321,10 @@ included, does not change.
 | table | one public line per phase |
 
 `rules.roles`: every text is 「做乜… 點贏：…」 (aliases stay in the 做乜 part), so the 💡 sheet's 「你嘅角色」 shows what you do
-and how you win; it uses `my.dealt`, the role you were dealt — all the app ever tells you. `rules.quick`: six short lines.
+and how you win; it uses `my.dealt`, the role you were dealt — all the app ever tells you. Because cards change hands at night,
+every seat view that carries `my.dealt` also sets `view.hintRoleLabel = '你派到嘅角色'` (`script.js` `HINT_ROLE_LABEL`), so the sheet's
+heading says 「🎭 你派到嘅角色」 instead of claiming to know the card you hold now. The table view and an unknown seat have no `my`
+and so no label. `rules.quick`: six short lines.
 
 ### 3.8 Anti-tell handling (DESIGN §4)
 
@@ -448,7 +451,8 @@ decoy assertion. The Troublemaker's list is all pairs of the others; the Seer's 
 
 ### Views (whitelist, built field by field)
 
-Common: `seat, phase, n, title, subtitle, night, roleList [{role,count}], opts {loneWolf, ringVote, pace}, hint, deadline?, timerLabel?`.
+Common: `seat, phase, n, title, subtitle, night, roleList [{role,count}], opts {loneWolf, ringVote, pace}, hint, deadline?, timerLabel?`;
+for a seat that has `my`: `hintRoleLabel` (the constant 「你派到嘅角色」 — the 💡 sheet's role heading).
 Per phase: `deal` `ready {done,total}`; `night` `step {ix,total,k,stage}`, `acks {done,total}`; `day` `dayReady {done,total,mine}`,
 `canExtend`; `vote` `progress`, `ring {on,done,total,mine,stuck}`; `reveal`/`over` `reveal {…}` and `revealDone` — or, for a
 voided game, only `voided: true`.
@@ -512,7 +516,8 @@ win(village) = villageWins
 - **Framework hooks**: `blocking` (deal and vote only; never at night, in the day or the reveal; through a real `Session`);
   `@void-round` in each voidable phase (unscored, lines lay open the deal and the night, every view `voided`, nothing moves
   after) and refused from the reveal on; 💡 hints for every phase / seat / table, ≤ 40 characters, checked in every leak
-  pass.
+  pass; `view.hintRoleLabel` on every seat view that shows the dealt role (deal → over, voided too), on no table / stranger view, and
+  the 💡 sheet resolves the *dealt* role even after the robber took the card.
 - **Leaks**: structural whitelist of view keys; no secret key before the reveal; differential check (scramble every hidden
   card/vote → every seat's and the table's view is unchanged); own notes only; a robbed Doppelgänger shows only its face;
   votes secret until the reveal.

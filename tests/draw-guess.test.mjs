@@ -111,7 +111,7 @@ test('draw-guess: meta, rules and engine shape', () => {
   }
   assert.equal(roleFor({ role: 'guesser' }, rules).name, '估嘅人', 'the 💡 sheet finds the seat\'s role by view.role');
   for (const s of rules.sections) assert.ok(s.title && s.body);
-  for (const k of ['setup', 'act', 'advance', 'view', 'cue', 'focus', 'blocking', 'autoAct', 'legalActions', 'result', 'canInk']) {
+  for (const k of ['setup', 'act', 'advance', 'view', 'cue', 'focus', 'blocking', 'autoAct', 'legalActions', 'result', 'canInk', 'hostActions']) {
     assert.equal(typeof engine[k], 'function', k);
   }
 });
@@ -1678,6 +1678,141 @@ test('draw-guess: legalActions offers only actions that change the state (no clo
   }
 });
 
+// ---------- engine.hostActions: the host phone's ⋯ menu ----------
+
+const HOST_MOVES = [{ type: 'extend' }, { type: 'rule', uphold: true }, { type: 'rule', uphold: false }];
+/** A copy of this sim's table, to try a move on without touching it. */
+const probeOf = (sim) => {
+  const p = new Sim(game, { n: sim.players.length, banks: bankOf(UBANK), config: sim.config });
+  p.state = clone(sim.state);
+  p.now = sim.now;
+  return p;
+};
+/**
+ * The host-menu list at this moment, checked: every entry is a labelled plain action that changes the state when
+ * sent as @host, and the list is EXACTLY the host moves (＋30 秒, the two rulings) that would change it.
+ */
+function hostMenuAt(sim, where) {
+  const listed = engine.hostActions(sim.state);
+  for (const h of listed) {
+    assert.ok(h.label.length <= 24, `${where}: label fits the menu (${h.label})`);
+    assert.match(h.label, /\p{Extended_Pictographic}/u, `${where}: an emoji (${h.label})`);
+    assert.deepEqual(clone(h.action), h.action, `${where}: a plain JSON action`);
+    assert.notEqual(h.action.type, 'void', `${where}: 作廢 is the shell's own 🗑️ 呢輪作廢 — not doubled here`);
+    assert.ok(probeOf(sim).host(h.action), `${where}: ${h.label} changed nothing`);
+  }
+  const changing = HOST_MOVES.filter((a) => probeOf(sim).host(a)).map((a) => JSON.stringify(a)).sort();
+  assert.deepEqual(listed.map((h) => JSON.stringify(h.action)).sort(), changing, `${where}: lists exactly the legal ones`);
+  return listed;
+}
+/** What the shell's 🗑️ 呢輪作廢 (@void-round) can do here: the void that hostActions deliberately leaves to it. */
+const shellVoids = (sim) => probeOf(sim).host({ type: ACT.VOID_ROUND });
+
+test('draw-guess hostActions: ＋30 秒 only while a drawing clock runs, nothing in the choice, the grace, the buzzer, the reveal, the leaderboard or the end', () => {
+  // free-for-all, shout
+  const ffa = mk(5, 9, { roundSeconds: 60 }, bankOf(UBANK));
+  assert.deepEqual(hostMenuAt(ffa, 'choose'), []);
+  assert.ok(shellVoids(ffa), 'choose: 呢輪作廢 is the shell\'s');
+  pick(ffa, 2);
+  const run = hostMenuAt(ffa, 'play/run');
+  assert.deepEqual(run.map((h) => h.action), [{ type: 'extend' }]);
+  assert.ok(shellVoids(ffa), 'play: 呢輪作廢 is the shell\'s');
+  const T0 = T(ffa).T;
+  const end0 = endOf(ffa);
+  assert.ok(ffa.host(run[0].action));
+  assert.equal(T(ffa).T, T0 + 30000, '＋30 秒 grows the turn');
+  assert.equal(endOf(ffa), end0 + 30000, 'and the clock');
+  // it stops being offered exactly when the engine stops accepting it (10 minutes in total)
+  for (let i = 0; i < 40 && engine.hostActions(ffa.state).length; i++) assert.ok(ffa.host({ type: 'extend' }));
+  assert.deepEqual(engine.hostActions(ffa.state), [], 'at the cap there is nothing to offer');
+  assert.ok(T(ffa).T <= 600000 && T(ffa).T + 30000 > 600000);
+  assert.equal(ffa.host({ type: 'extend' }), false);
+
+  // typed play offers it too
+  const typed = mk(5, 4, { ...typedCfg }, bankOf(UBANK));
+  pick(typed, 2);
+  assert.deepEqual(hostMenuAt(typed, 'typed/run').map((h) => h.action), [{ type: 'extend' }]);
+
+  // grace (the clock is frozen), then the buzzer, then the reveal
+  const gr = mk(5, 9, { roundSeconds: 60 }, bankOf(UBANK));
+  pick(gr, 2);
+  gr.now += 800;
+  assert.ok(gr.act(D(gr), { type: 'accept', target: guessers(gr)[0] }));
+  assert.equal(T(gr).sub, 'grace');
+  assert.deepEqual(hostMenuAt(gr, 'play/grace'), []);
+  const bz = mk(5, 9, { roundSeconds: 60 }, bankOf(UBANK));
+  pick(bz, 2);
+  for (let i = 0; i < 20 && T(bz).sub === 'run'; i++) bz.advance();
+  assert.equal(T(bz).sub, 'buzzer');
+  assert.deepEqual(hostMenuAt(bz, 'play/buzzer'), []);
+  assert.ok(shellVoids(bz));
+  bz.advance();
+  assert.equal(bz.state.phase, 'reveal');
+  assert.deepEqual(hostMenuAt(bz, 'reveal'), []);
+  assert.ok(shellVoids(bz), 'reveal: 呢輪作廢 is the shell\'s');
+
+  // the whole game, step by step: always exactly the legal ones, and the menu is empty outside a running clock
+  const walk = mk(4, 3, { roundSeconds: 60 }, bankOf(UBANK));
+  const seen = new Set();
+  for (let i = 0; i < 600 && walk.state.phase !== 'over'; i++) {
+    if (walk.state.phase === 'choose') pick(walk, 2); else walk.advance();
+    const where = `${walk.state.phase}/${T(walk).sub}`;
+    seen.add(where);
+    const listed = hostMenuAt(walk, where);
+    if (!(walk.state.phase === 'play' && T(walk).sub === 'run')) assert.deepEqual(listed, [], where);
+  }
+  assert.equal(walk.state.phase, 'over');
+  for (const k of ['play/run', 'play/buzzer', 'reveal/done', 'standings/done']) assert.ok(seen.has(k), `the walk visited ${k} (${[...seen]})`);
+  assert.deepEqual(engine.hostActions(walk.state), [], 'the end');
+});
+
+test('draw-guess hostActions: a pending team foul offers exactly 成立 / 唔成立 — in the play and in the reveal — and each one rules', () => {
+  const tm = mk(6, 5, { teamMode: 'teams', roundSeconds: 60 }, bankOf(TRIO));
+  pick(tm, '老虎');
+  assert.deepEqual(hostMenuAt(tm, 'play/run').map((h) => h.action), [{ type: 'extend' }]);
+  const rival = tm.state.teams[1 - T(tm).team].members[0];
+  const left = endOf(tm) - tm.now;
+  assert.ok(tm.act(rival, { type: 'foul' }));
+  assert.equal(T(tm).sub, 'ruling');
+  const ruling = hostMenuAt(tm, 'play/ruling');
+  assert.deepEqual(ruling.map((h) => h.action), [{ type: 'rule', uphold: true }, { type: 'rule', uphold: false }], '＋30 秒 is not offered while the clock is frozen');
+  assert.ok(ruling[0].label.includes('成立') && !ruling[0].label.includes('唔成立'));
+  assert.ok(ruling[1].label.includes('唔成立'));
+  assert.ok(shellVoids(tm), 'a pending ruling can still be voided by the shell');
+  const no = probeOf(tm);
+  assert.ok(no.host(ruling[1].action));
+  assert.equal(T(no).sub, 'run', '唔成立: play resumes');
+  assert.equal(endOf(no) - no.now, left, 'with the time that was left');
+  assert.deepEqual(engine.hostActions(no.state).map((h) => h.action), [{ type: 'extend' }], 'the ruling is gone, ＋30 秒 is back');
+  const yes = probeOf(tm);
+  assert.ok(yes.host(ruling[0].action));
+  assert.equal(yes.state.phase, 'reveal');
+  assert.equal(T(yes).outcome, 'fouled', '成立: the turn is over and scores nothing');
+  assert.deepEqual(yes.state.teamScores, [0, 0]);
+  assert.deepEqual(hostMenuAt(yes, 'reveal after the ruling'), []);
+
+  // a solved turn flagged in the reveal's first seconds
+  const rv = mk(6, 5, { teamMode: 'teams', roundSeconds: 60 }, bankOf(TRIO));
+  pick(rv, '老虎');
+  rv.act(D(rv), { type: 'accept', target: guessers(rv)[0] });
+  rv.advance();
+  assert.equal(rv.state.phase, 'reveal');
+  assert.deepEqual(hostMenuAt(rv, 'reveal'), []);
+  rv.now += 1000;
+  assert.ok(rv.act(rv.state.teams[1 - T(rv).team].members[0], { type: 'foul' }));
+  const rvRuling = hostMenuAt(rv, 'reveal/ruling');
+  assert.deepEqual(rvRuling.map((h) => h.action), [{ type: 'rule', uphold: true }, { type: 'rule', uphold: false }]);
+  const up = probeOf(rv);
+  assert.ok(up.host(rvRuling[0].action));
+  assert.deepEqual(up.state.teamScores, [0, 0], '成立: the point is taken back');
+  assert.deepEqual(hostMenuAt(up, 'reveal ruled'), []);
+  const down = probeOf(rv);
+  assert.ok(down.host(rvRuling[1].action));
+  assert.equal(sum(down.state.teamScores), 1, '唔成立: the point stands');
+  assert.deepEqual(hostMenuAt(down, 'reveal rejected'), []);
+  assert.ok(shellVoids(rv));
+});
+
 test('draw-guess session: pause shifts the clock, ink comes only from the drawer, snapshot/restore keeps the turn', () => {
   const clock = new FakeClock();
   const players = makePlayers(5);
@@ -1997,6 +2132,59 @@ test('draw-guess room: one phone, every seat — shout by default, and no seat v
     assert.equal(res.gameId, 'draw-guess');
     assert.ok(res.lines.includes(S.HEAD.turns));
   }
+});
+
+test('draw-guess room: the host phone\'s ⋯ menu carries ＋30 秒 and the team-foul ruling, whichever seat is on screen; stale or paused taps do nothing', async () => {
+  const { Room } = await import('../js/core/room.js?v=1');
+  const { createBag } = await import('../js/core/bag.js?v=1');
+  const clock = fakeClock();
+  const sent = [];
+  const saved = {};
+  const room = new Room({
+    code: null, hostDeviceId: 'dev_host', names: ['阿明', '阿強', '阿欣', '阿珍', '阿輝', '阿佳'], now: clock.now, rng: mulberry32(3), timers: clock,
+    bag: createBag({ storage: new Map(), rng: mulberry32(5), banks: { draw: { name: '畫畫題目', load: async () => UBANK, key: (e) => e.w } } }),
+    loadGame: async () => game, send: (deviceId, msg) => sent.push({ deviceId, msg: clone(msg) }),
+    store: { get: (k) => (k === 'bgb:cfg:draw-guess' ? { teamMode: 'teams', roundSeconds: 60 } : saved[k] ?? null), set: (k, v) => { saved[k] = v; } },
+    onCue: () => {}, narrationMode: 'silent',
+  });
+  assert.equal((await room.selectGame('draw-guess')).ok, true);
+  assert.equal(room.config.teamMode, 'teams');
+  assert.equal(room.start().ok, true);
+  const st = () => room.session.state;
+  const menu = () => [...sent].reverse().find((x) => x.deviceId === 'dev_host' && x.msg.t === 'views')?.msg.hostActions;
+  assert.deepEqual(menu(), [], 'choosing: nothing to offer');
+
+  assert.equal(room.act('dev_host', st().turn.drawer, { type: 'pick', i: 0 }), true);
+  const [plus] = menu();
+  assert.deepEqual(menu().map((m) => m.i), [0]);
+  assert.ok(plus.label.includes('＋30 秒'));
+  const T0 = st().turn.T;
+  room.pause();
+  assert.equal(room.hostAction(0, plus.label), false, 'paused: refused like every other move');
+  room.resume();
+  assert.equal(room.hostAction(0, plus.label), true);
+  assert.equal(st().turn.T, T0 + 30000, 'the drawing clock got its 30 seconds');
+
+  // a rival's 🚩 freezes the clock: the menu now offers the two rulings (and no ＋30 秒)
+  const [r1, r2] = st().teams[1 - st().turn.team].members;
+  assert.equal(room.act('dev_host', r1, { type: 'foul' }), true);
+  const [yes, no] = menu();
+  assert.deepEqual(menu().map((m) => m.i), [0, 1]);
+  assert.ok(yes.label.includes('成立') && !yes.label.includes('唔成立') && no.label.includes('唔成立'));
+  assert.equal(room.hostAction(1, yes.label), false, 'a tap on a label that moved under the finger fires nothing');
+  assert.equal(room.hostAction(1, no.label), true);
+  assert.equal(st().turn.sub, 'run', '唔成立: play resumes');
+  assert.deepEqual(menu().map((m) => m.label), [plus.label], 'back to ＋30 秒');
+  assert.equal(room.hostAction(0, yes.label), false, 'the old ruling button is stale now');
+
+  assert.equal(room.act('dev_host', r2, { type: 'foul' }), true);
+  const again = menu();
+  assert.equal(again[0].label, yes.label);
+  assert.equal(room.hostAction(0, again[0].label), true);
+  assert.equal(st().turn.outcome, 'fouled', '成立: the turn ends without a point');
+  assert.deepEqual(st().teamScores, [0, 0]);
+  assert.deepEqual(menu(), [], 'and the menu empties');
+  assert.equal(room.phase, 'playing');
 });
 
 // ============================================================

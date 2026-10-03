@@ -331,6 +331,7 @@ export class Room {
       config: clone(this.config),
       configSummary: summary,
       configValid: this.#configStatus(),
+      singleDevice: this.#singleDevice(),   // the env games get as config.*(…, { singleDevice })
       scoreboard: clone(this.scoreboard),
       history: clone(this.history),
       narration: { mode: this.narration.mode },
@@ -797,7 +798,7 @@ export class Room {
     if (n < min) return { ok: false, message: `最少要 ${min} 個人（而家 ${n}）`, warnings };
     if (n > max) return { ok: false, message: `最多 ${max} 個人（而家 ${n}）`, warnings };
     let v;
-    try { v = this.game.config.validate(clone(this.config), n); } catch (e) {
+    try { v = this.game.config.validate(clone(this.config), n, { singleDevice: this.#singleDevice() }); } catch (e) {
       console.error('[room] config.validate threw', e);
       v = { ok: false, message: '設定有問題' };
     }

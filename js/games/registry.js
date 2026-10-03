@@ -10,7 +10,7 @@
 // copy below exists only so the picker needs no module; tests/core.test.mjs
 // fails if a field here drifts from game.js. Mirrored fields:
 //   name, emoji, players, minutes, blurb, singleDevice, narration
-// (`batch` lives only here: 1 = shipped, 2 = probed before it is offered.)
+// (`batch` lives only here: 1 = shipped, 2 = probed before it is offered. All ten shipped 2026-10-03.)
 // ============================================================
 
 export const GAMES = [
@@ -23,21 +23,21 @@ export const GAMES = [
   },
   {
     id: 'onuw',
-    meta: { name: '一夜終極狼人', emoji: '🐺', players: [3, 10], minutes: [10, 20], batch: 2,
+    meta: { name: '一夜終極狼人', emoji: '🐺', players: [3, 10], minutes: [10, 20], batch: 1,
       singleDevice: 'partial', narration: 'recommended',
       blurb: '一晚換牌、一次投票，連自己係邊個都未必肯定。' },
     load: () => import('./onuw/index.js?v=1'),
   },
   {
     id: 'werewolf',
-    meta: { name: '狼人殺', emoji: '🐺', players: [6, 13], minutes: [25, 60], batch: 2,
+    meta: { name: '狼人殺', emoji: '🐺', players: [6, 13], minutes: [25, 60], batch: 1,
       singleDevice: 'partial', narration: 'required',
       blurb: '手機做上帝：夜晚閉眼、天光投票，揪出狼人。' },
     load: () => import('./werewolf/index.js?v=1'),
   },
   {
     id: 'avalon',
-    meta: { name: '阿瓦隆', emoji: '🏰', players: [5, 10], minutes: [30, 45], batch: 2,
+    meta: { name: '阿瓦隆', emoji: '🏰', players: [5, 10], minutes: [30, 45], batch: 1,
       singleDevice: 'full', narration: 'optional',
       blurb: '組隊出任務，好人要搵出內鬼，壞人要守住梅林。' },
     load: () => import('./avalon/index.js?v=1'),
@@ -58,14 +58,14 @@ export const GAMES = [
   },
   {
     id: 'fake-artist',
-    meta: { name: '假畫家', emoji: '🎨', players: [3, 10], minutes: [15, 25], batch: 2,
+    meta: { name: '假畫家', emoji: '🎨', players: [3, 10], minutes: [15, 25], batch: 1,
       singleDevice: 'full', narration: 'optional',
       blurb: '大家輪流落一筆畫同一幅畫，但有個人唔知畫乜。' },
     load: () => import('./fake-artist/index.js?v=1'),
   },
   {
     id: 'draw-guess',
-    meta: { name: '你畫我猜', emoji: '✏️', players: [3, 12], minutes: [15, 30], batch: 2,
+    meta: { name: '你畫我猜', emoji: '✏️', players: [3, 12], minutes: [15, 30], batch: 1,
       singleDevice: 'partial', narration: 'optional',
       blurb: '一個人畫，其他人搶住估，畫得越快越高分。' },
     load: () => import('./draw-guess/index.js?v=1'),

@@ -1181,6 +1181,8 @@ function buildView(s, pid) {
       break;
     default: break;
   }
+  // every seat view that carries the dealt role names it so on the 💡 sheet (cards change hands at night); the table has none
+  if (v.my?.dealt) v.hintRoleLabel = S.HINT_ROLE_LABEL;
   v.hint = hintFor(s, seat, v);
   return v;
 }

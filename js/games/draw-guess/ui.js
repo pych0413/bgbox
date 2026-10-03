@@ -13,7 +13,9 @@
 //            shout: a name chip per guesser · typed: the live guess feed with ✔ per guess
 //   guesser  timer, length mask, hints, the picture, and (typed) an input box
 //   rival    (team mode, the other team's turn) / spectator: the same public screen, no input; a rival may 🚩
-//   host     (its own seat) +30 s, 作廢今輪, and the ruling on a team foul
+//   host     (its own seat) +30 s, 作廢今輪, and the ruling on a team foul. The host phone's ⋯ menu offers +30 s and
+//            the ruling too (engine.hostActions, for a shared phone showing another seat); 作廢 there is the shell's
+//            own 🗑️ 呢輪作廢, so the bar stays as the one-tap shortcut on the host's own seat.
 //
 // Canvas (DESIGN §15.10): the drawer gets tools 'full'; viewers 'none' and canDraw false. canDraw comes from the
 // engine (engine.canInk). The engine never needs to know about strokes, so no { type: 'stroke' } is sent; a new

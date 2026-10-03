@@ -63,7 +63,7 @@ function emptyRoom() {
     configValid: { ok: false, message: '未揀遊戲', warnings: [] },
     scoreboard: {}, history: [], narration: { mode: 'voice' }, paused: false,
     stalled: [], lastResult: null, loading: null,
-    timer: null, claims: [], versionMismatch: [],
+    timer: null, claims: [], versionMismatch: [], singleDevice: false,
   };
 }
 

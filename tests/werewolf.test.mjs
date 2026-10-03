@@ -1971,6 +1971,9 @@ function assertGoodResult(sim, label) {
     assert.equal(r.winners.length, s.pl.filter((p) => (s.role[p] === 'werewolf') === (s.win === 'wolves')).length);
   }
   assert.ok(r.lines.some((l) => l.includes('身份揭曉')));
+  // only a human moderator sits out (the Room does not count him as having played); never anybody who played
+  assert.equal('spectators' in r, s.mod, label);
+  if (s.mod) assert.deepEqual(r.spectators, [s.hostPid], label);
 }
 
 const newSim = (n, seed, over = {}) => new Sim(game, { n, seed, config: { ...config.defaults(n), ...over } });
@@ -2139,6 +2142,103 @@ test('werewolf: human moderator — the moderator can drive the whole game with 
   assert.ok(sim.result(), 'the game ended on skips alone');
   assert.equal(sim.result().winners.length, 0, 'nobody did anything, so it was a draw');
   assert.ok(sim.result().lines.some((l) => l.includes('上帝：玩家1')));
+});
+
+test('werewolf: result.spectators names the human moderator — his seat, whichever it is — and an app-moderated table has none', () => {
+  // the stock fixture: p1 hosts and is the god
+  const sim = hmk({ pace: 'fast' });
+  assert.equal(sim.result(), null, 'no result while the game runs');
+  let guard = 0;
+  while (!sim.result() && guard++ < 2000) sim.act('p1', { type: 'skip' });
+  const r = sim.result();
+  assert.deepEqual(r.spectators, ['p1'], 'the moderator did not play');
+  assert.ok(!r.winners.includes('p1') && !sim.state.pl.includes('p1'));
+  assert.deepEqual(r.spectators, [sim.state.hostPid]);
+  assert.deepEqual(JSON.parse(JSON.stringify(r)), r, 'plain JSON');
+  assert.equal(sim.result().spectators.length, 1, 'asking again says the same');
+
+  // the god is whoever's phone hosts: seat 3
+  const h3 = new Sim(game, { n: 7, seed: 2, hostPid: 'p3', config: { ...config.defaults(7), moderator: 'human', pace: 'fast' } });
+  assert.equal(h3.state.mod, true);
+  assert.ok(!h3.state.pl.includes('p3') && h3.state.pl.includes('p1'));
+  for (let i = 0; !h3.result() && i < 2000; i++) h3.act('p3', { type: 'skip' });
+  assert.deepEqual(h3.result().spectators, ['p3']);
+  assert.ok(!h3.result().winners.includes('p3'));
+
+  // an app moderator: the host is a player like any other, nobody sits out
+  for (const [n, seed, hostPid] of [[6, 1, 'p1'], [9, 4, 'p2'], [12, 7, 'p1']]) {
+    const app = new Sim(game, { n, seed, hostPid, config: config.defaults(n) });
+    assert.equal(app.state.mod, false);
+    const res = playRandom(app, { rng: mulberry32(seed) });
+    assert.equal('spectators' in res, false, `n=${n}: no spectators key at all`);
+    assert.ok(app.state.pl.includes(hostPid), 'the host plays');
+  }
+});
+
+/** A one-phone Room (every seat on dev_host) playing werewolf at random until the results; returns the room and its last 'room' message. */
+async function roomGame(names, over, seed) {
+  const { Room } = await import('../js/core/room.js?v=1');
+  const { createBag } = await import('../js/core/bag.js?v=1');
+  let now = 1_700_000_000_000;
+  let seq = 0;
+  let timers = [];
+  const clock = {
+    now: () => now,
+    setTimeout: (fn, ms = 0) => { const id = ++seq; timers.push({ at: now + Math.max(0, ms), fn, id }); return id; },
+    clearTimeout: (id) => { timers = timers.filter((t) => t.id !== id); },
+    advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        const due = timers.filter((t) => t.at <= end).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+        if (!due) break;
+        timers = timers.filter((t) => t !== due);
+        now = Math.max(now, due.at);
+        due.fn();
+      }
+      now = end;
+    },
+  };
+  const sent = [];
+  const saved = {};
+  const room = new Room({
+    code: null, hostDeviceId: 'dev_host', names, now: clock.now, rng: mulberry32(seed), timers: clock,
+    bag: createBag({ storage: new Map(), rng: mulberry32(5), banks: {} }),
+    loadGame: async () => game, send: (deviceId, msg) => sent.push({ deviceId, msg: clone(msg) }),
+    store: { get: (k) => (k === 'bgb:cfg:werewolf' ? over : saved[k] ?? null), set: (k, v) => { saved[k] = v; } },
+    onCue: () => {}, narrationMode: 'silent',
+  });
+  const sel = await room.selectGame('werewolf');
+  assert.equal(sel.ok, true, sel.message);
+  assert.equal(room.config.moderator, over.moderator ?? 'app');
+  const st = room.start();
+  assert.equal(st.ok, true, st.message);
+  const rng = mulberry32(seed + 1);
+  for (let i = 0; room.phase === 'playing' && i < 60000; i++) {
+    const movers = room.session.state.order.filter((p) => room.session.legal(p).length);
+    if (movers.length && rng() < 0.4) {
+      const pid = movers[Math.floor(rng() * movers.length)];
+      const opts = room.session.legal(pid).filter((a) => a.type !== 'explode');
+      if (opts.length) room.act('dev_host', pid, opts[Math.floor(rng() * opts.length)]);
+    } else clock.advance(3000);
+  }
+  assert.equal(room.phase, 'results', 'the game reached the results');
+  return { room, last: [...sent].reverse().find((x) => x.deviceId === 'dev_host' && x.msg.t === 'room').msg.room };
+}
+
+test('werewolf room: the scoreboard does not count the human moderator as having played — and counts everybody at an app-moderated table', async () => {
+  const names = ['主持', '甲', '乙', '丙', '丁', '戊', '己'];
+  for (const seed of [3, 8]) {
+    const human = await roomGame(names, { moderator: 'human', pace: 'fast' }, seed);
+    const sb = human.last.scoreboard;
+    assert.deepEqual(sb.p1, { played: 0, wins: 0, points: 0 }, `seed ${seed}: the god sat this one out`);
+    for (const p of ['p2', 'p3', 'p4', 'p5', 'p6', 'p7']) assert.equal(sb[p].played, 1, `seed ${seed}: ${p} played`);
+    assert.equal(human.last.lastResult.gameId, 'werewolf');
+    assert.ok(!human.last.lastResult.winners.includes('p1'));
+    assert.equal('spectators' in human.last.lastResult, false, 'the hint is for the Room, it is not part of the shown result');
+
+    const app = await roomGame(names, { moderator: 'app', pace: 'fast' }, seed);
+    for (const p of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) assert.equal(app.last.scoreboard[p].played, 1, `seed ${seed}: ${p} played (app moderator)`);
+  }
 });
 
 test('werewolf: human moderator — a skip at each stage does what 下一步 should', () => {

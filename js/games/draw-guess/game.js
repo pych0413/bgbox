@@ -1379,6 +1379,29 @@ function legalActions(state, pid) {
   return out;
 }
 
+/**
+ * The host phone's own buttons (the ⋯ menu), dispatched as @host: on one shared phone the host seat's on-screen 「主持」
+ * bar is out of reach while another seat's screen is up. Only what changes the state right now: ＋30 秒 while a
+ * drawing clock runs, the two rulings while a team foul is pending. Never 呢題作廢: the shell's 🗑️ 呢輪作廢 sits in the
+ * same menu (with its confirm) and sends @void-round, which voids exactly the same turns, so a second one would only
+ * double it — and skip the confirm.
+ */
+function hostActions(state) {
+  const s = state;
+  const t = s.turn;
+  if (!t || s.phase === 'over') return [];
+  if (t.ruling) {
+    return [
+      { label: '🚩 犯規成立（今輪冇分）', action: { type: 'rule', uphold: true } },
+      { label: '▶️ 犯規唔成立，繼續', action: { type: 'rule', uphold: false } },
+    ];
+  }
+  if (s.phase === 'play' && t.sub === 'run' && t.T + EXTEND_MS <= MAX_TOTAL_MS) {
+    return [{ label: '⏱️ ＋30 秒', action: { type: 'extend' } }];
+  }
+  return [];
+}
+
 /** 「代佢做」 for a seat the table is waiting on (see `blocking`): the medium card, or "not upheld". */
 function autoAct(state, pid) {
   const s = state;
@@ -1477,4 +1500,4 @@ function result(state) {
   };
 }
 
-export const engine = { setup, act, advance, view, cue, focus, blocking, canInk, autoAct, legalActions, result };
+export const engine = { setup, act, advance, view, cue, focus, blocking, canInk, autoAct, legalActions, hostActions, result };

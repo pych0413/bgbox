@@ -12,7 +12,7 @@ import { mulberry32, clone } from '../js/core/engine-kit.js';
 import * as game from '../js/games/onuw/game.js';
 import * as S from '../js/games/onuw/script.js';
 import { GAMES } from '../js/games/registry.js';
-import { roleParts, presetMatches } from '../js/ui/logic.js';
+import { roleParts, roleFor, presetMatches } from '../js/ui/logic.js';
 
 const { engine, config, meta, rules } = game;
 const ALL_ROLES = game.ROLE_ORDER;
@@ -1782,12 +1782,72 @@ test('onuw: 💡 hints — every phase gives a short first-timer line, built fro
   for (const ab of ['copy', 'seer', 'robber', 'troublemaker', 'drunk', 'loneWolf']) assert.ok(H.night[ab], ab);
 });
 
+test('onuw: 💡 view.hintRoleLabel — every seat view that shows the dealt role says 「你派到嘅角色」 (cards change hands at night); the table and strangers get none', () => {
+  const label = '你派到嘅角色';
+  assert.equal(S.HINT_ROLE_LABEL, label);
+  assert.ok(label.trim().length > 0 && label.length <= 20, 'hints.js trims and cuts the heading at 20 characters');
+  // the robber takes p2's werewolf card: by morning p1 HOLDS a werewolf but was DEALT the robber
+  const deal = { p1: 'robber', p2: 'werewolf', p3: 'seer', p4: 'villager' };
+  const centre = ['villager', 'werewolf', 'tanner'];
+  const sim = scenario(deal, centre);
+  const seen = new Set();
+  const check = (where) => {
+    const s = st(sim);
+    seen.add(s.phase);
+    for (const pid of s.order) {
+      const v = engine.view(s, pid);
+      assert.ok(v.my?.dealt, `${where}: ${pid}'s view carries the dealt role`);
+      assert.equal(v.hintRoleLabel, label, `${where}: ${pid}`);
+      assert.equal(roleFor(v, rules)?.id, deal[pid], `${where}: the 💡 sheet resolves the DEALT role of ${pid}`);
+    }
+    for (const who of [null, 'nobody']) {
+      const v = engine.view(s, who);
+      assert.equal(v.my, undefined);
+      assert.equal('hintRoleLabel' in v, false, `${where}: a view without a role has no role heading (${who})`);
+    }
+  };
+  check('deal');
+  toNight(sim);
+  let guard = 0;
+  while (st(sim).phase === 'night' && guard++ < 200) {
+    check(`night/${stepK(sim)}/cue`);
+    sim.cueDone();
+    check(`night/${stepK(sim)}/window`);
+    if (stepK(sim) === 'robber') act(sim, 'p1', { type: 'rob', target: 'p2' });
+    sim.advance();
+  }
+  assert.equal(st(sim).phase, 'day');
+  assert.equal(finalAt(sim, 'p1'), 'werewolf', 'p1 now holds the werewolf card…');
+  check('day');
+  assert.equal(engine.view(st(sim), 'p1').my.dealt, 'robber', '…while the view, and so the sheet, still says what was dealt');
+  for (const p of st(sim).order) sim.act(p, { type: 'ready-vote', on: true });
+  assert.equal(st(sim).phase, 'vote');
+  check('vote');
+  st(sim).order.forEach((p, i) => sim.act(p, { type: 'vote', target: st(sim).order[(i + 1) % 4] }));
+  assert.equal(st(sim).phase, 'reveal');
+  check('reveal');
+  for (let i = 0; i < 6 && !sim.result(); i++) sim.advance();
+  assert.equal(st(sim).phase, 'over');
+  check('over');
+  assert.deepEqual([...seen].sort(), ['day', 'deal', 'night', 'over', 'reveal', 'vote']);
+
+  // a voided game still shows each seat its dealt card
+  const vd = scenario(deal, centre);
+  assert.equal(vd.host({ type: ACT.VOID_ROUND }), true);
+  for (const pid of st(vd).order) {
+    const v = engine.view(st(vd), pid);
+    assert.equal(v.voided, true);
+    assert.equal(v.hintRoleLabel, label, `voided: ${pid}`);
+  }
+  assert.equal('hintRoleLabel' in engine.view(st(vd), null), false);
+});
+
 // ============================================================
 // leaks: a seat only ever receives what its player may know
 // ============================================================
 
 const VIEW_KEYS = new Set(['seat', 'phase', 'n', 'title', 'subtitle', 'night', 'roleList', 'opts', 'deadline', 'timerLabel', 'ready',
-  'step', 'acks', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'voided']);
+  'step', 'acks', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'hintRoleLabel', 'voided']);
 const MY_KEYS = new Set(['dealt', 'ready', 'acked', 'night', 'notes']);
 const NIGHT_KEYS = new Set(['awake', 'info', 'ab', 'copied']);
 const SECRET_KEYS = ['cards', 'centre', 'orig', 'dop', 'log', 'votes', 'moves', 'final', 'report', 'why', 'recap', 'dealtCentre', 'counts', 'ringAgree'];

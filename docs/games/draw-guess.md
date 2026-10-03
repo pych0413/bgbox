@@ -153,7 +153,10 @@ FFA: every non-drawer has a two-tap 「🚩 犯規？」 with the count against 
 「呢輪係 🔵 藍隊 畫同估，你唔使估；見到犯規可以㩒 🚩。」 — a rival's 🚩 stops the clock (§5.5).
 
 **Host's seat** additionally shows a 「主持」 bar: 「＋30 秒」, a two-tap 「作廢今輪」 (§5.3) and, while a team foul
-is pending, 「🚩 成立（今輪冇分）」 / 「唔成立，繼續」.
+is pending, 「🚩 成立（今輪冇分）」 / 「唔成立，繼續」. The bar stays (it is the one-tap shortcut when the host plays on their own
+phone); the **host phone's ⋯ menu** carries ＋30 秒 and the two rulings as well (`engine.hostActions`, §5.2), so on one shared
+phone they are reachable whichever seat is on screen. 作廢 is *not* repeated there: the shell's own 🗑️ 呢輪作廢 (with its confirm)
+sits in the same menu and sends `@void-round`, which voids exactly the same turns.
 
 **Shout-mode resolution** (research "Voting & resolution B"):
 1. The drawer taps a name → a **3 s grace window** opens (「✅ 確認緊 — 仲有人同時估中就加埋，揀錯可以撤銷」, a
@@ -228,7 +231,7 @@ name chips. The word stays behind the peek chip / hold-to-peek cover, so the tab
 offer, and the drawer's screen never shows the word unless tapped). In canvas mode the drawer draws on that phone and
 everybody watches; in paper mode the phone is just the clock. During `reveal` / `standings` `focus` is `null`.
 On one phone only the active (drawer's) seat is on screen during play, so 🚩 is not reachable: fouls are settled at the
-table and the host can 作廢 the turn (the host seat's 主持 bar, or the shell's 呢鋪唔計 = `@void-round`).
+table; the host's ⋯ menu has ＋30 秒, the foul ruling (`engine.hostActions`) and 🗑️ 呢輪作廢 (`@void-round`) for whichever seat is on screen.
 ⌨️ typed needs a phone per player: one phone cannot type for everybody.
 
 ## 5. Engine
@@ -293,6 +296,18 @@ All from a seat (`pid` must be a seat); anything else is ignored and returns the
 | `@cue-done`, `@next` (host) | any | `@next`: first press acknowledges a pending cue, then it skips: choose → medium card, play → end now (or a pending ruling → not upheld), reveal → on, standings → next turn | |
 | `@void-round` (host, `ACT.VOID_ROUND`) | choose, play, reveal | — | the same as `void` (the shell's 呢鋪唔計) |
 | `extend` / `void` / `rule` from `@host` | as above | — | for a host menu that dispatches them as the host itself (one phone) |
+
+**`engine.hostActions(state)`** → `[{ label, action }]`, the host phone's ⋯ menu entries (the room shows them on the host device only and
+dispatches the chosen `action` as `@host`). Exactly the host moves that change the state right now, never a clock-dependent guess:
+
+| moment | entries |
+|---|---|
+| `play` / `run` (a drawing clock runs, total below 10 min) | 「⏱️ ＋30 秒」 → `{type:'extend'}` |
+| a team-foul ruling pending (`play` or `reveal`) | 「🚩 犯規成立（今輪冇分）」 → `{type:'rule', uphold:true}` · 「▶️ 犯規唔成立，繼續」 → `{type:'rule', uphold:false}` |
+| choose, grace, buzzer, reveal, standings, over, or at the 10 min cap | none |
+
+No `void` entry on purpose: the menu already has the shell's 🗑️ 呢輪作廢 (confirm, `@void-round`, the same `voidTurn`), and a second
+button would double it and skip the confirm.
 
 ### 5.3 advance / deadline
 
@@ -405,6 +420,10 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 - Choose: only the drawer, bad indexes, one re-roll, clock restart, timeout → medium; unpicked offers released.
 - Clock: the hint schedule (20/40/60 s of 80), reveal counts by word length, hints off, single category, gaps in the mask,
   pause shifting, `advance` ignoring early timers, host-only +30 s.
+- `hostActions`: at every step of a whole game the list is exactly the host moves (＋30 秒, 成立, 唔成立) that change the state, each
+  listed action sent as `@host` changes it, labels ≤ 24 characters with an emoji, never a `void`, empty outside a running clock /
+  a pending ruling, ＋30 秒 gone at the 10 min cap; the rulings in the play and in the reveal each do what they say; through the
+  real `Room` (one phone): the host device's views carry the labels, a stale label or a paused table fires nothing.
 - Scoring: every worked example, tier ranges, monotonic in time, half-up rounding in integers, foul/abandon/void/E = 0, teams.
 - Shout: accept rules, grace window, co-winners at the same `r`, undo (one / all / after close), the buzzer window (several taps,
   undo, ends when it closes, r = 0), late taps ≤ 2 s land in the buzzer window, abandon, void and `@void-round` in choose /
@@ -458,10 +477,9 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
    third argument to `config.validate(cfg, n, env)` (Room `#configStatus`) and `config.presets(n, env)` (lobby `paintPresets`), so a
    one-phone lobby shows the specific typed warning and hides the typed preset. Both are optional here; without them the generic
    warning and all presets appear.
-2. **呢鋪唔計 in the host menu** (ui): `app.hostCtl.voidRound()` exists in core; play.js does not offer it yet. On one phone the
-   active seat during play is the drawer's, so the host seat's 作廢今輪 is out of reach unless the host is drawing.
-3. A host-menu extension point (`engine.hostActions(state)` → `[{ label, action }]`, dispatched as `@host`) for 「＋30 秒」 and the
-   team-foul ruling on a shared phone; the engine already accepts `extend`, `void` and `rule` from `@host`.
+2. ~~呢鋪唔計 in the host menu~~ — done: play.js offers 🗑️ 呢輪作廢 in the host's ⋯ menu.
+3. ~~A host-menu extension point~~ — done: `engine.hostActions(state)` (§5.2) gives 「＋30 秒」 and the team-foul ruling on the host
+   phone; 作廢 is left to the shell's 🗑️ 呢輪作廢 so the menu has one of it.
 4. Lobby UI to move players between teams (today the seat order decides, or a random split).
 5. Optional: dedicated `ding` (a guesser got it) and `hint` sounds in `sfx.js`; the UI reuses `reveal`, `join` and `win`.
    The Canvas toolbar plays its own `tap` / `deny` sounds; a `quiet` prop would let typed play be silent on the drawer's phone too.

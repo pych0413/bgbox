@@ -264,7 +264,9 @@ or dropping a pending hunter window from the queue. The vote is the cutoff (rese
 
 ### 3.9 Game over, results, and the recap of hidden actions
 
-`result()` = `{ winners, summary, lines }`. `winners` is the whole winning camp (dead players included); a draw has none.
+`result()` = `{ winners, summary, lines }` (plus `spectators: [hostPid]` with a human moderator, nothing otherwise). `winners` is the whole
+winning camp (dead players included); a draw has none. `spectators` tells the Room the god sat this game out, so his `scoreboard.played`
+stays put; it never appears in an app-moderated game, where the host plays.
 
 - **Wolves win** (屠邊: all gods dead *or* all villagers dead; 屠城: all gods *and* villagers dead) or **good wins** (all wolves
   dead). If both qualify at once the **wolves win** (狼刀優先). The check runs after every death batch and **before** any trigger.
@@ -475,8 +477,8 @@ Deferred on purpose (so tell the players, as `rules.sections` does):
 
 Requests for the framework (status 2026-10-03 UTC):
 1. ~~`Sim` should pass `hostPid` to `setup`~~ — done (G1): `setup` uses `hostPid`, `Sim` passes `'p1'`.
-2. The room should keep a seat the engine marks as a non-player (the human moderator) out of `scoreboard.played` and `winners` fan-out —
-   today the moderator is simply never in `result.winners`; a `result.spectators` hint would let the scoreboard skip his "played".
+2. ~~The room should keep a seat the engine marks as a non-player (the human moderator) out of `scoreboard.played`~~ — done: `Room#finish`
+   honours `result.spectators: [pid]`; `result()` returns the moderator's pid there when `config.moderator === 'human'`, never otherwise.
 3. ~~An engine-provided `waitingOn(pid)` for the stall detector~~ — done as `engine.blocking` (implemented here, §5).
 4. NarratorBar in 讀稿 mode keeps 下一步 enabled during a running window, so a double tap skips it (the engine treats the first `@next` as the
    cue acknowledgement and the second as a skip, like 9upper). A short debounce there would protect a human narrator.

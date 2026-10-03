@@ -1559,7 +1559,7 @@ test('registry: lists all ten games with inline meta; load() is lazy', async () 
     assert.ok(m.batch === 1 || m.batch === 2, `${g.id}: batch`);
     assert.equal(typeof g.load, 'function');
   }
-  assert.deepEqual(GAMES.filter((g) => g.meta.batch === 2).map((g) => g.id), ['onuw', 'werewolf', 'avalon', 'fake-artist', 'draw-guess']);
+  assert.deepEqual(GAMES.filter((g) => g.meta.batch === 2).map((g) => g.id), [], 'batch 2 is released: every game is offered without probing');
 });
 
 test('util.makeStore: Web Storage, Map and nothing all behave the same and never throw', () => {

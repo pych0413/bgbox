@@ -43,7 +43,7 @@ Owner = which part of the code a follow-up pass touches.
 | G17 | M | Remove the invented Cheese Thief presets (偵探/守衛) from `custom`; point people to the real 芝士大盜. | games/custom |
 | G23 | M | Cap/chunk large messages (`inkSync`, `welcome`). | core/room |
 | G27 | M | /bgbox/ rename: redirect page carrying `?r=` and hash, README, launch.json name. | release |
-| G28 | L | Delete v1 files before the final bump. | release |
+| G28 | L | Delete v1 files before the final bump. | done (v1 js, styles.css, icon.svg removed) |
 
 ## Polish contract (core ↔ ui) — binding for the framework polish pass
 

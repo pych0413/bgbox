@@ -737,6 +737,12 @@ export const HINT = {
   },
 };
 
+/**
+ * The 💡 sheet's heading over the seat's role card (view.hintRoleLabel). Cards change hands at night, so the sheet
+ * must not claim 「你嘅角色」: what it shows is the role this seat was DEALT.
+ */
+export const HINT_ROLE_LABEL = '你派到嘅角色';
+
 // ---------- UI wording ----------
 
 export const T = {

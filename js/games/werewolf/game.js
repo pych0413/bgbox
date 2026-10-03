@@ -1579,7 +1579,8 @@ function result(state) {
   const s = state;
   if (s.phase !== 'over') return null;
   const o = s.outcome ?? buildResult(s);
-  return { winners: o.winners.slice(), summary: o.summary, lines: o.lines.slice() };
+  // a human moderator is a seated non-player: the Room must not count him as having played (scoreboard "played")
+  return { winners: o.winners.slice(), summary: o.summary, lines: o.lines.slice(), ...(s.mod ? { spectators: [s.hostPid] } : {}) };
 }
 
 export const engine = { setup, act, advance, view, cue, focus, autoAct, legalActions, blocking, result };
