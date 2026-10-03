@@ -20,7 +20,7 @@
 // (the Room caps actions at 8 KB and ink batches at 400 points).
 // ============================================================
 
-import { HostNet, ClientNet } from './net.js?v=20261003085536';
+import { HostNet, ClientNet } from './net.js?v=20261003090241';
 
 export const PROTOCOL = 2;
 

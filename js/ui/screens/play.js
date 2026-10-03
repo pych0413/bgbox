@@ -14,11 +14,11 @@
 // half-picked target can leak from one seat's screen to the next on a shared phone.
 // ============================================================
 
-import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=20261003085536';
-import { sfx } from '../../core/sfx.js?v=20261003085536';
-import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=20261003085536';
-import { HintSheet } from '../hints.js?v=20261003085536';
-import { textSize, setTextSize } from '../settings.js?v=20261003085536';
+import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=20261003090241';
+import { sfx } from '../../core/sfx.js?v=20261003090241';
+import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=20261003090241';
+import { HintSheet } from '../hints.js?v=20261003090241';
+import { textSize, setTextSize } from '../settings.js?v=20261003090241';
 
 /** A failed action, in words a player understands (the core's own short Cantonese message wins). */
 function sendFailedText(err) {
@@ -32,7 +32,7 @@ const cssLoaded = new Set();
 function ensureGameCss(id) {
   if (cssLoaded.has(id)) return;
   cssLoaded.add(id);
-  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=20261003085536` }));
+  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=20261003090241` }));
 }
 
 export function mountPlay(sh) {

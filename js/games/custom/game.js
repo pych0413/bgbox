@@ -25,7 +25,7 @@
 //    head-count; an edited one is kept and repaired.
 // ============================================================
 
-import { seatOrder, shuffle, rollDie, note } from '../../core/engine-kit.js?v=20261003085536';
+import { seatOrder, shuffle, rollDie, note } from '../../core/engine-kit.js?v=20261003090241';
 
 // ---------- limits ----------
 

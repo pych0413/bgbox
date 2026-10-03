@@ -11,11 +11,11 @@
 //   搖骰       iOS motion permission, for dice games (must come from a tap)
 // ============================================================
 
-import { el } from './dom.js?v=20261003085536';
-import { lsGet, lsSet, wakeLockActive } from '../core/util.js?v=20261003085536';
-import { primeAudio, sfx } from '../core/sfx.js?v=20261003085536';
-import { openSheet } from './sheet.js?v=20261003085536';
-import { shakeStatus, enableShake } from './components/DiceCup.js?v=20261003085536';
+import { el } from './dom.js?v=20261003090241';
+import { lsGet, lsSet, wakeLockActive } from '../core/util.js?v=20261003090241';
+import { primeAudio, sfx } from '../core/sfx.js?v=20261003090241';
+import { openSheet } from './sheet.js?v=20261003090241';
+import { shakeStatus, enableShake } from './components/DiceCup.js?v=20261003090241';
 
 const SKIP_KEY = 'bgb:preflight:skip';     // per device, forever
 const DONE_KEY = 'bgb:preflight:done';     // per session (sessionStorage)

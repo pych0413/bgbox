@@ -2,10 +2,10 @@
 // screens/home.js — home, one-phone setup, and the "connecting" waiting room.
 // ============================================================
 
-import { el, toast, restartAnim } from '../dom.js?v=20261003085536';
-import { primeAudio } from '../../core/sfx.js?v=20261003085536';
-import { isRoomCode } from '../../core/util.js?v=20261003085536';
-import { inAppNotice, peerLooksDown } from '../status.js?v=20261003085536';
+import { el, toast, restartAnim } from '../dom.js?v=20261003090241';
+import { primeAudio } from '../../core/sfx.js?v=20261003090241';
+import { isRoomCode } from '../../core/util.js?v=20261003090241';
+import { inAppNotice, peerLooksDown } from '../status.js?v=20261003090241';
 
 const NAME_MAX = 12;
 const TILES = [

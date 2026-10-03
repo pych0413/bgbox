@@ -7,8 +7,8 @@
 // round, or `over`).  `level` only exists when levelMode is 'judge'.
 // ============================================================
 
-import { HOST, ACT, rint, shuffle, sample, seatOrder } from '../../core/engine-kit.js?v=20261003085536';
-import * as S from './script.js?v=20261003085536';
+import { HOST, ACT, rint, shuffle, sample, seatOrder } from '../../core/engine-kit.js?v=20261003090241';
+import * as S from './script.js?v=20261003090241';
 
 // ---------- constants ----------
 

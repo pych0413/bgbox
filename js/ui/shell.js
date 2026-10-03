@@ -27,18 +27,18 @@
 //    if it is missing they stay greyed out as 「即將推出」.
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261003085536';
-import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=20261003085536';
-import * as sfxMod from '../core/sfx.js?v=20261003085536';
-import { createTableTimer } from './timer.js?v=20261003085536';
-import { createStatus } from './status.js?v=20261003085536';
-import { openSettings, applyTextSize } from './settings.js?v=20261003085536';
-import { openPreflight } from './preflight.js?v=20261003085536';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003085536';
-import { mountJoin } from './screens/join.js?v=20261003085536';
-import { mountLobby } from './screens/lobby.js?v=20261003085536';
-import { mountPlay } from './screens/play.js?v=20261003085536';
-import { mountResults } from './screens/results.js?v=20261003085536';
+import { el, toast } from './dom.js?v=20261003090241';
+import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=20261003090241';
+import * as sfxMod from '../core/sfx.js?v=20261003090241';
+import { createTableTimer } from './timer.js?v=20261003090241';
+import { createStatus } from './status.js?v=20261003090241';
+import { openSettings, applyTextSize } from './settings.js?v=20261003090241';
+import { openPreflight } from './preflight.js?v=20261003090241';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003090241';
+import { mountJoin } from './screens/join.js?v=20261003090241';
+import { mountLobby } from './screens/lobby.js?v=20261003090241';
+import { mountPlay } from './screens/play.js?v=20261003090241';
+import { mountResults } from './screens/results.js?v=20261003090241';
 
 const RESUME_KEY = 'bgb:resume';   // written by core/client.js; the shell only reads and clears it
 const RESUME_TTL = 8 * 60 * 60 * 1000;   // 8h — long enough for an evening of games
@@ -64,7 +64,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=20261003085536');
+    const m = await import('../games/registry.js?v=20261003090241');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);

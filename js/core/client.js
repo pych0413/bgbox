@@ -31,14 +31,14 @@
 //   hostCtl.voidRound()         `@void-round` for engines that support it
 // ============================================================
 
-import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003085536';
-import { hasPeer } from './net.js?v=20261003085536';
-import { Room } from './room.js?v=20261003085536';
-import { createBag } from './bag.js?v=20261003085536';
-import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003085536';
-import { cryptoRng } from './engine-kit.js?v=20261003085536';
-import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003085536';
-import { GAMES } from '../games/registry.js?v=20261003085536';
+import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003090241';
+import { hasPeer } from './net.js?v=20261003090241';
+import { Room } from './room.js?v=20261003090241';
+import { createBag } from './bag.js?v=20261003090241';
+import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003090241';
+import { cryptoRng } from './engine-kit.js?v=20261003090241';
+import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003090241';
+import { GAMES } from '../games/registry.js?v=20261003090241';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;

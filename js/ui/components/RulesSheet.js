@@ -10,8 +10,8 @@
 // collapsible). Closes on ✕, on a tap outside the sheet, and on Escape.
 // ============================================================
 
-import { el, lockScroll, unlockScroll } from '../dom.js?v=20261003085536';
-import { teamStyle } from './RoleCard.js?v=20261003085536';
+import { el, lockScroll, unlockScroll } from '../dom.js?v=20261003090241';
+import { teamStyle } from './RoleCard.js?v=20261003090241';
 
 let current = null;
 

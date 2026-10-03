@@ -14,10 +14,10 @@
 // and closes whenever the phone changes hands (seat switch, pass gate).
 // ============================================================
 
-import { el, sig } from './dom.js?v=20261003085536';
-import { roleFor, roleParts, teamStyle } from './logic.js?v=20261003085536';
-import { Cover } from './components/Cover.js?v=20261003085536';
-import { openSheet } from './sheet.js?v=20261003085536';
+import { el, sig } from './dom.js?v=20261003090241';
+import { roleFor, roleParts, teamStyle } from './logic.js?v=20261003090241';
+import { Cover } from './components/Cover.js?v=20261003090241';
+import { openSheet } from './sheet.js?v=20261003090241';
 
 /** view.hint may be a string or { text }; anything else is no hint. */
 function hintText(view) {

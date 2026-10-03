@@ -13,7 +13,7 @@
 // hello politely, should one ever get through.
 // ============================================================
 
-import { makeRoomCode, sleep } from './util.js?v=20261003085536';
+import { makeRoomCode, sleep } from './util.js?v=20261003090241';
 
 export const PEER_NS = 'bgbox-v2-';
 export const peerIdFor = (code) => PEER_NS + String(code);

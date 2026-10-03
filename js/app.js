@@ -2,12 +2,12 @@
 // app.js — screens, rendering and the host/client wiring.
 // ============================================================
 
-import { $, $$, el, toast, buzz, lsGet, lsSet, lsDel, keepAwake, isRoomCode, CODE_LEN } from './util.js?v=20261003085536';
-import { PRESETS, presetRoles, makeRole, validateRoles } from './roles.js?v=20261003085536';
-import { Game } from './game.js?v=20261003085536';
-import { HostNet, ClientNet } from './net.js?v=20261003085536';
-import { ShakeDetector, motionSupported, needsMotionPermission, requestMotionPermission } from './shake.js?v=20261003085536';
-import { sfx, setMuted, isMuted, primeAudio } from './sfx.js?v=20261003085536';
+import { $, $$, el, toast, buzz, lsGet, lsSet, lsDel, keepAwake, isRoomCode, CODE_LEN } from './util.js?v=20261003090241';
+import { PRESETS, presetRoles, makeRole, validateRoles } from './roles.js?v=20261003090241';
+import { Game } from './game.js?v=20261003090241';
+import { HostNet, ClientNet } from './net.js?v=20261003090241';
+import { ShakeDetector, motionSupported, needsMotionPermission, requestMotionPermission } from './shake.js?v=20261003090241';
+import { sfx, setMuted, isMuted, primeAudio } from './sfx.js?v=20261003090241';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;   // 8h — long enough for a night of games
 
