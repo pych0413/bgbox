@@ -8,10 +8,16 @@
 //
 // Night rules this file keeps (docs/games/cheese-thief.md §3, "anti-tell"):
 //  - every phone draws the SAME layout at every night step: header, info panel,
-//    a grid of the other seats, one big button. Only what is live differs.
+//    a grid of the other seats, one big button — same classes, same colours,
+//    same big label. Only the text inside the panel and the small line under
+//    the button differ, so a glance cannot tell a peek or a steal from a decoy.
+//  - every seat can do the same gesture every step: tap a name (optional),
+//    then the big button. For a sleeper the name tap is a decoy and the button
+//    is the "ack" action; for a lone sleepyhead it is the peek.
 //  - nothing here makes a sound at night (no api.sfx, no PlayerPicker, no Timer —
-//    their taps and ticks would tell the room who is awake).
-//  - sleepers get a big decoy button; tapping it is the "ack" action.
+//    their taps and ticks would tell the room who is awake; the peek cover is
+//    silent).
+//  - view.hint is never drawn here: the shell shows it only behind 💡 (U1).
 // ============================================================
 
 import { el } from '../../ui/dom.js?v=1';
@@ -35,12 +41,12 @@ function roleFor(my, n, opts) {
   if (!base) return null;
   let text = base.text;
   if (my.role === 'thief') {
-    if (n === 4) text += ' 你有兩粒骰，兩個點鐘都會醒，揀其中一次偷。';
-    else if (n === 5) text += ' 偷芝士時如果有貪瞓鼠一齊醒，你揀一位做共犯。';
+    if (n === 4) text += ' 4 人局：你有兩粒骰，兩個點鐘都會醒，揀其中一次偷；平票都算你贏。';
+    else if (n === 5) text += ' 偷芝士時如果有貪瞓鼠一齊醒，你指一位做共犯。';
     else if (n === 6) text += ' 夜晚尾你揀 1 位共犯。';
     else text += ' 夜晚尾你揀 2 位共犯。';
   } else if (my.role === 'sleepyhead') {
-    if (n === 4) text += ` 4 人局：兩粒骰揀一粒做醒鐘。${opts?.peek4 ? '' : '唔可以偷睇。'}`;
+    if (n === 4) text += ` 4 人局：兩粒骰揀一粒做醒鐘。${opts?.peek4 ? '（今局家規：淨係得你醒都可以偷睇。）' : ''}`;
   }
   return { emoji: base.emoji, name: base.name, team: base.team, text };
 }
@@ -187,16 +193,17 @@ function makeChips(E) {
 
   return {
     el: grid,
-    /** selectable: pids that may be tapped; selected: pids shown as picked. */
-    paint(list, { selectable, selected, tap }) {
+    /**
+     * Every chip stays tappable and looks the same on every phone: a sleeper's
+     * decoy taps highlight a name exactly like a peek or a follower pick does.
+     * `selected`: pids shown as picked.
+     */
+    paint(list, { selected, tap }) {
       ensure(list);
       onTap = tap;
       for (const c of chips) {
-        const can = selectable.includes(c.pid);
-        const on = selected.includes(c.pid);
-        c.b.disabled = !can;
-        c.b.classList.toggle('on', on);
-        c.b.classList.toggle('live', can);
+        c.b.disabled = false;
+        c.b.classList.toggle('on', selected.includes(c.pid));
       }
     },
   };
@@ -251,16 +258,16 @@ function awakeLines(E, view) {
     if (night.steal?.can) {
       const other = my.wake.filter((h) => h !== step.h).map((h) => CLOCK[h]).join('、');
       L.push(['role', other
-        ? `而家偷，定係等你下一次醒（${other}點鐘）先偷？下面大掣＝而家偷；唔㩒就係等。`
-        : '你一定要偷：下面大掣＝偷。']);
+        ? `而家偷，定係等${other}點鐘先偷？㩒大掣＝而家偷；想等就唔好㩒。`
+        : '你一定要偷：㩒大掣＝偷。']);
     }
 
     const pk = night.peek;
-    if (pk.mode === 'can') L.push(['role', '👁 淨係得你醒，可以偷睇一個人粒骰（只得一次）。喺下面揀人，再㩒大掣。唔想睇就唔使理。']);
+    if (pk.mode === 'can') L.push(['role', '👁 淨係得你醒：可以偷睇一個人粒骰（得一次）。㩒個名，再㩒大掣；唔想睇就直接㩒大掣。']);
     else if (pk.mode === 'together') L.push(['note', '有人同你一齊醒，今次唔可以偷睇。']);
-    else if (pk.mode === 'off' && my.role !== 'thief') L.push(['note', '4 人局唔可以偷睇。']);
+    else if (pk.mode === 'off' && my.role !== 'thief') L.push(['note', '4 人局唔可以偷睇（官方規則）。']);
 
-    if (night.recruit) L.push(['role', `🤝 你一定要揀 ${night.recruit.count} 位同你一齊醒嘅人做共犯（喺下面揀，再㩒大掣）。唔揀嘅話，時間到會幫你隨機揀。`]);
+    if (night.recruit) L.push(['role', `🤝 你一定要揀 ${night.recruit.count} 位同你一齊醒嘅人做共犯：㩒名，再㩒大掣。唔揀，時間到會幫你隨機揀。`]);
     if (night.picked && night.picked !== me) L.push(['cheese hot', `🤝 大盜揀咗 ${nameOf(night.picked)} 做共犯。`]);
     if (my.follower && night.picked === me) L.push(['cheese hot', '🤝 你畀大盜揀咗做共犯！你同大盜一隊，唔好講畀人知。']);
     return L;
@@ -269,7 +276,10 @@ function awakeLines(E, view) {
   if (step.k === 'rec-pick') {
     L.push(['head', '🤝 你係大盜']);
     if (night.recruit) {
-      L.push(['role', `揀 ${night.recruit.count} 位共犯（喺下面㩒名，再㩒大掣），同時用手輕輕摸佢哋隻手。唔揀嘅話，時間到會幫你隨機揀。`]);
+      const silent = view.__ctx?.narrationMode === 'silent';
+      L.push(['role', silent
+        ? `揀 ${night.recruit.count} 位共犯：㩒名，再㩒大掣（靜音模式唔使摸手）。唔揀，時間到會幫你隨機揀。`
+        : `揀 ${night.recruit.count} 位共犯：㩒名，再㩒大掣，同時輕輕摸佢哋隻手 — 佢哋靠呢下先知要睜眼。`]);
     } else {
       L.push(['role', `✓ 你揀咗 ${names(night.recruited)}。`]);
     }
@@ -281,7 +291,7 @@ function awakeLines(E, view) {
     const meet = night.meet;
     if (my.role === 'thief') L.push(['with', `你嘅共犯：${names(meet.mates)}`]);
     else {
-      if (meet.thief) L.push(['with', `大盜係 ${nameOf(meet.thief)}。`]);
+      if (meet.thief) L.push(['with', view.n === 7 ? `大盜係 ${nameOf(meet.thief)}（你夜晚親眼見到佢偷）。` : `大盜係 ${nameOf(meet.thief)}。`]);
       else L.push(['with', '你唔知大盜係邊個。']);
       if (meet.mates.length) L.push(['with', `另一位共犯：${names(meet.mates)}`]);
       L.push(['note', my.role === 'fall-mouse'
@@ -291,6 +301,24 @@ function awakeLines(E, view) {
     return L;
   }
   return sleepLines(step);
+}
+
+/** The big button's label: identical on every phone at every night step. */
+export const ACK_MAIN = '👆 㩒一下';
+const ACK_DECOY = '每一步都㩒，咁就冇人聽得出邊個醒';
+
+/** The small line under the big button: what this seat's tap will do now. */
+function ackSubline(E, view, mode, selected) {
+  const night = view.nightSeat;
+  if (mode === 'peek') {
+    return selected.length ? `㩒落去就睇 ${E.nameOf(selected[0])} 粒骰（得一次）` : '揀咗名先會睇到；唔想睇就直接㩒';
+  }
+  if (mode === 'recruit') {
+    const c = night.recruit.count;
+    return selected.length === c ? `㩒落去就揀 ${E.names(selected)} 做共犯` : `喺上面揀 ${c} 位（${selected.length}/${c}）`;
+  }
+  if (night?.awake && night.steal?.can) return '㩒落去＝而家偷芝士；想等就唔好㩒';
+  return ACK_DECOY;
 }
 
 function buildNight(E) {
@@ -321,15 +349,30 @@ function buildNight(E) {
   let bartotal = 1;
   let barDeadline = null;
 
+  /** What a tap on a name means for this seat right now: 'peek', 'recruit' or a decoy. */
+  function pickMode(v) {
+    const night = v?.nightSeat;
+    if (!night?.awake) return 'decoy';
+    if (night.peek?.mode === 'can') return 'peek';
+    if (night.recruit) return 'recruit';
+    return 'decoy';
+  }
+
   function tapChip(pid) {
     const v = current;
-    if (!v || !v.nightSeat?.awake) return;
+    if (!v) return;
     const night = v.nightSeat;
-    if (night.peek?.mode === 'can') selected = [pid];
-    else if (night.recruit) {
+    const mode = pickMode(v);
+    if (mode === 'recruit') {
+      if (!night.recruit.among.includes(pid)) return;      // 5p: witnesses only
       if (selected.includes(pid)) selected = selected.filter((x) => x !== pid);
       else if (selected.length < night.recruit.count) selected = [...selected, pid];
       else selected = [...selected.slice(1), pid];
+    } else if (mode === 'peek' && !night.peek.targets.includes(pid)) {
+      return;
+    } else {
+      // a peek and a sleeper's decoy behave the same: one name lit, tap again to clear
+      selected = selected.includes(pid) ? [] : [pid];
     }
     paint();
   }
@@ -338,11 +381,12 @@ function buildNight(E) {
     const v = current;
     if (!v) return;
     const night = v.nightSeat;
-    if (night?.awake) {
-      if (night.peek?.mode === 'can' && selected.length === 1) { api.send({ type: 'peek', target: selected[0] }); selected = []; return; }
-      if (night.recruit && selected.length === night.recruit.count) { api.send({ type: 'recruit', targets: selected.slice() }); selected = []; return; }
-      if (night.steal?.can) { api.send({ type: 'steal' }); return; }
-    }
+    const mode = pickMode(v);
+    if (mode === 'peek' && selected.length === 1) { api.send({ type: 'peek', target: selected[0] }); selected = []; paint(); return; }
+    if (mode === 'recruit' && selected.length === night.recruit.count) { api.send({ type: 'recruit', targets: selected.slice() }); selected = []; paint(); return; }
+    if (night?.awake && night.steal?.can) { api.send({ type: 'steal' }); return; }
+    // the decoy: a sleeper's name tap is cleared exactly like a sent peek
+    if (selected.length) { selected = []; paint(); }
     api.send({ type: 'ack' });
   }
   ack.addEventListener('click', onAck);
@@ -357,7 +401,6 @@ function buildNight(E) {
     const [ic, tt] = stepHead(step);
     setText(icon, ic);
     setText(title, tt);
-    node.classList.toggle('is-awake', awake);
 
     // info card
     const ls = awake ? awakeLines(E, view) : sleepLines(step);
@@ -381,40 +424,27 @@ function buildNight(E) {
       peekCover.update({ front: peekFront, backArt: '👁', backLabel: `㩒住睇 ${E.nameOf(done.target)} 粒骰`, lockMode: 'none', locked: false, openSound: 'none' });
     }
 
-    // the grid: live only for a lone peeker or a thief owed a pick
+    // the grid: every phone shows the same tappable names; only this seat
+    // knows whether a tap is a peek, a follower pick or a decoy
     const others = E.players().filter((p) => p.id !== E.api.me);
-    let selectable = [];
-    let live = '';
-    if (awake && night.peek?.mode === 'can') { selectable = night.peek.targets; live = 'peek'; }
-    else if (awake && night.recruit) { selectable = night.recruit.among; live = `recruit${night.recruit.count}`; }
-    const key = `${step.ix}|${live}`;
+    const mode = pickMode(view);
+    const key = `${step.ix}|${step.stage}|${mode}`;
     if (key !== modeKey) { modeKey = key; selected = []; }
-    selected = selected.filter((p) => selectable.includes(p));
-    chips.paint(others, { selectable, selected, tap: tapChip });
-    node.classList.toggle('has-live-grid', !!live);
+    if (mode === 'recruit') selected = selected.filter((p) => night.recruit.among.includes(p));
+    if (mode === 'peek') selected = selected.filter((p) => night.peek.targets.includes(p));
+    chips.paint(others, { selected, tap: tapChip });
 
-    // the one big button — the same shape for everyone
-    let main = '👆 㩒一下';
-    let sub = '每個點鐘都㩒，咁就冇人聽得出邊個醒';
-    if (awake && live === 'peek') {
-      if (selected.length) { main = `👁 睇 ${E.nameOf(selected[0])} 粒骰`; sub = '㩒落去就睇到，只得一次'; }
-      else { main = '👆 㩒一下'; sub = '揀咗人先會睇到；唔想睇就直接㩒'; }
-    } else if (awake && live.startsWith('recruit')) {
-      const c = night.recruit.count;
-      if (selected.length === c) { main = `🤝 揀 ${E.names(selected)} 做共犯`; sub = '㩒落去就定案'; }
-      else { main = '👆 㩒一下'; sub = `喺上面揀 ${c} 位（${selected.length}/${c}）`; }
-    } else if (awake && night.steal?.can) {
-      main = '🧀 而家偷芝士'; sub = '唔偷就唔使㩒，等你下一次醒';
-    }
-    setText(ackLabel, main);
-    setText(ackSub, sub);
+    // the one big button: same colour, size and big label on every phone at
+    // every step (a glance across the table cannot tell a steal or a peek from
+    // a decoy); only the small line under it says what this tap will do
+    setText(ackLabel, ACK_MAIN);
+    setText(ackSub, ackSubline(E, view, mode, selected));
     ack.classList.toggle('is-done', !!view.acked);
-    ack.classList.toggle('is-action', main !== '👆 㩒一下');
 
     const silent = view.__ctx?.narrationMode === 'silent';
     setText(help, silent
-      ? '靜音模式：唔使閉眼，望住自己部機 — 到你嗰個點鐘佢會自動亮起。'
-      : '夜晚唔好講嘢。個掣有冇用都照㩒，咁就冇人知邊個醒。');
+      ? '靜音模式：唔使閉眼、唔好抬頭、唔使摸手 — 望住自己部機，到你個鐘佢會亮。'
+      : '夜晚唔好講嘢。每一步都照㩒大掣，咁就冇人知邊個醒。');
   }
 
   // the countdown bar: a plain element, no sound
@@ -601,7 +631,9 @@ function buildOver(E) {
   const sum = el('p', { class: 'ct-lead strong' });
   const facts = el('p', { class: 'ct-lead' });
   const list = el('ul', { class: 'ct-debrief' });
-  const node = el('div', { class: 'ct-screen ct-over' }, banner, sum, facts, list);
+  const recap = el('ul', { class: 'ct-nightrecap' });
+  const recapWrap = el('div', { class: 'ct-recapwrap' }, el('h3', { class: 'ct-h', text: '🌙 夜晚重溫' }), recap);
+  const node = el('div', { class: 'ct-screen ct-over' }, banner, sum, facts, list, recapWrap);
   return {
     el: node,
     update(view) {
@@ -622,6 +654,13 @@ function buildOver(E) {
           el('span', { class: 'rl', text: roleLabel(d.role) + (d.follower ? ' · 🤝共犯' : '') }),
           el('span', { class: 'dice-mini', text: `🎲 ${d.dice.join(' ')}` }),
           view.winners.includes(d.pid) ? el('span', { class: 'tag ok', text: '贏' }) : null)));
+      }
+      const lines = view.recap ?? [];
+      setHidden(recapWrap, !lines.length);
+      const rk = sig(lines);
+      if (recap.dataset.key !== rk) {
+        recap.dataset.key = rk;
+        recap.replaceChildren(...lines.map((t) => el('li', { text: t })));
       }
     },
     destroy() { node.remove(); },

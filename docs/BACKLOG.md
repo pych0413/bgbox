@@ -44,3 +44,42 @@ Owner = which part of the code a follow-up pass touches.
 | G23 | M | Cap/chunk large messages (`inkSync`, `welcome`). | core/room |
 | G27 | M | /bgbox/ rename: redirect page carrying `?r=` and hash, README, launch.json name. | release |
 | G28 | L | Delete v1 files before the final bump. | release |
+
+## Polish contract (core ↔ ui) — binding for the framework polish pass
+
+New `app` surface (core/client.js) that ui/ consumes. Everything optional-chained in the UI.
+
+| item | core provides | ui does |
+|---|---|---|
+| T1 timer | `app.state.room.timer = null \| { endsAt, label, paused, remainingMs }` (host clock; in lobby AND play; survives snapshot). `app.hostCtl.timer.start(ms, label)`, `.pause()`, `.resume()`, `.add(ms)`, `.stop()`. Local mode too. | ⏱️ button (host) in lobby + play top bars with presets 30 s / 1 / 3 / 5 min / 自訂; every phone shows a strip countdown; 「枱中大時鐘」 full-screen mode; warn sound at 10 s, zero sound + full-screen flash; help line about the app having to stay open. |
+| U1 hints | — (games put `view.hint`) | 💡 in the play top bar → sheet: 「而家要做咩」 (`view.hint`), 「你嘅角色」 (role card's what-you-do / how-you-win from `rules.roles` matched by `view.role?.id` or `view.mine?.role` when present), link to 📖. Never auto-opens. |
+| #1 narration watchdog | narrator reports `onstart`/`onend`; `app.state.narration = { mode, status: 'idle' \| 'speaking' \| 'stalled', line }` (stalled = no start within 1.5 s or length timeout hit). | Host NarratorBar shows the line big when stalled with 重講 / 跳過 / 下一步. |
+| #2 pre-flight | `narrator.hasCantonese()`, `narrator.test(text)`. | Before the first narrated game of a session: a 30-second check screen (zh-HK voice? test line, silent-switch reminder, Add to Home Screen tip, motion permission for dice games). Skippable, remembered per device. |
+| G4 ack | `app.act()` returns a Promise that resolves when the host's next `views` rev arrives and rejects after 4 s or when offline; `app.state.outbox` = unacked count. | 「傳送緊…」 if outbox > 0 for > 1.5 s; 「冇送到 — 重連緊」 toast on reject; never pretend success. |
+| #5 resync | on `visibilitychange` → visible: client pings, re-requests views, re-acquires wake lock; `app.state.resyncedAt`. | brief 「已經同步」 chip. |
+| #6 seat recovery | client: `app.claimSeat(code, pid)`; host: room view `claims: [{ pid, name, deviceId }]`, `app.lobby.approveClaim(pid)`, `app.lobby.rejectClaim(pid)`; a reject on hello for a duplicate disconnected name returns the claimable pid. | Join screen offers 「我係 阿明，之前斷咗線」 when the name matches a disconnected seat; host sees an approve card. |
+| #9 saved group | room saves `bgb:group` { names, colours, order } at each start; `app.state.savedGroup`. `app.lobby.applySavedOrder()`. | Local-mode name list pre-filled; lobby 「用返上次座位」 button. |
+| #11 bag | `app.bag.stats(bankId, filter)`, `app.bag.reset(bankId)`; `notice` event when a pool reshuffles. | ConfigForm categories field shows 已用 / 總數 and 重置 when stats are available. |
+| G10 version | `hello`/`welcome` carry the build stamp (read from the `?v=` of js/main.js); mismatch → `app.state.versionMismatch = true`. | Banner 「有新版本 — 請重新整理」 (host and clients). |
+| G13 night | `sfx.setSuppressed(bool)` separate from the user's mute; Timer uses sfx only. | Night overlay calls setSuppressed, never setMuted. |
+| G18 offline | `app.local()` and home never touch `Peer`. | 開房 / 入房 show 「多部手機玩要上網」 if PeerJS failed to load; in-app browsers (LINE / WhatsApp / Instagram UA) get 「請用 Safari 開」. |
+| #4 night screen | — | Night overlay near-black, fades only, no white flashes; hint to lower brightness. |
+| #23 text size | — | Settings: 字體 標準 / 大 (root font-size scale), per device. |
+| #25 host console | room view already has players' `connected`; | Host ⋯ menu: who is connected (🔋 reminder), 暫停 always one tap away. |
+
+## Requests from game QA (collected)
+
+| from | request | owner |
+|---|---|---|
+| qa:spyfall | `config.presets?(n) → [{ id, label, reason, cfg }]` rendered as one-tap chips above ConfigForm (sent to polish:ui). Games adopt it afterwards. | DESIGN §3 + ui + games |
+| qa:spyfall | 💡 sheet must keep secret roles behind hold-to-peek (sent to polish:ui). | ui |
+| qa:spyfall | Generic host action for a seat that drops mid-vote: `{ type: '@absent', pid }` / `@void-round`, so engines can count unanimity over connected seats or void the round. | DESIGN §4 + core + games |
+| qa:spyfall | Spyfall locations: 11 roles each (Spyfall 2 tables up to 12 never repeat a role). | data |
+| build:avalon | Stall detection must ignore decoy actions: `engine.blocking?(state, pid)` → else focus.pids → else legalActions (sent to polish:core). | core |
+| build:avalon | Results screen: render `result.lines` as folded emoji-headed sections for long recaps. | ui |
+| build:avalon | Lobby hint for turn-order games: 「座位次序＝輪流次序，開局前用換位排好」. | ui |
+| build:avalon | Optional `focus.decoyPids` so every seat shows the same 輪到你 badge during a secret step. | core + ui (low) |
+| build:fake-artist | Keepsake: the final results screen keeps the last picture(s) (shell keeps `ink` after the session stops, view-only Canvas) — and offers 「儲存圖片」 (canvas → PNG download/share) as a trip souvenir. | ui |
+| build:fake-artist | Compact/auto-collapse the host NarratorBar while a Canvas can draw, so it never covers the sheet. | ui |
+| build:onuw | Shared phone, empty night step: room.filterFocus must keep `{ pids: [], anonymous }` for a device holding seats, and play.js shows the same anonymous decoy gate even when the called role is in the centre — otherwise a shared phone reveals that a role is absent. | core + ui (H for night games) |
+| build:onuw | Results screen: section headings (`{ h: 'title' }` entries or `result.sections`) instead of one flat list. | ui |

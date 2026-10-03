@@ -17,6 +17,14 @@
 import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=1';
 import { sfx } from '../../core/sfx.js?v=1';
 import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=1';
+import { HintSheet } from '../hints.js?v=1';
+import { textSize, setTextSize } from '../settings.js?v=1';
+
+/** A failed action, in words a player understands (the core's own short Cantonese message wins). */
+function sendFailedText(err) {
+  const msg = String(err?.message ?? '');
+  return /[一-鿿]/.test(msg) && msg.length <= 24 ? `⚠️ ${msg}` : '⚠️ 冇送到 — 重連緊，等陣再㩒';
+}
 
 const cssLoaded = new Set();
 
@@ -46,19 +54,25 @@ export function mountPlay(sh) {
   const emojiEl = el('span', { class: 'play-emoji' });
   const titleEl = el('b');
   const subEl = el('small');
-  const rulesBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '規則', onclick: openRules }, '📖');
+  // Top bar: 💡 (on demand only) · 📖 · host: ⏱️ ⏸ · others: 🔊 · ⋯
+  const hintBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '提示：而家要做咩', onclick: () => openHints() }, '💡');
+  const rulesBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '規則', onclick: () => openRules() }, '📖');
+  const pauseBtn = el('button', { class: 'icon-btn pause-btn', type: 'button', 'aria-label': '暫停', onclick: () => togglePause() }, '⏸');
+  const soundBtn = sh.soundButton();
   const menuBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '選項', onclick: () => openMenu('main') }, '⋯');
   const top = el('header', { class: 'play-top' },
     el('div', { class: 'play-title' }, emojiEl, el('div', { class: 'play-name' }, titleEl, subEl)),
-    el('div', { class: 'play-tools' }, rulesBtn, sh.soundButton(), menuBtn));
+    el('div', { class: 'play-tools' }, hintBtn, rulesBtn, sh.timer.button(), pauseBtn, soundBtn, menuBtn));
 
   const seatChip = el('button', { class: 'seat-chip', type: 'button', onclick: () => openMenu('seats') });
+  const timerStrip = sh.timer.strip();
   const banners = el('div');
   const gameRoot = el('div', { class: 'play-game' });
   const narratorBar = NarratorBar({ hidden: true });
+  const hints = HintSheet(sh, { onRules: () => openRules() });
 
   const root = el('section', { class: 'screen play', 'data-screen': 'play' },
-    top, seatChip, banners, gameRoot, narratorBar.el);
+    top, seatChip, timerStrip, banners, gameRoot, narratorBar.el);
 
   // ---------- derived state ----------
   const currentSeat = (st) => st.activeSeat ?? st.mySeats?.[0] ?? null;
@@ -79,6 +93,22 @@ export function mountPlay(sh) {
     ink: st.ink ?? { epoch: 0, strokes: [] },
   });
 
+  // ---------- 💡 hints (never opened by the app itself) ----------
+  async function openHints() {
+    const id = app.state.room?.gameId;
+    if (!id) return;
+    let game;
+    try { game = sh.cached(id) ?? await sh.loadGame(id); } catch (err) { console.error(err); toast('載入唔到提示'); return; }
+    hints.open(game, viewFor(app.state));
+  }
+
+  function togglePause() {
+    const st = app.state;
+    if (!st.isHost) return;
+    if (st.room.paused) app.hostCtl.resume();
+    else { narrator.cancel(); app.hostCtl.pause(); }
+  }
+
   // ---------- rules ----------
   async function openRules() {
     const id = app.state.room?.gameId;
@@ -97,7 +127,15 @@ export function mountPlay(sh) {
       get config() { return app.state.room?.config ?? {}; },
       send(action) {
         if (!seat) { toast('旁觀緊，做唔到嘢'); return; }
-        return app.act(seat, action);
+        const res = app.act(seat, action);
+        // G4: the core's act() resolves once the host has taken it and rejects when it did not
+        // get through. Never pretend: say so (a game UI may still await the same promise).
+        if (res && typeof res.then === 'function') {
+          res.then(null, (err) => { if (app.state.mode) toast(sendFailedText(err), 2600); });
+        } else if (res === false && app.state.mode === 'client' && app.state.conn !== 'online') {
+          toast('⚠️ 冇送到 — 重連緊，等陣再㩒', 2600);
+        }
+        return res;
       },
       ink(payload) { if (seat) return app.ink(seat, payload); },
       now: () => app.clock.now(),
@@ -119,6 +157,7 @@ export function mountPlay(sh) {
   async function mountUI(st, key, seat) {
     const token = ++uiToken;
     const gameId = st.room.gameId;
+    hints.close();
     closeAllCovers();
     ui?.destroy?.();
     ui = null;
@@ -147,6 +186,7 @@ export function mountPlay(sh) {
   async function openGate(kind, target, text) {
     const token = ++gateToken;
     gateKind = kind;
+    hints.close();          // the phone is changing hands: the 💡 sheet belonged to the last holder
     closeAllCovers();
     await PassGate.show(text);
     if (token !== gateToken) return;                   // replaced or cancelled meanwhile
@@ -257,8 +297,9 @@ export function mountPlay(sh) {
     const list = [];
 
     if (st.isHost) {
-      list.push(menuBtnRow(room.paused ? '▶ 繼續' : '⏸ 暫停', () => { room.paused ? app.hostCtl.resume() : app.hostCtl.pause(); closeMenu(); }));
+      list.push(menuBtnRow(room.paused ? '▶ 繼續' : '⏸ 暫停', () => { togglePause(); closeMenu(); }));
       list.push(menuBtnRow('⏭ 下一步（跳過今個步驟）', () => { narrator.cancel(); app.hostCtl.next(); closeMenu(); }));
+      if (sh.timer.available()) list.push(menuBtnRow('⏱️ 計時', () => { closeMenu(); sh.timer.open(); }));
 
       if (meta.narration && meta.narration !== 'none') {
         const mode = room.narration?.mode ?? 'voice';
@@ -278,10 +319,39 @@ export function mountPlay(sh) {
       }
     }
 
+    if (st.isHost && st.mode !== 'local') list.push(...connectedRows(st));
+
     list.push(el('div', { class: 'sec', text: '其他' }));
+    list.push(menuBtnRow('💡 提示：而家要做咩', () => { closeMenu(); openHints(); }));
     list.push(menuBtnRow('📖 規則', () => { closeMenu(); openRules(); }));
+    if (room.timer) list.push(menuBtnRow('🕰️ 枱中大時鐘', () => { closeMenu(); sh.timer.openBig(); }));
+    list.push(el('div', { class: 'seg', role: 'group', 'aria-label': '聲效' },
+      [[true, '🔊 聲效開'], [false, '🔇 聲效閂']].map(([on, label]) => el('button', {
+        type: 'button', class: sh.sound.isOn() === on ? 'on' : '',
+        onclick: () => { if (sh.sound.isOn() !== on) sh.sound.toggle(); refreshMenu(); },
+      }, label))));
+    list.push(el('div', { class: 'seg', role: 'group', 'aria-label': '字體' },
+      [['normal', 'Aa 標準字'], ['large', 'Aa 大字']].map(([v, label]) => el('button', {
+        type: 'button', class: textSize() === v ? 'on' : '',
+        onclick: () => { setTextSize(v); refreshMenu(); },
+      }, label))));
     list.push(menuBtnRow('🚪 離開房間', () => { closeMenu(); sh.leave(); }, 'btn-danger'));
     return [...rows, el('div', { class: 'sheet-list' }, list)];
+  }
+
+  /** #25: who is connected right now, with the battery reminder. */
+  function connectedRows(st) {
+    const players = st.room.players.filter((p) => !p.spectator);
+    const away = players.filter((p) => !p.connected);
+    return [
+      el('div', { class: 'sec', text: away.length ? `連線（${away.length} 個斷咗）` : '連線（全部都喺度）' }),
+      el('ul', { class: 'conn-list' }, players.map((p) => el('li', { class: p.connected ? 'on' : 'off' },
+        el('span', { class: 'dot', style: { '--seat': p.color ?? 'var(--cheese)' } }),
+        el('span', { class: 'nm', text: p.name }),
+        st.mySeats.includes(p.id) ? el('span', { class: 'tag', text: '呢部機' }) : null,
+        el('span', { class: 'conn-state', text: p.connected ? '🟢 喺度' : '🔴 斷咗線' })))),
+      el('p', { class: 'hint conn-tip', text: '🔋 提大家：電量低過 20% 就叉電，或者開「低耗電模式」。房主部機一熄，成個遊戲就停。' }),
+    ];
   }
 
   // ---------- banners ----------
@@ -315,20 +385,42 @@ export function mountPlay(sh) {
     const mode = room.narration?.mode ?? 'voice';
     const wanted = st.isHost && meta.narration !== 'none' && (!!st.cue || mode !== 'silent');
     root.classList.toggle('has-narrator', wanted);
+    // #1 watchdog: the app reports narration = { status: 'idle' | 'speaking' | 'stalled', line }
+    const stalled = st.narration?.status === 'stalled';
+    const line = (stalled && st.narration?.line) || st.cue?.text || '';
+    const nar = app.narration ?? {};
     narratorBar.update({
       hidden: !wanted,
       cue: st.cue ?? null,
       mode,
+      stalled,
+      line,
+      reason: st.narration?.reason ?? null,
       paused: !!room.paused,
-      // The app speaks cues and reports them done. Replay only queues the line again.
-      onReplay: () => { if (st.cue?.text) narrator.speak(st.cue.text); },
+      // The app speaks cues and reports them done; replay goes through the app when it can, so the watchdog sees it.
+      onReplay: () => {
+        narrator.prime?.();
+        if (typeof nar.replay === 'function') nar.replay();
+        else if (line) narrator.speak(line);
+      },
+      onSkip: typeof nar.skip === 'function' ? () => { narrator.cancel(); nar.skip(); } : null,
       onNext: () => { narrator.cancel(); app.hostCtl.next(); },
-      onPause: () => (app.state.room.paused ? app.hostCtl.resume() : app.hostCtl.pause()),
+      onPause: () => togglePause(),
       onMode: (m) => { if (m === 'silent') narrator.cancel(); app.narration.setMode(m); },
     });
   }
 
   // ---------- header ----------
+  /** Host: ⏸ one tap away (#25) and ⏱️ (T1); the sound toggle moves into ⋯ to make room. */
+  function paintTools(st) {
+    const host = !!st.isHost;
+    pauseBtn.hidden = !host;
+    pauseBtn.textContent = st.room.paused ? '▶' : '⏸';
+    pauseBtn.setAttribute('aria-label', st.room.paused ? '繼續' : '暫停');
+    pauseBtn.classList.toggle('on', !!st.room.paused);
+    soundBtn.hidden = host;
+  }
+
   function paintHeader(st, meta, view, seat) {
     root.style.setProperty('--accent', meta.accent ?? '#f5c518');
     emojiEl.textContent = meta.emoji ?? '🎲';
@@ -383,6 +475,7 @@ export function mountPlay(sh) {
       const view = viewFor(st);
 
       paintHeader(st, meta, view, seat);
+      paintTools(st);
       chimeForTurn(st, view, seat);
       paintBanners(st);
       paintNarrator(st);
@@ -401,11 +494,13 @@ export function mountPlay(sh) {
 
       evaluateFocusGate(st);
       refreshMenu();
+      if (hints.isOpen()) hints.update(sh.cached(room.gameId), viewFor(st));
     },
     destroy() {
       uiToken++;
       gateToken++;
       closeMenu();
+      hints.close();
       PassGate.hide();
       RulesSheet.close();
       closeAllCovers();

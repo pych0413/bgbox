@@ -9,6 +9,16 @@
 // page, so ensure() is also wired to the first pointerdown. Note that
 // Safari routes Web Audio through the ringer switch — a phone on silent
 // stays silent, which is the behaviour people expect anyway.
+//
+// Two independent off-switches (G13):
+//   setMuted(bool)       the USER's preference (🔇 button, persisted by the UI)
+//   setSuppressed(bool)  the APP silencing this phone for a while (eyes-closed
+//                        night steps). Never persisted, never touches the
+//                        user's choice, so lifting it restores exactly what
+//                        the user had.
+// A sound plays only when neither is on. `sfx(name, { force: true })` ignores
+// the suppression (not the user's mute) — for an alarm the whole table set on
+// purpose, which rings on every phone at once and so gives nothing away.
 // ============================================================
 
 const MASTER_GAIN = 0.9;
@@ -17,6 +27,7 @@ let ctx = null;
 let master = null;
 let noise = null;
 let muted = false;
+let suppressed = false;
 
 function ensure() {
   if (typeof window === 'undefined') return null;
@@ -44,6 +55,11 @@ export function setMuted(v) {
   muted = !!v;
   if (master) master.gain.value = muted ? 0 : MASTER_GAIN;
 }
+/** The app's temporary silence (night). Independent of the user's mute. */
+export function isSuppressed() { return suppressed; }
+export function setSuppressed(v) { suppressed = !!v; }
+/** True when a normal sfx(name) call would make a sound right now (ignoring audio unlock state). */
+export function audible(opts) { return !muted && (!!opts?.force || !suppressed); }
 
 /** Half a second of white noise, reused by every percussive sound. */
 function noiseBuf() {
@@ -146,10 +162,24 @@ const SOUNDS = {
   vote(t)   { clack(t, { freq: 1500, q: 3, gain: 0.3, dur: 0.08 }); },
   win(t)    { [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) =>
                 tone(t + i * 0.09, { freq: f, dur: 0.6, type: 'triangle', gain: 0.12 })); },
+  // the table timer reaching zero: three bright double-beeps, about 1.4 s, hard to miss across a table
+  alarm(t)  { for (let i = 0; i < 3; i++) {
+                tone(t + i * 0.45, { freq: 1046.5, dur: 0.14, type: 'square', gain: 0.09 });
+                tone(t + i * 0.45 + 0.18, { freq: 1318.5, dur: 0.16, type: 'square', gain: 0.09 });
+              } },
+  // one soft tick per second in the last few seconds of the table timer
+  tick(t)   { clack(t, { freq: 3600, q: 8, gain: 0.08, dur: 0.025 }); },
 };
 
-export function sfx(name) {
-  if (muted) return;
+/** Names of every sound sfx() knows. */
+export const SOUND_NAMES = Object.freeze(Object.keys(SOUNDS));
+
+/**
+ * Play a sound. Silent when the user muted, or while suppressed (unless
+ * `force`), or before iOS has unlocked audio (dropped, never queued).
+ */
+export function sfx(name, opts) {
+  if (muted || (suppressed && !opts?.force)) return;
   const c = ensure();
   // Scheduling into a suspended context queues everything up to fire at
   // once the moment it resumes, so drop the sound instead.

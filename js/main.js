@@ -10,6 +10,25 @@
 
 const root = document.getElementById('app');
 
+// 字體 大 (settings, per device): applied before anything paints, so the page never jumps.
+try {
+  if (JSON.parse(localStorage.getItem('bgb:text') ?? 'null') === 'large') document.documentElement.dataset.text = 'large';
+} catch { /* storage blocked: standard size */ }
+
+/**
+ * G10: the offline shell (sw.js). It installs in the background and WAITS: a running
+ * page keeps the version it started with, so a push mid-game cannot mix old and new
+ * modules. On localhost the worker only passes requests through (see sw.js header).
+ */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    // a home-screen app is rarely reloaded: look for a new version whenever it comes back
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch((err) => console.warn('[main] service worker not registered', err));
+}
+
 function showError(title, detail) {
   const box = document.createElement('div');
   box.className = 'boot';
@@ -73,6 +92,8 @@ async function boot() {
   window.__app = app;   // handy in the console; the shell never reads it
   await startShell(app, root, { narrator });
 }
+
+registerServiceWorker();
 
 boot().catch((err) => {
   showError('桌遊盒未開得工', `${err?.message ?? err}${err?.cause ? ` — ${err.cause.message ?? err.cause}` : ''}`);

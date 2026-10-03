@@ -47,8 +47,11 @@ export function mountResults(sh) {
   const waiting = el('p', { class: 'status', text: '等房主揀，再玩一局定換遊戲…' });
   const leaveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { margin: '1rem auto 0' }, onclick: () => sh.leave() }, '🚪 離開房間');
 
+  // a table timer keeps running between games (T1): its strip stays on screen here too
+  const timerStrip = sh.timer?.strip?.() ?? null;
+  const timerRow = el('div', { class: 'results-tools' }, timerStrip, sh.timer?.button?.() ?? null);
   const root = el('section', { class: 'screen results', 'data-screen': 'results' },
-    hero, linesCard, pointsCard, boardCard, againBtn, lobbyBtn, waiting, leaveBtn);
+    timerRow, hero, linesCard, pointsCard, boardCard, againBtn, lobbyBtn, waiting, leaveBtn);
 
   const confettiHost = el('div');
   root.append(confettiHost);

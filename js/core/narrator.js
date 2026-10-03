@@ -23,6 +23,13 @@
 // speak() QUEUES behind speech already in progress (that is what the browser
 // does natively) and never cancels it; cancel() is explicit, and settles every
 // pending speak() so nothing awaits forever.
+//
+// Reporting (for the app's narration watchdog, backlog #1):
+//   speak(text, { onstart, onend })  onstart() when the browser says speech
+//   began; onend(how) exactly once, how = 'end' | 'timeout' | 'cancel' |
+//   'error' | 'unsupported'. The promise resolves with the same `how`
+//   (undefined for empty text). The watchdog itself (no start within 1.5 s)
+//   lives in core/client.js, which owns the injectable timers.
 // ============================================================
 
 // ---------- pure helpers (exported for tests) ----------
@@ -67,6 +74,9 @@ export function estimateMs(text, rate = 1) {
   const r = Math.min(2, Math.max(0.5, Number(rate) || 1));
   return Math.round((cjk * 260 + Math.max(0, other) * 85 + pauses * 350) / r + 1500);
 }
+
+/** The 試聽 / pre-flight sample line. */
+export const SAMPLE_LINE = '你好，我係今晚嘅旁白，大家請聽清楚。';
 
 // ---------- the narrator ----------
 
@@ -126,6 +136,23 @@ export function createNarrator() {
     /** False → the shell suggests installing a 粵語 voice in iOS settings. */
     hasCantonese() { return rawVoices().some((v) => isCantoneseLang(v.lang)); },
 
+    /**
+     * Everything a pre-flight check screen needs, in one call:
+     * { supported, cantonese, voice: { name, lang } | null (what speak() would use), rate, volume }.
+     * The voice list can still be empty right after page load (iOS); onVoices() fires when it fills.
+     */
+    info() {
+      const list = rawVoices();
+      const v = list.find((x) => x.voiceURI === settings.voiceURI) ?? pickVoice(list);
+      return {
+        supported: api.supported,
+        cantonese: list.some((x) => isCantoneseLang(x.lang)),
+        voice: v ? { name: v.name, lang: v.lang } : null,
+        rate: settings.rate,
+        volume: settings.volume,
+      };
+    },
+
     /** Call fn when the voice list changes; returns an unsubscribe. */
     onVoices(fn) { wire(); voiceListeners.add(fn); return () => voiceListeners.delete(fn); },
 
@@ -139,36 +166,42 @@ export function createNarrator() {
     /**
      * Speak `text`. Resolves when the browser says it ended, or after a
      * length-based timeout, or when cancel() is called — whichever is first.
-     * Never rejects.
+     * Never rejects. Resolves with how it ended (see the header), and reports
+     * the same through the optional hooks { onstart(), onend(how) }.
      */
-    speak(text) {
+    speak(text, hooks) {
       const line = String(text ?? '').trim();
       if (!line) return Promise.resolve();
+      const call = (name, ...a) => { try { hooks?.[name]?.(...a); } catch { /* a hook bug must not break speech */ } };
 
       return new Promise((resolve) => {
         const s = synth();
         const ms = estimateMs(line, settings.rate);
         let timer = null;
         let settled = false;
+        let started = false;
 
-        const settle = () => {
+        const settle = (how) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          pending.delete(settle);
-          resolve();
+          pending.delete(cancelOne);
+          call('onend', how);
+          resolve(how);
         };
-        pending.add(settle);
+        const cancelOne = () => settle('cancel');
+        pending.add(cancelOne);
 
         // No speech engine (or no Utterance): pretend to speak for the same
         // duration, so a narrated game still advances instead of stalling.
+        // onstart never fires, so the app's watchdog puts the line on screen.
         if (!s || typeof globalThis.SpeechSynthesisUtterance !== 'function') {
-          timer = setTimeout(settle, ms);
+          timer = setTimeout(() => settle('unsupported'), ms);
           return;
         }
 
         wire();
-        const arm = (after) => { clearTimeout(timer); timer = setTimeout(settle, after); };
+        const arm = (after) => { clearTimeout(timer); timer = setTimeout(() => settle('timeout'), after); };
         // Safety net from the moment we ask: covers an utterance that queues
         // behind others, or one that never starts at all.
         arm(ms + 4000 + pending.size * 500);
@@ -180,23 +213,39 @@ export function createNarrator() {
           u.lang = voice?.lang ?? 'zh-HK';
           u.rate = settings.rate;
           u.volume = settings.volume;
-          u.onstart = () => arm(ms);   // the clock that matters starts when speech does
-          u.onend = settle;
-          u.onerror = settle;
+          u.onstart = () => {
+            if (settled || started) return;
+            started = true;
+            arm(ms);   // the clock that matters starts when speech does
+            call('onstart');
+          };
+          u.onend = () => settle('end');
+          u.onerror = (e) => settle(e?.error === 'canceled' || e?.error === 'interrupted' ? 'cancel' : 'error');
           s.speak(u);
         } catch {
-          settle();
+          settle('error');
         }
       });
     },
 
-    /** Speak a short sample, for the 試聽 button. */
-    test() { return api.speak('你好，我係今晚嘅旁白，大家請聽清楚。'); },
+    /**
+     * Speak a test line at the current voice, rate and volume (試聽 / pre-flight check).
+     * Resolves { started, how, voice }: started === false means nobody heard anything
+     * (no voice, not primed, or the speech engine is stuck). Call prime() first, inside the tap.
+     */
+    test(text, hooks) {
+      let started = false;
+      const voice = api.info().voice;
+      return api.speak(String(text ?? '').trim() || SAMPLE_LINE, {
+        onstart: () => { started = true; try { hooks?.onstart?.(); } catch { /* caller's bug */ } },
+        onend: (how) => { try { hooks?.onend?.(how); } catch { /* caller's bug */ } },
+      }).then((how) => ({ started, how: how ?? 'end', voice }));
+    },
 
     /** Stop talking and settle every pending speak(). */
     cancel() {
       try { synth()?.cancel(); } catch { /* nothing playing */ }
-      for (const settle of [...pending]) settle();
+      for (const cancelOne of [...pending]) cancelOne();
     },
   };
 

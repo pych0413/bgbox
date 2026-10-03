@@ -1,7 +1,7 @@
 // ============================================================
 // DiceCup — secret dice under an upside-down cup.
 //
-//   DiceCup({ dice: [n] | null, sides, rollSeq, canRoll, lockedRoll,
+//   DiceCup({ dice: [n] | null, sides, rollSeq, canRoll, lockedRoll, lockedLabel?, lockLabel?,
 //             onRoll, onLock, shakeToRoll: true })
 //     → { el, update(props), destroy(), cover }
 //
@@ -121,6 +121,35 @@ async function onShakeButton() {
   }
   lsSet('ct:shake', hub.shakeOn);
   syncHub();
+}
+
+/**
+ * For the pre-flight check: where shake-to-roll stands on this phone.
+ * 'unsupported' (no sensor API) · 'not-needed' (no permission prompt here) ·
+ * 'granted' · 'denied' · 'unknown' (iOS, not asked yet).
+ */
+export function shakeStatus() {
+  if (!motionSupported()) return 'unsupported';
+  if (!needsMotionPermission()) return 'not-needed';
+  return hub.perm === 'granted' || hub.perm === 'denied' ? hub.perm : 'unknown';
+}
+
+/**
+ * Ask iOS for motion access and switch shake-to-roll on. Call from a tap
+ * handler: the permission request is this function's FIRST await, so it still
+ * counts as the tap's own (iOS refuses it otherwise). Resolves to shakeStatus().
+ */
+export async function enableShake() {
+  if (needsMotionPermission() && hub.perm !== 'granted') {
+    const res = await requestMotionPermission();
+    hub.perm = res;
+    lsSet('ct:motionPerm', res);
+    if (res !== 'granted') { syncHub(); return shakeStatus(); }
+  }
+  hub.shakeOn = true;
+  lsSet('ct:shake', true);
+  syncHub();
+  return shakeStatus();
 }
 
 // ---------- the component ----------
@@ -260,7 +289,7 @@ export function DiceCup(props = {}) {
       hintEl.textContent = p.lockedRoll ? '㩒住睇得，但搖唔到新骰' : '㩒住掀起個盅';
       rollBtn.hidden = !p.canRoll;
       rollBtn.disabled = !!p.lockedRoll;
-      lockBtn.textContent = p.lockedRoll ? '🔒 已鎖，主持解鎖' : '🔓 鎖定點數';
+      lockBtn.textContent = p.lockedRoll ? (p.lockedLabel ?? '🔒 已鎖，主持解鎖') : (p.lockLabel ?? '🔓 鎖定點數');
       lockBtn.classList.toggle('btn-locked', !!p.lockedRoll);
       lockBtn.disabled = !!p.lockedRoll || !p.dice?.length;
       lockBtn.hidden = !p.onLock;

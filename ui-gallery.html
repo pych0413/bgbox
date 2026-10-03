@@ -317,10 +317,153 @@ const sampleGame = {
 }
 
 // ---------- Canvas ----------
+// Two phones, one picture. Nothing here is faked on the wire: every payload goes through the REAL
+// normalizeInk / applyInkBatch (js/core/session.js), a simulated host (which normalises again and
+// relays to the other phone only, like Room.#relayInk) and an ordered, laggy "network".
+// Each phone gets its ink the way js/core/client.js delivers it: the sender's strokes are applied
+// at once, `state.ink` is a fresh {epoch, strokes} wrapper around the SAME mutated array, and the
+// Canvas is updated in a microtask.
 {
-  const s = section('canvas', 'Canvas (batch 2 stub)');
-  const c = Canvas({ mode: 'view' });
-  s.body.append(c.el);
+  const { normalizeInk, applyInkBatch, emptyInk } = await import('./js/core/session.js?v=1');
+  const { createOutbox } = await import('./js/ui/ink.js?v=1');
+
+  document.head.append(el('style', { text: `
+    .g-cv-pair { display: grid; gap: 1.25rem; margin-top: .5rem; }
+    .g-cv-seat h4 { margin: 0 0 .5rem; font-size: .8125rem; display: flex; align-items: center; gap: .5rem; }
+    .g-cv-stats { font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace; color: var(--text-dim); margin-top: .75rem; }
+  ` }));
+
+  const s = section('canvas', 'Canvas',
+    'Draw on either sheet (finger or mouse) and watch it grow on the other one, through the real ink wire code. '
+    + 'oneStroke: after one stroke the frame turns green; “next turn” changes a prop, which re-arms it. '
+    + 'minStrokeLen 80: tap or flick too short and the sheet shakes (onShort) — the tap is never broadcast.');
+
+  const colorOf = (pid) => players.find((p) => p.id === pid)?.color;
+  const sim = {
+    epoch: 0, latency: 0, tools: 'full', oneStroke: false, minStrokeLen: 0, rearm: 0,
+    host: emptyInk(0), msgs: 0, pts: 0, bytes: 0, gaps: 0, gapN: 0, lastMsgAt: 0,
+  };
+  const devs = [0, 1].map((i) => ({ i, pid: `p${i + 1}`, name: players[i].name, ink: emptyInk(0), canDraw: true, canvas: null, queued: false }));
+  const statsEl = el('div', { class: 'g-cv-stats' });
+
+  function paintStats() {
+    const avg = sim.gapN ? Math.round(sim.gaps / sim.gapN) : 0;
+    statsEl.textContent = `${sim.msgs} messages · ${sim.pts} points · ${sim.bytes} bytes sent · avg gap inside a stroke ${avg} ms · epoch ${sim.epoch}`;
+  }
+
+  const propsFor = (dev) => ({
+    ink: { epoch: dev.ink.epoch, strokes: dev.ink.strokes },
+    canDraw: dev.canDraw, tools: sim.tools, oneStroke: sim.oneStroke, minStrokeLen: sim.minStrokeLen, rearm: sim.rearm,
+    me: dev.pid, color: colorOf(dev.pid), colorOf,
+    onInk: (payload) => send(dev, payload),
+    onStrokeEnd: (info) => s.log(`${dev.name} onStrokeEnd ${JSON.stringify(info)}`),
+    onShort: () => s.log(`${dev.name} onShort (stroke too short, discarded)`),
+  });
+  const touch = (dev) => {
+    if (dev.queued) return;
+    dev.queued = true;
+    queueMicrotask(() => { dev.queued = false; dev.canvas.update(propsFor(dev)); });
+  };
+  const paintAll = () => devs.forEach((d) => d.canvas.update(propsFor(d)));
+
+  // ordered delivery per direction, with latency + jitter (a reliable ordered channel never reorders)
+  const lastAt = { up: [0, 0], down: [0, 0] };
+  function later(dir, i, fn) {
+    if (!sim.latency) { fn(); return; }
+    const now = performance.now();
+    const at = Math.max(now + sim.latency + Math.random() * sim.latency * 0.5, lastAt[dir][i] + 1);
+    lastAt[dir][i] = at;
+    setTimeout(fn, at - now);
+  }
+
+  function send(dev, payload) {
+    const batch = normalizeInk(dev.pid, payload);                    // app.ink()
+    if (!batch) { s.log(`${dev.name}: normalizeInk refused ${JSON.stringify(payload).slice(0, 50)}`); return; }
+    applyInkBatch(dev.ink, batch);                                   // the sender draws at once
+    touch(dev);
+    const now = performance.now();
+    sim.msgs++;
+    sim.pts += batch.pts?.length ?? 0;
+    sim.bytes += JSON.stringify(payload).length;
+    if (batch.pts?.length && now - sim.lastMsgAt < 300) { sim.gaps += now - sim.lastMsgAt; sim.gapN++; }
+    if (batch.pts?.length) sim.lastMsgAt = now;
+    paintStats();
+    const ep = sim.epoch;
+    later('up', dev.i, () => {                                       // phone → host
+      if (ep !== sim.epoch) return;                                  // a new picture began meanwhile
+      const accepted = normalizeInk(dev.pid, batch);                 // Session.ink() normalises again
+      if (!accepted) return;
+      applyInkBatch(sim.host, accepted);
+      const other = devs[1 - dev.i];
+      later('down', other.i, () => {                                 // host → everyone else, never echoed to the sender
+        if (ep !== sim.epoch) return;
+        applyInkBatch(other.ink, { t: 'ink', ...accepted });
+        touch(other);
+      });
+    });
+  }
+
+  devs.forEach((dev) => { dev.canvas = Canvas(propsFor(dev)); });
+  window.__canvasDemo = { sim, devs };                               // for poking at it from the console
+  s.body.append(el('div', { class: 'g-cv-pair' }, devs.map((dev) => el('div', { class: 'g-cv-seat' },
+    el('h4', {}, el('span', { class: 'dot', style: { '--seat': colorOf(dev.pid) } }), `${dev.name} · ${dev.pid}`),
+    dev.canvas.el))));
+  s.body.append(statsEl);
+  paintStats();
+
+  // controls
+  const cycle = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
+  const toggles = [];
+  const toggle = (label, get, step) => {
+    const b = btn('', () => { step(); paintAll(); paintToggles(); });
+    toggles.push(() => { b.textContent = `${label}: ${get()}`; });
+    return b;
+  };
+  const paintToggles = () => toggles.forEach((f) => f());
+
+  let scribbling = null;
+  function scribble() {
+    if (scribbling) return;
+    const dev = devs[0];
+    const stroke = `${dev.pid}-demo.${Date.now().toString(36)}`;
+    const ob = createOutbox({ stroke, style: { color: '#e4573d', width: 9 } });
+    const pts = [];
+    for (let k = 0; k < 260; k++) {                                  // a spiral
+      const a = k * 0.16, r = 30 + k * 1.6;
+      pts.push([Math.round(500 + Math.cos(a) * r), Math.round(500 + Math.sin(a) * r)]);
+    }
+    let k = 0;
+    scribbling = setInterval(() => {
+      const now = performance.now();
+      const stop = k >= pts.length;
+      if (!stop) ob.add(pts[k++]);
+      const out = ob.take(now, { force: k === 1, end: stop });
+      out.forEach((pl) => send(dev, pl));
+      if (stop) { clearInterval(scribbling); scribbling = null; s.log('auto-scribble finished'); }
+    }, 16);
+  }
+
+  s.body.append(
+    el('div', { class: 'g-row' },
+      toggle('tools', () => sim.tools, () => { sim.tools = sim.tools === 'full' ? 'none' : 'full'; }),
+      toggle('oneStroke', () => (sim.oneStroke ? 'on' : 'off'), () => { sim.oneStroke = !sim.oneStroke; }),
+      toggle('minStrokeLen', () => sim.minStrokeLen, () => { sim.minStrokeLen = cycle([0, 80], sim.minStrokeLen); })),
+    el('div', { class: 'g-row' },
+      toggle('latency', () => `${sim.latency} ms`, () => { sim.latency = cycle([0, 150, 500], sim.latency); }),
+      toggle(`${devs[0].name} can draw`, () => (devs[0].canDraw ? 'yes' : 'no'), () => { devs[0].canDraw = !devs[0].canDraw; }),
+      toggle(`${devs[1].name} can draw`, () => (devs[1].canDraw ? 'yes' : 'no'), () => { devs[1].canDraw = !devs[1].canDraw; })),
+    el('div', { class: 'g-row' },
+      btn('next turn (re-arm)', () => { sim.rearm++; paintAll(); s.log(`rearm = ${sim.rearm}`); }),
+      btn('▶ auto-scribble on ' + devs[0].name, scribble),
+      btn('new picture (epoch++)', () => {
+        sim.epoch++;
+        sim.host = emptyInk(sim.epoch);
+        devs.forEach((d) => { d.ink = emptyInk(sim.epoch); });
+        paintAll();
+        paintStats();
+        s.log(`new picture, epoch ${sim.epoch}`);
+      })));
+  paintToggles();
 }
 
 // ---------- toast ----------

@@ -8,7 +8,9 @@
 //
 // Used keys are persisted per bank on this device (`bgb:bag:<bankId>` = array of
 // keys), so a bank keeps not-repeating across evenings. When the filtered pool is
-// exhausted the used keys for that pool are forgotten and a notice is queued.
+// exhausted the used keys for that pool are forgotten and a notice is queued:
+// onNotice(text, { kind: 'bag-reshuffle', bankId }), so the UI can offer
+// 重置 / 揀多啲類別 next to the toast.
 //
 // Engines receive the bag in ctx and must draw during setup/act/advance only,
 // never inside view().
@@ -20,21 +22,25 @@ import { cryptoRng, clone } from './engine-kit.js?v=1';
 /** Bank id → file, key function, loader. Literal import() strings so tooling can stamp ?v=. */
 export const BANKS = {
   undercover: {
+    name: '臥底詞庫',
     file: 'undercover-words.js',
     load: () => import('../data/undercover-words.js?v=1'),
     key: (e) => [e.a, e.b].sort().join('|'),
   },
   spyfall: {
+    name: '間諜地點',
     file: 'spyfall-locations.js',
     load: () => import('../data/spyfall-locations.js?v=1'),
     key: (e) => e.name,
   },
   draw: {
+    name: '畫畫題目',
     file: 'draw-words.js',
     load: () => import('../data/draw-words.js?v=1'),
     key: (e) => e.w,
   },
   '9upper': {
+    name: '瞎掰王題目',
     file: '9upper-terms.js',
     load: () => import('../data/9upper-terms.js?v=1'),
     key: (e) => e.term,
@@ -117,9 +123,9 @@ export function createBag({ storage, rng = cryptoRng(), banks: extra = {}, onNot
       if (!fresh.length) {
         for (const e of entries) u.delete(key(e));
         fresh = entries;
-        const text = `詞庫「${id}」已經用晒，重新洗過`;
+        const text = `「${table[id].name ?? id}」揀嘅題目用晒，已經重新洗牌`;
         notices.push(text);
-        onNotice?.(text);
+        try { onNotice?.(text, { kind: 'bag-reshuffle', bankId: id }); } catch (e) { console.error('[bag] onNotice threw', e); }
       }
       const pick = fresh[Math.min(fresh.length - 1, Math.floor(rng() * fresh.length))];
       u.add(key(pick));
@@ -134,6 +140,9 @@ export function createBag({ storage, rng = cryptoRng(), banks: extra = {}, onNot
       const u = used(id);
       return { used: entries.filter((e) => u.has(key(e))).length, total: entries.length };
     },
+
+    /** The bank's display name (e.g. 臥底詞庫), or its id. */
+    label: (id) => table[id]?.name ?? String(id),
 
     /** Forget every used key for this bank. */
     reset(id) {

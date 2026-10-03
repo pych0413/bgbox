@@ -5,14 +5,34 @@
 //          HostTransport. This device is just another device of the Room, fed
 //          in-process (no network hop).
 //   local  the same Room, no transport at all (one phone holds every seat).
+//          Never touches PeerJS (G18): one-phone play works with no signal.
 //   client a ClientTransport; the Room's messages arrive over the wire and are
 //          applied by the very same handler the host uses for itself.
 //
 // iOS gesture rule: every entry point that can start narration calls
 // narrator.prime() as its FIRST statement, before any await.
+//
+// Polish-pass surface (docs/BACKLOG.md "Polish contract"), all on `app`:
+//   state.room.timer            table timer (T1); app.hostCtl.timer.start/pause/resume/add/stop
+//   state.narration             { mode, status: idle|speaking|stalled, line, cueId, reason } (#1)
+//   app.narration.replay/skip   重講 / 跳過 for the stalled-line panel
+//   act() → Promise<boolean>    resolves with "the host accepted it" after its views; rejects
+//                               (err.code 'offline' | 'timeout') when it never got there (G4);
+//                               state.outbox = actions still waiting for the host
+//   app.resync()                also run on visibilitychange → state.resyncedAt (#5)
+//   app.claimSeat(code, pid)    lost token → ask the host for the seat back; state.claimable /
+//                               state.claim; host: state.room.claims + lobby.approveClaim/rejectClaim (#6)
+//   state.savedGroup            last seating on this phone; lobby.applySavedOrder() (#9)
+//   app.bag.stats/reset         safe on any device (null/false where there is no host bag) (#11)
+//   state.versionMismatch       build stamps differ between host and a phone (G10); state.versionInfo
+//   app.canNetwork()            PeerJS loaded (multi-phone needs it; local never does)
+//   state.saveFailed            the host snapshot could not be written (storage full) (G9)
+//   lobby.keepSeat(pid)         keep an offline lobby seat past the 60 s grace (G3)
+//   hostCtl.voidRound()         `@void-round` for engines that support it
 // ============================================================
 
 import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=1';
+import { hasPeer } from './net.js?v=1';
 import { Room } from './room.js?v=1';
 import { createBag } from './bag.js?v=1';
 import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=1';
@@ -23,7 +43,11 @@ import { GAMES } from '../games/registry.js?v=1';
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;
 const LEAVE_GRACE = 200;                   // let the goodbye reach the wire before closing
+const ACK_TIMEOUT = 4000;                  // an action the host has not confirmed by now did not get there (G4)
+const NARR_START_MS = 1500;                // speech that has not started by now is "stalled" (#1)
+const SNAP_SOFT_MAX = 1_500_000;           // JSON chars; past this the drawing is left out of the snapshot (G9)
 const NOT_HOST = { ok: false, message: '淨係房主先做到呢樣' };
+const NO_PEER = '多部手機玩要上網 — 連線元件載入唔到。冇網絡可以揀「一部手機玩」。';
 
 function emptyRoom() {
   return {
@@ -31,8 +55,37 @@ function emptyRoom() {
     configValid: { ok: false, message: '未揀遊戲', warnings: [] },
     scoreboard: {}, history: [], narration: { mode: 'voice' }, paused: false,
     stalled: [], lastResult: null, loading: null,
+    timer: null, claims: [], versionMismatch: [],
   };
 }
+
+const idleNarration = (mode = 'voice') => ({ mode, status: 'idle', line: null, cueId: null, reason: null });
+
+/**
+ * This build's stamp (G10): the `?v=` of js/main.js — every import carries the same stamp
+ * (tools/bump-version.sh), so this module's own URL is the fallback (and what Node tests see).
+ */
+function detectBuild() {
+  try {
+    const tag = globalThis.document?.querySelector?.('script[src*="js/main.js"]');
+    const v = tag ? new URL(tag.getAttribute('src'), globalThis.location?.href).searchParams.get('v') : null;
+    if (v) return v;
+  } catch { /* no DOM */ }
+  try { return new URL(import.meta.url).searchParams.get('v') ?? ''; } catch { return ''; }
+}
+
+/** How two build stamps relate. null when they match (or ours is unknown). */
+export function compareBuilds(mine, theirs) {
+  const a = String(mine ?? '');
+  const b = String(theirs ?? '');
+  if (!a || a === b) return null;
+  let newer = 'unknown';
+  if (!b) newer = 'mine';                                   // a peer from before stamps were sent
+  else if (/^\d+$/.test(a) && /^\d+$/.test(b)) newer = Number(a) > Number(b) ? 'mine' : 'theirs';
+  return { mine: a, theirs: b, newer, refreshMe: newer !== 'mine' };
+}
+
+const safeJSON = (x) => { try { return JSON.stringify(x); } catch { return null; } };
 
 /**
  * @param {object}  [opts]
@@ -46,12 +99,14 @@ function emptyRoom() {
  * @param {object}  [opts.timers]         { setTimeout, clearTimeout, setInterval, clearInterval }
  * @param {number}  [opts.saveEveryMs]    host snapshot heartbeat (default 5000)
  * @param {object}  [opts.banks]          extra content banks for the bag (tests)
+ * @param {string}  [opts.build]          build stamp override (tests); default: detected
  */
 export function createApp(opts = {}) {
   const {
     narrator = null, storage, now = () => Date.now(), rng = cryptoRng(), registry = GAMES,
     makeHostNet, makeClientNet, saveEveryMs = 5000, banks,
   } = opts;
+  const BUILD = String(opts.build ?? detectBuild());
   const T = {
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
@@ -69,6 +124,17 @@ export function createApp(opts = {}) {
     mySeats: [], activeSeat: null,
     room: emptyRoom(), views: {}, table: null, focus: null, cue: null,
     ink: emptyInk(), rev: 0,
+    // polish pass
+    narration: idleNarration(),
+    outbox: 0,
+    resyncedAt: 0,
+    build: BUILD,
+    versionMismatch: false,
+    versionInfo: null,
+    savedGroup: Room.readGroup(store),
+    claimable: null,          // { code, pid, name } — the last join was refused because this seat is ours but offline
+    claim: null,              // { code, pid, name, status: 'sending' | 'waiting' } while asking for a seat back
+    saveFailed: false,
   };
   state.deviceId = store.get('bgb:device') || uid('d');
   store.set('bgb:device', state.deviceId);
@@ -78,13 +144,15 @@ export function createApp(opts = {}) {
   let clientT = null;              // ClientTransport
   let seatRecs = [];               // client: [{ name, token?, id? }] sent in every hello
   let welcomeWaiter = null;
+  let claimWaiter = null;
   let heartbeat = null;
   let clockTimer = null;
   let clockOffset = 0;
   let clockSamples = [];
   let pendingHostMsgs = null;
+  let resyncPending = false;
 
-  const bag = createBag({ storage, rng, banks, onNotice: (text) => emit('notice', text) });
+  const bag = createBag({ storage, rng, banks, onNotice: (text, info) => emit('notice', text, info) });
   const gameCache = new Map();
 
   // ---------- events ----------
@@ -102,6 +170,7 @@ export function createApp(opts = {}) {
   function setConn(conn, message = '') {
     state.conn = conn;
     state.connMessage = message;
+    if (conn !== 'online') failOutbox('offline');
     touch();
   }
 
@@ -122,34 +191,83 @@ export function createApp(opts = {}) {
   let speakToken = 0;
   let speaking = false;
   let narrationTimer = null;
+  let startWatch = null;
+
+  function setNarration(patch) {
+    const n = state.narration;
+    if (Object.keys(patch).every((k) => n[k] === patch[k])) return;
+    state.narration = { ...n, ...patch };
+    touch();
+  }
+  const narrationIdle = () => setNarration({ status: 'idle', line: null, cueId: null, reason: null });
 
   function narrationStop() {
     speakToken++;
     if (narrationTimer !== null) { T.clearTimeout(narrationTimer); narrationTimer = null; }
+    if (startWatch !== null) { T.clearTimeout(startWatch); startWatch = null; }
     if (speaking) {
       speaking = false;
       try { narrator?.cancel?.(); } catch { /* narrator is optional garnish */ }
     }
+    narrationIdle();
   }
 
-  /** Voice mode: speak the cue, wait out its minMs, then tell the session it is done. */
+  /**
+   * Voice mode: speak the cue, wait out its minMs, then tell the session it is done.
+   * Watchdog (#1): no onstart within NARR_START_MS, the narrator's length timeout, volume 0 or no
+   * narrator at all → state.narration.status = 'stalled' (the host sees the line big, with
+   * 重講 / 跳過 / 下一步). The cue still completes on the fallback timer, so the table never freezes.
+   */
   function narrate(cue) {
     narrationStop();
     const token = speakToken;
     const started = now();
-    const finish = () => {
+    let heard = false;
+    setNarration({ status: 'speaking', line: cue.text, cueId: cue.id, reason: null });
+
+    const finish = (how) => {
       if (token !== speakToken) return;
       speaking = false;
+      if (startWatch !== null) { T.clearTimeout(startWatch); startWatch = null; }
+      if (how === 'timeout' || how === 'error' || how === 'unsupported') {
+        if (state.narration.status !== 'stalled') setNarration({ status: 'stalled', reason: how });
+      } else if (state.narration.status === 'speaking') {
+        setNarration({ status: 'idle', reason: null });
+      }
       const wait = Math.max(0, (cue.minMs ?? 0) - (now() - started));
       narrationTimer = T.setTimeout(() => {
         narrationTimer = null;
-        if (token === speakToken) room?.cueDone(cue.id);
+        if (token !== speakToken) return;
+        room?.cueDone(cue.id);
+        if (token === speakToken) narrationIdle();
       }, wait);
     };
-    if (!narrator?.speak) { finish(); return; }
+
+    if (!narrator?.speak) {
+      setNarration({ status: 'stalled', reason: 'unsupported' });
+      finish('none');
+      return;
+    }
+    const vol = narrator.settings?.volume;
+    if (typeof vol === 'number' && vol <= 0) setNarration({ status: 'stalled', reason: 'muted' });
+    startWatch = T.setTimeout(() => {
+      startWatch = null;
+      if (token === speakToken && speaking && !heard && state.narration.status !== 'stalled') {
+        setNarration({ status: 'stalled', reason: 'nostart' });
+      }
+    }, NARR_START_MS);
+
+    const hooks = {
+      onstart: () => {
+        if (token !== speakToken) return;
+        heard = true;
+        if (startWatch !== null) { T.clearTimeout(startWatch); startWatch = null; }
+        if (state.narration.reason !== 'muted') setNarration({ status: 'speaking', reason: null });
+      },
+    };
     let p;
-    try { speaking = true; p = narrator.speak(cue.text); } catch { speaking = false; p = null; }
-    Promise.resolve(p).then(finish, finish);
+    try { speaking = true; p = narrator.speak(cue.text, hooks); } catch { speaking = false; p = null; }
+    Promise.resolve(p).then((how) => finish(typeof how === 'string' ? how : 'end'), () => finish('error'));
   }
 
   function onCue(cue, info) {
@@ -159,12 +277,34 @@ export function createApp(opts = {}) {
   }
 
   // ---------- host persistence ----------
-  let saveQueued = false;
+  const hostKey = (code) => `bgb:host:${code ?? 'local'}`;
+  const withoutInk = (snap) => ({ ...snap, session: { ...snap.session, ink: emptyInk(snap.session.ink?.epoch ?? 0) } });
+
+  /** Write the snapshot; drop the drawing first if it is huge or the write fails (G9). */
   function saveNow() {
     if (!isHostish()) return;
-    store.set(`bgb:host:${room.code ?? 'local'}`, room.snapshot());
+    const key = hostKey(room.code);
+    let snap = room.snapshot();
+    const hasInk = () => (snap.session?.ink?.strokes?.length ?? 0) > 0;
+    let json = safeJSON(snap);
+    if (json && json.length > SNAP_SOFT_MAX && hasInk()) { snap = withoutInk(snap); json = safeJSON(snap); }
+    let ok = !!json && store.setRaw(key, json);
+    if (!ok) {
+      store.del(key);                         // never leave an OLD snapshot behind for a later resume to pick up
+      if (hasInk()) { snap = withoutInk(snap); json = safeJSON(snap); }
+      ok = !!json && store.setRaw(key, json);
+    }
     store.set('bgb:resume', { mode: state.mode, code: room.code, savedAt: now() });
+    if (!ok && !state.saveFailed) {
+      state.saveFailed = true;
+      emit('notice', '部手機儲存空間唔夠 — 呢局如果 refresh 咗可能救唔返', { kind: 'save-failed' });
+      touch();
+    } else if (ok && state.saveFailed) {
+      state.saveFailed = false;
+      touch();
+    }
   }
+  let saveQueued = false;
   function queueSave() {
     if (saveQueued) return;
     saveQueued = true;
@@ -174,6 +314,12 @@ export function createApp(opts = {}) {
   function onRoomChange() {
     if (room && room.phase !== 'playing') narrationStop();
     queueSave();
+  }
+
+  /** A new room replaces the previous one on this phone: its snapshot is dead weight in a 5 MB store. */
+  function forgetPreviousHostSnapshot() {
+    const r = store.get('bgb:resume');
+    if (r && (r.mode === 'host' || r.mode === 'local')) store.del(hostKey(r.code));
   }
 
   // ---------- applying messages (host's own device and clients alike) ----------
@@ -193,6 +339,25 @@ export function createApp(opts = {}) {
     touch();
   }
 
+  function applyRoom(r) {
+    state.room = { ...emptyRoom(), ...r };
+    const mode = state.room.narration?.mode ?? 'voice';
+    if (state.narration.mode !== mode) setNarration({ mode });
+    if (isHostish()) {
+      // the host learns about mismatched phones from its own room view
+      const list = Array.isArray(state.room.versionMismatch) ? state.room.versionMismatch : [];
+      if (list.length) {
+        const newer = list.find((x) => compareBuilds(BUILD, x.build)?.newer === 'theirs');
+        const info = compareBuilds(BUILD, (newer ?? list[0]).build) ?? { mine: BUILD, theirs: '', newer: 'unknown', refreshMe: false };
+        state.versionInfo = { ...info, seats: list.map((x) => x.pid) };
+        state.versionMismatch = true;
+      } else if (state.versionMismatch) {
+        state.versionMismatch = false;
+        state.versionInfo = null;
+      }
+    }
+  }
+
   function onWelcome(msg) {
     if (state.mode === 'client' && msg.v !== PROTOCOL) {
       fatal('版本唔同，兩邊都 refresh 一下個頁面', { keepSeats: true });
@@ -205,17 +370,25 @@ export function createApp(opts = {}) {
     const seats = Array.isArray(msg.seats) ? msg.seats : [];
     state.mySeats = seats.map((s) => s.id);
     ensureActive();
-    state.room = { ...emptyRoom(), ...msg.room };
+    applyRoom(msg.room);
     applyViews(msg.views, { fresh: true });
     if (state.mode === 'client') {
       seatRecs = seats.map((s) => ({ id: s.id, name: s.name, token: s.token }));
       store.set(`bgb:seats:${state.code}`, seatRecs);
       store.set('bgb:resume', { mode: 'client', code: state.code, savedAt: now() });
+      const info = compareBuilds(BUILD, typeof msg.build === 'string' ? msg.build : '');
+      state.versionMismatch = !!info;
+      state.versionInfo = info;
+      state.claim = null;
+      state.claimable = null;
       setConn('online');
       if (clockTimer === null) startClock();
     }
+    if (resyncPending) { resyncPending = false; state.resyncedAt = now(); }
     welcomeWaiter?.resolve();
     welcomeWaiter = null;
+    claimWaiter?.resolve();
+    claimWaiter = null;
     touch();
   }
 
@@ -223,11 +396,12 @@ export function createApp(opts = {}) {
     switch (msg?.t) {
       case 'welcome': onWelcome(msg); break;
       case 'room':
-        state.room = { ...emptyRoom(), ...msg.room };
+        applyRoom(msg.room);
         if (state.room.phase === 'lobby' && state.ink.strokes.length) state.ink = emptyInk();
         touch();
         break;
       case 'views': applyViews(msg); break;
+      case 'ack': settleOutbox(msg.id, (o) => o.resolve(!!msg.ok)); break;
       case 'ink':
         applyInkBatch(state.ink, msg);
         state.ink = { epoch: state.ink.epoch, strokes: state.ink.strokes };
@@ -238,7 +412,22 @@ export function createApp(opts = {}) {
         break;
       case 'pong': onPong(msg); break;
       case 'notice': if (msg.text) emit('notice', String(msg.text)); break;
-      case 'reject': if (state.mode === 'client') fatal(String(msg.reason || '連唔到房'), { clearSeats: true }); break;
+      case 'claimWait':
+        if (state.mode === 'client' && state.claim) {
+          const name = String(msg.name ?? state.claim.name ?? '');
+          state.claim = { ...state.claim, pid: String(msg.pid ?? state.claim.pid), name, status: 'waiting' };
+          setConn('connecting', `等緊房主批准你做返「${name}」…`);
+          claimWaiter?.resolve();
+          claimWaiter = null;
+        }
+        break;
+      case 'reject':
+        if (state.mode !== 'client') break;
+        if (msg.claimable && typeof msg.claimable.pid === 'string') {
+          state.claimable = { code: state.code, pid: msg.claimable.pid, name: String(msg.claimable.name ?? '') };
+        }
+        fatal(String(msg.reason || '連唔到房'), { clearSeats: true });
+        break;
       default: break;
     }
   }
@@ -254,9 +443,34 @@ export function createApp(opts = {}) {
     const t = clientT;
     clientT = null;
     try { t?.close(); } catch { /* already gone */ }
+    state.claim = null;
     setConn('error', reason);
     welcomeWaiter?.reject(new Error(reason));
     welcomeWaiter = null;
+    claimWaiter?.reject(new Error(reason));
+    claimWaiter = null;
+  }
+
+  // ---------- actions with acknowledgement (G4) ----------
+  let actSeq = 0;
+  const outbox = new Map();        // id → { resolve, reject, timer }
+
+  function actError(code) {
+    const e = new Error(code === 'timeout' ? '冇送到 — 房主冇回應' : '冇送到 — 重連緊');
+    e.code = code;
+    return e;
+  }
+  function settleOutbox(id, fn) {
+    const o = outbox.get(id);
+    if (!o) return;
+    outbox.delete(id);
+    T.clearTimeout(o.timer);
+    state.outbox = outbox.size;
+    touch();
+    fn(o);
+  }
+  function failOutbox(code) {
+    for (const id of [...outbox.keys()]) settleOutbox(id, (o) => o.reject(actError(code)));
   }
 
   // ---------- clock ----------
@@ -292,9 +506,10 @@ export function createApp(opts = {}) {
     const savedMode = store.get('bgb:narration')?.mode;
     const mode = ['voice', 'read', 'silent'].includes(savedMode) ? savedMode : 'voice';
     return {
-      hostDeviceId: state.deviceId, now, rng, bag, timers: T, store,
+      hostDeviceId: state.deviceId, now, rng, bag, timers: T, store, build: BUILD,
       loadGame: game, send: deliver, onCue, onChange: onRoomChange,
       onNotice: (text) => emit('notice', text),
+      onGroup: (group) => { state.savedGroup = group; touch(); },
       narrationMode: narrator ? mode : 'silent',
       ...extra,
     };
@@ -333,18 +548,23 @@ export function createApp(opts = {}) {
       mode: null, conn: 'idle', connMessage: '', code: null, isHost: false,
       mySeats: [], activeSeat: null, room: emptyRoom(), views: {}, table: null, focus: null, cue: null,
       ink: emptyInk(), rev: 0,
+      narration: idleNarration(), outbox: 0, versionMismatch: false, versionInfo: null, claim: null, saveFailed: false,
     });
     seatRecs = [];
     clockOffset = 0;
     clockSamples = [];
+    resyncPending = false;
   }
 
   function teardown({ graceful = false } = {}) {
     narrationStop();
     stopClock();
+    failOutbox('offline');
     if (heartbeat !== null) { T.clearInterval(heartbeat); heartbeat = null; }
     welcomeWaiter?.reject(new Error('cancelled'));
     welcomeWaiter = null;
+    claimWaiter?.reject(new Error('cancelled'));
+    claimWaiter = null;
     pendingHostMsgs = null;
     const closing = [hostT, clientT].filter(Boolean);
     hostT = null;
@@ -357,6 +577,15 @@ export function createApp(opts = {}) {
     resetState();
   }
 
+  /** Multi-phone rooms need PeerJS (or an injected net). One-phone play never asks. */
+  const canNetwork = () => !!(makeHostNet && makeClientNet) || hasPeer();
+
+  function noNetwork() {
+    const err = new Error(NO_PEER);
+    err.code = 'no-peer';
+    return err;
+  }
+
   // ============================================================
   // entry points
   // ============================================================
@@ -364,7 +593,9 @@ export function createApp(opts = {}) {
   /** Create a P2P room. The first name is the host's own seat; more names are extra seats on this phone. */
   async function host({ names = [] } = {}) {
     narrator?.prime?.();
+    if (!makeHostNet && !hasPeer()) { teardown(); setConn('error', NO_PEER); throw noNetwork(); }
     teardown();
+    state.claimable = null;
     state.mode = 'host';
     setConn('connecting', '開緊房…');
     try {
@@ -372,6 +603,7 @@ export function createApp(opts = {}) {
       hostT = new HostTransport(makeHostNet?.());
       wireHost(hostT);
       const code = await hostT.open(null);
+      forgetPreviousHostSnapshot();
       state.code = code;
       room = new Room(roomDeps({ code, names }));
       beginHosting();
@@ -387,10 +619,12 @@ export function createApp(opts = {}) {
     }
   }
 
-  /** The whole game on this phone, no network. */
+  /** The whole game on this phone, no network (never touches PeerJS). */
   function local({ names = [] } = {}) {
     narrator?.prime?.();
     teardown();
+    state.claimable = null;
+    forgetPreviousHostSnapshot();
     state.mode = 'local';
     room = new Room(roomDeps({ code: null, names }));
     beginHosting();
@@ -410,24 +644,52 @@ export function createApp(opts = {}) {
 
   function sendHello() {
     clientT?.send({
-      t: 'hello', v: PROTOCOL, deviceId: state.deviceId,
+      t: 'hello', v: PROTOCOL, build: BUILD, deviceId: state.deviceId,
       seats: seatRecs.map((s) => ({ name: s.name, ...(s.token ? { token: s.token } : {}) })),
     });
   }
 
+  function sendClaim() {
+    if (!state.claim) return;
+    clientT?.send({ t: 'claim', v: PROTOCOL, build: BUILD, deviceId: state.deviceId, pid: state.claim.pid });
+  }
+
+  /** Every (re)connect: seated devices say hello again; a device still asking for its seat re-asks. */
+  function onClientOpen() {
+    if (seatRecs.length) sendHello();
+    else if (state.claim) sendClaim();
+  }
+
   function onClientStatus(kind) {
     if (!clientT) return;
-    if (kind === 'online') { if (!state.mySeats.length) setConn('connecting', '入緊房…'); }
+    if (kind === 'online') { if (!state.mySeats.length && !state.claim) setConn('connecting', '入緊房…'); }
     else if (kind === 'host-gone') { stopClock(); setConn('reconnecting', '揾唔到房主 — 佢可能熄咗個頁面'); }
     else if (kind === 'offline' || kind === 'reconnecting') { stopClock(); setConn('reconnecting', '同房主斷咗，重連緊…'); }
     else { stopClock(); setConn('error', '連線出咗問題'); }
+  }
+
+  function openClient(code) {
+    clientT = new ClientTransport(makeClientNet?.());
+    clientT.on('message', handleMessage);
+    clientT.on('status', onClientStatus);
+    clientT.on('open', onClientOpen);
+    return clientT.connect(code);
+  }
+
+  /** Wait for `waiter` (a promise settled by a host message), or give up after WELCOME_TIMEOUT. */
+  async function within(waiter) {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = T.setTimeout(() => reject(new Error('房主冇回應，等咗好耐')), WELCOME_TIMEOUT); });
+    try { await Promise.race([waiter, timeout]); } finally { T.clearTimeout(timer); }
   }
 
   /** Join a room with one or more seats on this device. Resolves once the host has seated us. */
   async function join(code, { names = [] } = {}) {
     const c = String(code ?? '').trim();
     if (!isRoomCode(c)) throw new Error('房間號碼係 4 粒骰（1-6）');
+    if (!makeClientNet && !hasPeer()) { teardown(); setConn('error', NO_PEER); throw noNetwork(); }
     teardown();
+    state.claimable = null;
     state.mode = 'client';
     state.code = c;
     seatRecs = buildHelloSeats(c, names);
@@ -439,18 +701,46 @@ export function createApp(opts = {}) {
     try {
       const welcomed = new Promise((resolve, reject) => { welcomeWaiter = { resolve, reject }; });
       welcomed.catch(() => { /* surfaced through the awaited race below */ });
-      clientT = new ClientTransport(makeClientNet?.());
-      clientT.on('message', handleMessage);
-      clientT.on('status', onClientStatus);
-      clientT.on('open', sendHello);
-      await clientT.connect(c);
-      let timer;
-      const timeout = new Promise((_, reject) => { timer = T.setTimeout(() => reject(new Error('房主冇回應，等咗好耐')), WELCOME_TIMEOUT); });
-      try { await Promise.race([welcomed, timeout]); } finally { T.clearTimeout(timer); }
+      await openClient(c);
+      await within(welcomed);
       keepAwake(true);
     } catch (err) {
       console.error(err);
       const msg = state.connMessage && state.conn === 'error' ? state.connMessage : (err?.message || '入唔到房 — 睇下啲骰啱唔啱，房主係咪仲開緊個頁面。');
+      teardown();
+      setConn('error', msg);
+      throw err;
+    }
+  }
+
+  /**
+   * #6 — this phone lost its token (new tab, cleared storage) and its old seat is offline in the room.
+   * Ask the host for it back. Resolves { ok: true, status: 'waiting' } once the host has the request
+   * (state.claim.status === 'waiting', the host sees it in state.room.claims); when the host approves,
+   * a normal welcome seats this phone. A refusal arrives as a reject (state.conn 'error').
+   */
+  async function claimSeat(code, pid) {
+    const c = String(code ?? '').trim();
+    if (!isRoomCode(c)) throw new Error('房間號碼係 4 粒骰（1-6）');
+    if (typeof pid !== 'string' || !pid) throw new Error('揀返你個位先');
+    if (!makeClientNet && !hasPeer()) { teardown(); setConn('error', NO_PEER); throw noNetwork(); }
+    const known = state.claimable?.pid === pid ? state.claimable : null;
+    teardown();
+    state.claimable = null;
+    state.mode = 'client';
+    state.code = c;
+    state.claim = { code: c, pid, name: known?.name ?? '', status: 'sending' };
+    setConn('connecting', '問緊房主…');
+    try {
+      const asked = new Promise((resolve, reject) => { claimWaiter = { resolve, reject }; });
+      asked.catch(() => { /* surfaced through the awaited race below */ });
+      await openClient(c);
+      await within(asked);
+      keepAwake(true);
+      return { ok: true, status: state.mySeats.length ? 'approved' : 'waiting' };
+    } catch (err) {
+      console.error(err);
+      const msg = state.connMessage && state.conn === 'error' ? state.connMessage : (err?.message || '問唔到房主');
       teardown();
       setConn('error', msg);
       throw err;
@@ -471,8 +761,9 @@ export function createApp(opts = {}) {
     }
 
     if (r.mode === 'host' || r.mode === 'local') {
-      const snap = store.get(`bgb:host:${r.code ?? 'local'}`);
+      const snap = store.get(hostKey(r.code));
       if (!snap || snap.v !== 2) return false;
+      if (r.mode === 'host' && !makeHostNet && !hasPeer()) { setConn('error', NO_PEER); throw noNetwork(); }
       teardown();
       state.mode = r.mode;
       state.deviceId = snap.hostDeviceId || state.deviceId;
@@ -508,13 +799,38 @@ export function createApp(opts = {}) {
       clientT?.send({ t: 'bye' });
       store.del(`bgb:seats:${state.code}`);
     } else if (room) {
-      store.del(`bgb:host:${room.code ?? 'local'}`);
+      store.del(hostKey(room.code));
       room.close();
     }
     store.del('bgb:resume');
     teardown({ graceful: true });
     keepAwake(false);
     touch();
+  }
+
+  /**
+   * #5 — the page came back to the foreground (called on visibilitychange; the UI may call it too).
+   * Host/local: re-check every timer now (phones throttle them in the background).
+   * Client: re-learn the clock and ask the host for everything again; state.resyncedAt is set when it arrives.
+   */
+  function resync() {
+    if (!state.mode) return false;
+    keepAwake(true);
+    if (isHostish()) {
+      room.poke();
+      state.resyncedAt = now();
+      touch();
+      return true;
+    }
+    if (state.mode === 'client' && clientT && state.mySeats.length) {
+      resyncPending = true;     // a reconnect's welcome counts too, if the channel died in the background
+      if (state.conn === 'online') {
+        startClock();
+        clientT.send({ t: 'sync' });
+      }
+      return true;
+    }
+    return false;
   }
 
   // ============================================================
@@ -542,16 +858,49 @@ export function createApp(opts = {}) {
       if (!state.mySeats.includes(pid)) return { ok: false, message: '唔係你嘅位' };
       return { ok: clientT?.send({ t: 'lobby', op: 'leave', pid }) ?? false, message: '' };
     },
+    /** Returns { ok, message, warnings? } — warnings name seats that are offline (the game starts anyway). */
     start() {
       narrator?.prime?.();       // inside the 開始遊戲 tap — the first speak() depends on it
       return isHostish() ? room.start() : NOT_HOST;
     },
+    /** #6 host: give a disconnected seat to the phone that asked for it (state.room.claims). */
+    approveClaim: (pid) => (isHostish() ? room.approveClaim(pid) : NOT_HOST),
+    rejectClaim: (pid) => (isHostish() ? room.rejectClaim(pid) : NOT_HOST),
+    /** G3 host: an offline lobby seat is dropped 60 s after it went away (players[].dropAt) unless kept. */
+    keepSeat: (pid, keep = true) => (isHostish() ? room.keepSeat(pid, keep) : NOT_HOST),
+    /** #9 host: seat order and colours of the last game started on this phone (state.savedGroup). */
+    applySavedOrder: () => (isHostish() ? room.applySavedOrder() : NOT_HOST),
   };
 
+  /**
+   * Send an action for one of this device's seats (G4). Returns a Promise:
+   *   resolves true   the host applied it (its views have already arrived)
+   *   resolves false  the host refused it (wrong phase, illegal, not your seat) — it did get there
+   *   rejects         it never got there: err.code 'offline' (no connection) or 'timeout' (no answer in 4 s)
+   * Fire-and-forget callers are fine: a rejection is never "unhandled".
+   */
   function act(pid, action) {
-    if (!state.mySeats.includes(pid)) return false;
-    if (state.mode === 'client') return clientT?.send({ t: 'act', pid, action, rev: state.rev }) ?? false;
-    return isHostish() ? room.act(state.deviceId, pid, action) : false;
+    let p;
+    if (!state.mySeats.includes(pid)) {
+      p = Promise.resolve(false);
+    } else if (state.mode === 'client') {
+      if (!clientT || state.conn !== 'online') {
+        p = Promise.reject(actError('offline'));
+      } else {
+        const id = ++actSeq;
+        p = new Promise((resolve, reject) => {
+          if (!clientT.send({ t: 'act', pid, action, rev: state.rev, id })) { reject(actError('offline')); return; }
+          const timer = T.setTimeout(() => settleOutbox(id, (o) => o.reject(actError('timeout'))), ACK_TIMEOUT);
+          outbox.set(id, { resolve, reject, timer });
+          state.outbox = outbox.size;
+          touch();
+        });
+      }
+    } else {
+      p = Promise.resolve(isHostish() ? !!room.act(state.deviceId, pid, action) : false);
+    }
+    p.catch(() => { /* handled for fire-and-forget callers; awaiting callers still see it */ });
+    return p;
   }
 
   function ink(pid, payload) {
@@ -594,6 +943,20 @@ export function createApp(opts = {}) {
       return room.next();
     },
     autoAct(pid) { return isHostish() ? room.autoAct(pid) : false; },
+    /** `@void-round`: engines that support it discard the current round (a phone died); others ignore it → false. */
+    voidRound() { return isHostish() ? room.voidRound() : false; },
+    /**
+     * T1 — the table timer, in every phase, on every phone (state.room.timer). Host only; all return booleans.
+     * start(ms 1 s–3 h, label?) replaces any running timer; add(ms) after it rang starts a new countdown.
+     * 暫停 (hostCtl.pause) also holds it, and 繼續 releases it.
+     */
+    timer: {
+      start: (ms, label = '') => (isHostish() ? room.timerStart(ms, label) : false),
+      pause: () => (isHostish() ? room.timerPause() : false),
+      resume: () => (isHostish() ? room.timerResume() : false),
+      add: (ms) => (isHostish() ? room.timerAdd(ms) : false),
+      stop: () => (isHostish() ? room.timerStop() : false),
+    },
   };
 
   const narration = {
@@ -609,18 +972,51 @@ export function createApp(opts = {}) {
       }
       return true;
     },
+    /** 重講: say the current line again (voice mode). A real tap, so it also re-primes iOS speech. */
+    replay() {
+      narrator?.prime?.();
+      if (!isHostish() || room.narration.mode !== 'voice') return false;
+      const cue = room.currentCue();
+      if (!cue) return false;
+      narrate(cue);
+      return true;
+    },
+    /** 跳過: stop talking and count the current line as said (the step itself carries on; 下一步 skips the step). */
+    skip() {
+      if (!isHostish()) return false;
+      const cue = room.currentCue();
+      narrationStop();
+      return cue ? !!room.cueDone(cue.id) : false;
+    },
   };
 
   const clock = {
     now: () => (state.mode === 'client' ? now() + clockOffset : now()),
   };
 
+  /**
+   * #11 — the content bag. stats/reset only mean something where the bag draws (host / local);
+   * elsewhere, or before a bank is loaded, stats() is null and reset() false, so a form can just try.
+   */
+  const bagApi = {
+    ...bag,
+    stats(id, filter) {
+      if (state.mode === 'client') return null;
+      try { return bag.isLoaded(id) ? bag.stats(id, filter) : null; } catch { return null; }
+    },
+    reset(id) {
+      if (state.mode === 'client') return false;
+      try { bag.reset(id); } catch { return false; }
+      touch();
+      return true;
+    },
+  };
+
   // ---------- page lifecycle (browser only) ----------
   if (typeof document !== 'undefined' && typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { saveNow(); return; }
-      if (state.mode) keepAwake(true);
-      room?.poke();
+      resync();
     });
     window.addEventListener('pagehide', saveNow);
   }
@@ -629,14 +1025,16 @@ export function createApp(opts = {}) {
     state,
     on(ev, fn) { listeners[ev]?.add(fn); return this; },
     off(ev, fn) { listeners[ev]?.delete(fn); return this; },
-    host, join, local, resume, leave,
+    host, join, local, resume, leave, claimSeat, resync,
     lobby, act, ink, setActiveSeat, results, hostCtl, narration, clock,
     game,
     /** The registry, so the picker can draw cards without loading any module. */
     games: registry,
     /** The narrator createApp was given (the shell falls back to this one). */
     narrator,
-    bag,
+    bag: bagApi,
+    canNetwork,
+    build: BUILD,
     /** Test/debug access to the in-process Room (host / local only). */
     get _room() { return room; },
   };

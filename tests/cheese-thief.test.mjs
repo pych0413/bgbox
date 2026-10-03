@@ -7,6 +7,7 @@ import { test, assert, Sim, paths, ACT, HOST, makePlayers } from './lib.mjs';
 import * as game from '../js/games/cheese-thief/game.js';
 import { judge } from '../js/games/cheese-thief/game.js';
 import { mulberry32, clone } from '../js/core/engine-kit.js';
+import { narrate, VOTE_CALL, HINT } from '../js/games/cheese-thief/script.js';
 
 const { engine, config, meta } = game;
 const COUNTS = [4, 5, 6, 7, 8];
@@ -326,7 +327,7 @@ test('cheese-thief: what the host hears and sees is identical for crowded and em
   const frame = (t) => t.replace(/[一二兩三四五六]/g, '#');
   assert.equal(new Set(cues.map(frame)).size, 1);
   assert.equal(new Set(cues.map((c) => c.length)).size, 1);
-  assert.equal(new Set(prompts.map((p) => p.anonymous.replace(/[一二三四五六]/g, '#'))).size, 1);
+  assert.equal(new Set(prompts.map((p) => p.anonymous.replace(/[一二兩三四五六]/g, '#'))).size, 1);
   assert.deepEqual(prompts[0].pids.length, 6);
   assert.deepEqual(prompts[1].pids, [], 'empty hour: no pids, but the prompt is still there');
   assert.ok(prompts[1].anonymous.length > 0);
@@ -341,7 +342,8 @@ test('cheese-thief: sleeping seats get the same (empty) night view at every hour
       const v = view(sim, id);
       if (sim.state.wake[id].includes(h)) continue;
       assert.deepEqual(v.nightSeat, { awake: false });
-      seen.add(JSON.stringify({ n: v.nightSeat, k: Object.keys(v.my).sort() }));
+      assert.equal(v.hint, HINT.night.sleep);
+      seen.add(JSON.stringify({ n: v.nightSeat, k: Object.keys(v.my).sort(), hint: v.hint, keys: Object.keys(v).sort() }));
     }
   }
   assert.equal(seen.size, 1, 'a sleeper cannot tell hours apart except by the public step number');
@@ -407,7 +409,12 @@ test('cheese-thief: narration says the right recruitment script for 6, 7 and 8',
   assert.match(t6['rec-meet'], /同大盜對望/);
   assert.match(t7['rec-meet'], /互相認人/);
   assert.ok(!/大盜/.test(t7['rec-meet']), '7p: the thief does not open eyes at the meeting');
-  assert.match(t8['rec-meet'], /三個人/);
+  assert.match(t8['rec-meet'], /三個/);
+  for (const t of [t6, t7, t8]) {
+    assert.match(t['rec-pick'], /伸一隻手/, 'everyone holds out a hand so a touch reveals nothing');
+    assert.match(t['rec-pick'], /喺手機揀/, 'the thief picks on the phone as well as by touch');
+    assert.match(t['rec-close'], /收返隻手/, 'and takes the hand back at the end');
+  }
   assert.ok(t7['rec-tclose'], '7p has the extra "thief shuts eyes" step');
   assert.equal(t6['rec-tclose'], undefined);
   assert.equal(t8['rec-tclose'], undefined);
@@ -968,7 +975,7 @@ test('cheese-thief: result lines explain why, in Cantonese, and points follow th
   assert.ok(r.lines.some((l) => l.includes('最高票')));
   assert.ok(r.lines.some((l) => l.includes('大盜 玩家1')));
   assert.ok(r.lines.some((l) => l.includes('共犯')));
-  assert.ok(r.lines.some((l) => l.includes('芝士喺')));
+  assert.ok(r.lines.some((l) => l.includes('偷走芝士')), 'the night recap says when the cheese went');
   assert.equal(r.lines.filter((l) => l.includes('骰')).length >= 6, true, 'a debrief line per player');
   for (const w of r.winners) assert.equal(r.points[w], 1);
   assert.equal(r.points.p1, 0);
@@ -1095,6 +1102,8 @@ function leakCheck(sim) {
     if (s.phase === 'vote' || s.phase === 'day') assert.ok(!('reveal' in v));
     if (s.phase === 'vote') assert.ok(!('votes' in v) && !('debrief' in v));
     if (!open) assert.ok(!('revealed' in v) && !('debrief' in v) && !('summary' in v));
+    if (s.phase !== 'over') assert.ok(!('recap' in v), 'the night recap is published only at the end');
+    assert.equal(typeof v.hint, 'string');
 
     // the public part of a step says nothing about who is awake
     if (s.phase === 'night') assert.deepEqual(Object.keys(v.step).sort(), ['h', 'ix', 'k', 'stage', 'total']);
@@ -1407,7 +1416,9 @@ function stubComponents() {
     api.update(p0);
     return api;
   };
-  return { Cover, RoleCard, DiceCup, VotePanel, Timer, PlayerPicker: null, Canvas: null, dieFace };
+  const covers = [];
+  const CoverRec = (p0) => { const c = Cover(p0); covers.push(c); return c; };
+  return { Cover: CoverRec, RoleCard, DiceCup, VotePanel, Timer, PlayerPicker: null, Canvas: null, dieFace, covers };
 }
 
 async function withFakeDom(fn) {
@@ -1423,7 +1434,7 @@ async function withFakeDom(fn) {
 }
 
 /** One mounted UI per seat (and one for the table), as the shell does. */
-function mountAll(ui, sim, sent) {
+function mountAll(ui, sim, sent, { sounds = [] } = {}) {
   const comps = stubComponents();
   const seats = {};
   for (const pid of [...sim.players.map((p) => p.id), null]) {
@@ -1431,10 +1442,11 @@ function mountAll(ui, sim, sent) {
     const api = {
       me: pid, players: sim.players, isHost: pid === 'p1', meta: game.meta, config: sim.state.cfg,
       send: (a) => { const changed = sim.act(pid, a); sent.push({ pid, a, changed }); return changed; },
-      ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+      ink() {}, now: () => sim.now, sfx: (name) => sounds.push({ pid, name, phase: sim.state.phase }), toast() {}, components: comps,
     };
     seats[pid ?? 'table'] = { pid, root, api, handle: ui.mount(root, api) };
   }
+  Object.defineProperty(seats, 'comps', { value: comps, enumerable: false });
   return seats;
 }
 
@@ -1446,6 +1458,7 @@ function pushViews(sim, seats) {
     const a = serialize(seat.root);
     seat.handle.update(clone(v), ctx);
     assert.equal(serialize(seat.root), a, `update() is not idempotent for ${seat.pid ?? 'table'} in ${v.phase}`);
+    if (v.hint) assert.ok(!seat.root.textContent.includes(v.hint), `the 💡 hint is drawn on ${seat.pid ?? 'table'}'s screen (U1: on demand only)`);
   }
 }
 
@@ -1578,7 +1591,9 @@ test('cheese-thief ui: the thief sees its theft, witnesses are told who, and a 5
     assert.ok(seats.p2.root.textContent.includes('玩家1 偷走咗芝士'));
     assert.ok(!seats.p4.root.textContent.includes('偷走咗芝士'));
     const chips = findAll(seats.p1.root, (n) => hasCls(n, 'ct-chip') && !n.disabled);
-    assert.deepEqual(chips.map((c) => c.textContent).sort(), ['玩家2', '玩家3']);
+    assert.equal(chips.length, 4, 'every name stays tappable (same look as a sleeper grid)');
+    click(chips.find((c) => c.textContent === '玩家4'));
+    assert.equal(chips.filter((c) => hasCls(c, 'on')).length, 0, 'a non-witness cannot be picked');
     click(chips.find((c) => c.textContent === '玩家3'));
     click(findAll(seats.p1.root, (n) => hasCls(n, 'ct-ack'))[0]);
     assert.deepEqual(sent.at(-1).a, { type: 'recruit', targets: ['p3'] });
@@ -1586,5 +1601,423 @@ test('cheese-thief ui: the thief sees its theft, witnesses are told who, and a 5
     assert.ok(seats.p3.root.textContent.includes('你畀大盜揀咗做共犯'));
     assert.ok(seats.p2.root.textContent.includes('大盜揀咗 玩家3 做共犯'));
     for (const s of Object.values(seats)) s.handle.destroy();
+  });
+});
+
+// ============================================================
+// QA pass 2026-10-03 UTC — verified rules, anti-tell, teaching, recap
+// (docs/research/cheese-thief.md "## Verification" overrides the draft)
+// ============================================================
+
+test('cheese-thief: U1 — rules.quick is at most 6 short lines; every role says what you do and how you win', () => {
+  const q = game.rules.quick;
+  assert.ok(q.length >= 3 && q.length <= 6, `${q.length} quick lines`);
+  for (const l of q) {
+    assert.ok(!l.includes('\n'));
+    assert.ok([...l].length <= 40, `quick line too long: ${l}`);
+  }
+  for (const r of game.rules.roles) {
+    assert.match(r.text, /做乜：/, `${r.id} says what you do`);
+    assert.match(r.text, /點贏：/, `${r.id} says how you win`);
+    assert.ok(r.text.indexOf('做乜：') < r.text.indexOf('點贏：'));
+  }
+  // the official 4p no-peek rule is stated wherever the peek is offered
+  assert.match(q.join(''), /4 人局唔得/);
+  assert.match(game.rules.roles.find((r) => r.id === 'sleepyhead').text, /4 人局唔得/);
+  assert.match(game.rules.sections.find((x) => x.title.startsWith('4 人局')).body, /官方規則：就算淨係得你醒都唔可以偷睇/);
+});
+
+test('cheese-thief: house rules (4p peek, re-roll) are off by default and labelled 家規 everywhere', () => {
+  for (const n of COUNTS) {
+    const d = config.defaults(n);
+    assert.equal(d.peek4, false);
+    assert.equal(d.reroll, false);
+    assert.equal(d.fallMouse, false);
+    assert.equal(d.hourSec, 10, 'official 10 s hour windows');
+    for (const f of config.fields(d, n)) {
+      if (f.key === 'peek4' || f.key === 'reroll') { assert.match(f.label, /家規/); assert.match(f.help, /官方/); }
+    }
+    assert.equal(config.fields(d, n).some((f) => f.key === 'peek4'), n === 4);
+    const on = { ...d, peek4: true, reroll: true };
+    const sum = config.summary(on, n).join('\n');
+    assert.match(sum, /家規：擲骰可重擲/);
+    if (n === 4) assert.match(sum, /家規：4 人局都可以偷睇/);
+    else assert.ok(!/偷睇/.test(sum), 'the 4p peek option says nothing outside 4p');
+    assert.match(config.validate(on, n).warnings.join('\n'), /家規/);
+    assert.ok(!/家規/.test(config.validate(d, n).warnings.join('\n')), 'no house-rule warning by default');
+  }
+});
+
+test('cheese-thief: #8 — every head-count explains its set-up; lobby counts match the deal (fuzzed)', () => {
+  for (const n of COUNTS) {
+    const reason = config.summary(config.defaults(n), n).find((l) => l.startsWith('💬'));
+    assert.ok(reason && reason.includes(`${n} 人`) && reason.includes('—'), `n=${n} has a reason line`);
+  }
+  const rng = mulberry32(808);
+  for (let i = 0; i < 400; i++) {
+    const n = 4 + Math.floor(rng() * 5);
+    const prev = {
+      fallMouse: rng() < 0.5, peek4: rng() < 0.5, reroll: rng() < 0.5, recap: rng() < 0.5,
+      hourSec: Math.floor(rng() * 50) - 5, discussSec: Math.floor(rng() * 2200) - 100,
+    };
+    const cfg = config.defaults(n, prev);
+    assert.equal(config.validate(cfg, n).ok, true, `defaults(${n}, ${JSON.stringify(prev)}) must be valid`);
+    const m = /🧀 1 大盜 · 🐭 (\d+) 貪瞓鼠(?: · 🎭 (\d) 背鍋鼠)?/.exec(config.summary(cfg, n)[0]);
+    assert.ok(m);
+    const roles = Object.values(engine.setup({ players: makePlayers(n), config: cfg, rng: mulberry32(i), now: 0 }).role);
+    assert.equal(roles.length, n);
+    assert.equal(roles.filter((r) => r === 'thief').length, 1);
+    assert.equal(roles.filter((r) => r === 'sleepyhead').length, +m[1]);
+    assert.equal(roles.filter((r) => r === 'fall-mouse').length, m[2] ? +m[2] : 0);
+    if (n < 6) assert.ok(!roles.includes('fall-mouse'));
+    // an invalid composition is refused, never silently played
+    if (n < 6) assert.equal(config.validate({ ...cfg, fallMouse: true }, n).ok, false);
+  }
+});
+
+test('cheese-thief: U1 — every phase gives every seat and the table a one-line 💡 hint', () => {
+  const phases = new Set();
+  for (const n of COUNTS) {
+    for (let seed = 1; seed <= 5; seed++) {
+      const cfg = { ...config.defaults(n), ...(n >= 6 && seed % 2 ? { fallMouse: true } : {}) };
+      const sim = new Sim(game, { n, seed: seed * 13 + n, config: cfg });
+      const check = (x) => {
+        for (const A of [...ids(n), null]) {
+          const v = x.view(A);
+          assert.equal(typeof v.hint, 'string', `${v.phase} hint for ${A}`);
+          assert.ok(v.hint.length >= 6 && [...v.hint].length <= 32 && !v.hint.includes('\n'), `hint "${v.hint}"`);
+          phases.add(v.phase);
+        }
+      };
+      check(sim);
+      sim.runRandom({ onStep: check });
+    }
+  }
+  assert.deepEqual([...phases].sort(), ['day', 'night', 'over', 'reveal', 'roll', 'vote']);
+  // the hint follows what this seat can do right now
+  const sim = scenario(6, { thief: 'p1', dice: { p1: 3, p2: 2, p3: 1, p4: 4, p5: 5, p6: 6 } });
+  openHour(sim, 2);
+  assert.equal(view(sim, 'p2').hint, HINT.night.peek);
+  assert.equal(view(sim, 'p3').hint, HINT.night.sleep);
+  openHour(sim, 3);
+  assert.equal(view(sim, 'p1').hint, HINT.night.thief);
+  runTo(sim, stepIndex(sim, 'rec-pick'), 'window');
+  assert.equal(view(sim, 'p1').hint, HINT.night.recruit);
+  assert.equal(view(sim, 'p2').hint, HINT.night.sleep, 'a sleeper hint never changes');
+});
+
+test('cheese-thief: 7p — a follower who watched the theft knows the thief; the other follower does not', () => {
+  // p1 steals at three with p2 watching; p3 wakes alone at five
+  const sim = scenario(7, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 5, p4: 1, p5: 2, p6: 4, p7: 6 } });
+  runTo(sim, stepIndex(sim, 'rec-pick'), 'window');
+  assert.ok(sim.act('p1', { type: 'recruit', targets: ['p2', 'p3'] }));
+  runTo(sim, stepIndex(sim, 'rec-meet'), 'window');
+  assert.deepEqual(sorted(awakeIds(sim)), ['p2', 'p3'], 'the thief still keeps its eyes shut');
+  assert.deepEqual(view(sim, 'p2').nightSeat.meet, { thief: 'p1', mates: ['p3'] });
+  assert.deepEqual(view(sim, 'p3').nightSeat.meet, { thief: null, mates: ['p2'] });
+  leakCheck(sim);
+  finishNight(sim);
+  assert.equal(view(sim, 'p2').notes.find((x) => x.k === 'follower').thief, 'p1');
+  assert.equal(view(sim, 'p3').notes.find((x) => x.k === 'follower').thief, null);
+  leakCheck(sim);
+});
+
+/** The night as the room experiences it: every line, its silent-mode time and every window, in order. */
+function nightTimeline(sim, act) {
+  const out = [];
+  for (let guard = 0; guard < 500 && sim.state.phase === 'night'; guard++) {
+    const s = sim.state;
+    const k = s.steps[s.ix];
+    const tag = `${k.k}${k.h ?? ''}/${s.stage}`;
+    for (const id of ids(s.n)) {
+      assert.ok(sim.legal(id).some((a) => a.type === 'ack'), `${id} has no decoy to tap at ${tag}`);
+    }
+    if (s.stage === 'cue') {
+      const c = sim.cue();
+      out.push(['cue', k.k, k.h ?? null, c.text, c.minMs]);
+      sim.cueDone();
+    } else {
+      const t0 = sim.now;
+      const len = s.deadline - t0;
+      const ix = s.ix;
+      if (act) act(sim);
+      assert.equal(sim.state.deadline - t0, len, `acting moved the window at ${tag}`);
+      assert.equal(sim.state.ix, ix);
+      out.push(['window', k.k, k.h ?? null, len]);
+      sim.advance();
+    }
+  }
+  return out;
+}
+
+test('cheese-thief: anti-tell — the night sounds and lasts the same whoever is awake and whatever they do', () => {
+  // every seat does the first real thing it may (peek, steal, pick), then taps the decoy
+  const doAll = (sim) => {
+    for (const id of ids(sim.state.n)) {
+      const a = sim.legal(id).find((x) => x.type !== 'ack');
+      if (a) assert.ok(sim.act(id, a));
+      sim.act(id, { type: 'ack' });
+    }
+  };
+  for (const n of COUNTS) {
+    for (const hourSec of [10, 7]) {
+      const cfg = { ...config.defaults(n), hourSec };
+      // A: everyone on the same hour, nobody does anything
+      const crowd = Object.fromEntries(ids(n).map((id) => [id, n === 4 ? [2, 2] : 2]));
+      const a = nightTimeline(scenario(n, { dice: crowd, config: cfg }));
+      // B: spread out, the thief on another seat, everybody acts as much as it can
+      const spread = Object.fromEntries(ids(n).map((id, i) => [id, n === 4 ? [i + 1, 6 - i] : (i % 6) + 1]));
+      const b = nightTimeline(scenario(n, { thief: ids(n)[n - 1], dice: spread, config: cfg }), doAll);
+      assert.deepEqual(b, a, `n=${n}: the night must look and sound the same from outside`);
+      const opens = a.filter((r) => r[0] === 'window' && r[1] === 'open');
+      assert.equal(opens.length, 6, 'all six hours, every game');
+      for (const r of opens) assert.equal(r[3], hourSec * 1000, 'every hour window is exactly hourSec');
+      const pick = a.find((r) => r[0] === 'window' && r[1] === 'rec-pick');
+      const meet = a.find((r) => r[0] === 'window' && r[1] === 'rec-meet');
+      if (n >= 6) { assert.equal(pick[3], hourSec * 1000); assert.equal(meet[3], 5000, 'official 5 s meeting'); }
+    }
+  }
+  // the 4p thief wakes twice — still nothing in the timeline gives it away
+  const one = nightTimeline(scenario(4, { thief: 'p1', dice: { p1: [3, 3], p2: 1, p3: 2, p4: 5 } }));
+  const two = nightTimeline(scenario(4, { thief: 'p1', dice: { p1: [3, 6], p2: 1, p3: 2, p4: 5 } }), doAll);
+  assert.deepEqual(two, one);
+});
+
+test('cheese-thief: narration — the exact Cantonese script per head-count, short, generic, never a name', () => {
+  const H = ['一', '兩', '三', '四', '五', '六'];
+  const hours = (n) => H.flatMap((h) => [
+    n === 4 ? `而家${h}點鐘。醒鐘係${h}點嘅老鼠，請睜開眼。` : `而家${h}點鐘。擲到${h}點嘅老鼠，請睜開眼。`,
+    '請閉返眼。',
+  ]);
+  const BEGIN = '天黑喇，請大家閉眼。手機放喺面前，唔好偷望。';
+  const DAWN = '天光喇，請大家睜開眼。芝士唔見咗！';
+  const REC = {
+    6: ['所有人伸一隻手出嚟。大盜請睜眼，喺手機揀一位共犯，再輕輕摸佢隻手。',
+      '被摸到手嘅共犯，請睜眼，同大盜對望認人。',
+      '大盜同共犯，請閉返眼。大家收返隻手。'],
+    7: ['所有人伸一隻手出嚟。大盜請睜眼，喺手機揀兩位共犯，再輕輕摸佢哋隻手。',
+      '大盜請閉返眼。',
+      '被摸到手嘅兩位共犯，請睜眼，互相認人。',
+      '兩位共犯，請閉返眼。大家收返隻手。'],
+    8: ['所有人伸一隻手出嚟。大盜請睜眼，喺手機揀兩位共犯，再輕輕摸佢哋隻手。',
+      '被摸到手嘅兩位共犯，請睜眼，同大盜三個互相認人。',
+      '大盜同兩位共犯，請閉返眼。大家收返隻手。'],
+  };
+  for (const n of COUNTS) {
+    const sim = scenario(n, { seed: n });
+    const heard = [];
+    for (let g = 0; g < 200 && sim.state.phase === 'night'; g++) {
+      const c = sim.cue();
+      if (c) { heard.push(c); sim.cueDone(); } else sim.advance();
+    }
+    assert.deepEqual(heard.map((c) => c.text), [BEGIN, ...hours(n), ...(REC[n] ?? []), DAWN], `n=${n} script`);
+    for (const c of heard) {
+      assert.ok([...c.text].length <= 36, `too long to read in one breath: ${c.text}`);
+      assert.ok(c.minMs >= 1800 && c.minMs <= 7000);
+      for (const p of sim.players) assert.ok(!c.text.includes(p.name), 'the narrator never names anyone');
+      assert.ok(!/[0-9]/.test(c.text), 'numbers are written as words so the zh-HK voice reads them right');
+    }
+    for (const id of ids(n)) sim.act(id, { type: 'day-ready', on: true });
+    assert.equal(sim.cue().text, VOTE_CALL);
+    assert.ok([...VOTE_CALL].length <= 36);
+    sim.cueDone();
+    assert.equal(sim.cue(), null, 'the vote call is said once');
+  }
+  // the narration text does not depend on roles or dice at all
+  for (const n of COUNTS) {
+    for (const k of ['begin', 'close', 'rec-pick', 'rec-tclose', 'rec-meet', 'rec-close', 'dawn']) {
+      assert.equal(narrate({ k, h: 3 }, n), narrate({ k, h: 5 }, n));
+    }
+  }
+});
+
+test('cheese-thief: 讀稿 and 靜音 — the whole night runs on 下一步 alone, or on cue timers alone', () => {
+  for (const n of COUNTS) {
+    // 讀稿: the reader presses 下一步 after each line, and may also skip a window
+    const r = scenario(n);
+    let presses = 0;
+    for (let g = 0; g < 200 && r.state.phase === 'night'; g++) { assert.ok(r.host({ type: ACT.NEXT })); presses++; }
+    assert.equal(r.state.phase, 'day');
+    assert.equal(presses, r.state.steps.length * 2, 'every step: its line, then its window');
+    assert.equal(r.state.cheese.gone, true, 'the theft still happens');
+    if (n >= 6) assert.equal(r.state.followers.length, n === 6 ? 1 : 2, 'a skipped pick is still made');
+    // 靜音: every line stays on screen for minMs, then the session completes it
+    const q = scenario(n);
+    let ms = 0;
+    for (let g = 0; g < 200 && q.state.phase === 'night'; g++) {
+      if (q.state.stage === 'cue') { const c = q.cue(); q.tick(c.minMs); ms += c.minMs; q.cueDone(); }
+      else { ms += q.state.deadline - q.now; q.advance(); }
+    }
+    assert.equal(q.state.phase, 'day');
+    assert.ok(ms < 4 * 60 * 1000, `n=${n}: a silent night takes ${Math.round(ms / 1000)} s`);
+  }
+});
+
+test('cheese-thief: #10 — the result replays the night: who woke when, the theft and its witnesses, peeks, picks', () => {
+  // 5p: p4 alone at one peeks the thief; p1 steals at three with p2 + p3 watching and picks p3
+  const sim = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 3, p4: 1, p5: 6 } });
+  openHour(sim, 1);
+  assert.ok(sim.act('p4', { type: 'peek', target: 'p1' }));
+  openHour(sim, 3);
+  assert.ok(sim.act('p1', { type: 'recruit', targets: ['p3'] }));
+  const r = playOut(sim, { p1: 'p2', p2: 'p1', p3: 'p2', p4: 'p1', p5: 'p1' });
+  assert.deepEqual(r.recap, [
+    '一點鐘：玩家4 醒咗 — 玩家4 偷睇咗 玩家1 粒骰（3）',
+    '兩點鐘：冇人醒',
+    '三點鐘：玩家1、玩家2、玩家3 醒咗 — 大盜 玩家1 偷走芝士（玩家2、玩家3 睇到）；大盜揀咗 玩家3 做共犯',
+    '四點鐘：冇人醒',
+    '五點鐘：冇人醒',
+    '六點鐘：玩家5 醒咗',
+  ]);
+  const at = r.lines.indexOf('🌙 夜晚重溫：');
+  assert.ok(at > 0);
+  assert.deepEqual(r.lines.slice(at + 1, at + 7), r.recap, 'result.lines carries the recap');
+  for (const A of [...ids(5), null]) assert.deepEqual(sim.view(A).recap, r.recap, 'every phone shows the same recap at the end');
+
+  // 4p: the thief waits at its first wake, then must steal at its second
+  const wait = scenario(4, { thief: 'p1', dice: { p1: [2, 5], p2: 1, p3: 2, p4: 5 } });
+  const rw = playOut(wait, {}).recap;
+  assert.equal(rw[1], '兩點鐘：玩家1、玩家3 醒咗 — 大盜 玩家1 醒咗，但揀咗遲啲先偷');
+  assert.equal(rw[4], '五點鐘：玩家1、玩家4 醒咗 — 大盜 玩家1 偷走芝士（玩家4 睇到）');
+  // 4p: the thief steals first, wakes again with nothing left to take
+  const early = scenario(4, { thief: 'p1', dice: { p1: [2, 5], p2: 1, p3: 2, p4: 5 } });
+  openHour(early, 2);
+  assert.ok(early.act('p1', { type: 'steal' }));
+  const re = playOut(early, {}).recap;
+  assert.equal(re[1], '兩點鐘：玩家1、玩家3 醒咗 — 大盜 玩家1 偷走芝士（玩家3 睇到）');
+  assert.equal(re[4], '五點鐘：玩家1、玩家4 醒咗 — 大盜 玩家1 再醒，芝士早就冇咗');
+  // 6-8p: the follower step closes the recap
+  for (const n of [6, 7, 8]) {
+    const x = scenario(n, { thief: 'p1' });
+    runTo(x, stepIndex(x, 'rec-pick'), 'window');
+    assert.ok(x.act('p1', { type: 'recruit', targets: n === 6 ? ['p4'] : ['p4', 'p6'] }));
+    const last = playOut(x, {}).recap.at(-1);
+    assert.match(last, n === 6 ? /^夜尾：大盜揀咗 玩家4 做共犯（兩個互相認得）$/ : /^夜尾：大盜揀咗 玩家4、玩家6 做共犯/);
+    if (n === 7) assert.match(last, /大盜冇同佢哋對望/);
+  }
+});
+
+test('cheese-thief: result lines get the odd cases right (fall mouse follower, no follower, ties)', () => {
+  const cfg = { ...config.defaults(6), fallMouse: true };
+  // FM recruited, a plain sleepyhead on top → the thief alone wins; the FM is told why it lost
+  const r = verdict(6, { fm: 'p2', followers: ['p2'], config: cfg, votes: { p1: 'p3', p2: 'p3', p3: 'p4', p4: 'p3', p5: 'p3', p6: 'p3' } });
+  assert.deepEqual(r.winners, ['p1']);
+  assert.match(r.lines.join('\n'), /唔喺最高票，所以大盜贏/);
+  assert.match(r.lines.join('\n'), /背鍋鼠 玩家2 雖然做咗共犯，但佢淨係靠畀人投中先贏，所以輸/);
+  assert.equal(r.points.p1, 2);
+  assert.equal(r.points.p2, 0);
+  // caught with an FM follower: the FM is not said to "lose with the thief"; it loses for its own reason
+  const c = verdict(6, { fm: 'p2', followers: ['p2'], config: cfg, votes: { p1: 'p3', p2: 'p1', p3: 'p1', p4: 'p1', p5: 'p3', p6: 'p4' } });
+  assert.ok(!c.lines.some((l) => l.includes('跟大盜一齊輸')));
+  assert.match(c.lines.join('\n'), /背鍋鼠 玩家2 唔喺最高票，所以都輸（佢做咗共犯都一樣）/);
+  // no follower at all
+  const e = verdict(5, { followers: [], votes: { p1: 'p2', p2: 'p3', p3: 'p2', p4: 'p2', p5: 'p2' } });
+  assert.match(e.lines.join('\n'), /唔喺最高票，所以大盜贏/);
+  assert.ok(e.lines.includes('今局冇共犯。'));
+  // a tie that includes the thief (5-8p) is a catch, and the line says so
+  const t = verdict(6, { followers: ['p2'], votes: { p1: 'p3', p2: 'p1', p3: 'p1', p4: 'p3', p5: 'p3', p6: 'p1' } });
+  assert.match(t.lines.join('\n'), /平票都一齊開牌，大盜照計畀人揪出/);
+  // the 4p tie names the 2023 amendment (older printed rulebooks disagree)
+  const f = verdict(4, { votes: { p1: 'p2', p2: 'p1', p3: 'p1', p4: 'p2' } });
+  assert.match(f.lines.join('\n'), /2023 年官方修訂/);
+});
+
+test('cheese-thief ui: a peek, a steal and a follower pick look like a sleeper decoy at a glance; the night is silent', async () => {
+  await withFakeDom(async (ui) => {
+    const cls = (n) => [...n.cls].filter((c) => c !== 'on' && c !== 'is-done').sort().join('.');
+    const glance = (root) => {
+      const night = findAll(root, (n) => hasCls(n, 'ct-night'))[0];
+      assert.ok(night, 'a night screen');
+      const ack = findAll(night, (n) => hasCls(n, 'ct-ack'))[0];
+      return JSON.stringify({
+        night: cls(night),
+        kids: night.children.map(cls),
+        panel: cls(findAll(night, (n) => hasCls(n, 'ct-panel'))[0]),
+        chips: findAll(night, (n) => hasCls(n, 'ct-chip')).map((c) => [cls(c), c.disabled, c.hidden]),
+        ack: [cls(ack), ack.disabled, ack.hidden, findAll(ack, (n) => hasCls(n, 'ct-ack-main'))[0].textContent],
+      });
+    };
+    const sameForAll = (sim, seats, label) => {
+      const g = new Set(sim.players.map((p) => glance(seats[p.id].root)));
+      assert.equal(g.size, 1, `${label}: phones differ at a glance:\n${[...g].join('\n')}`);
+    };
+    const bigButton = (seat) => findAll(seat.root, (n) => hasCls(n, 'ct-ack'))[0];
+    /** The one gesture everybody makes: tap a name, then the big button. */
+    const gesture = (seat, name) => {
+      click(findAll(seat.root, (n) => hasCls(n, 'ct-chip') && n.textContent === name)[0]);
+      click(bigButton(seat));
+    };
+    const lastSent = (sent, pid) => sent.filter((x) => x.pid === pid).at(-1)?.a;
+    const sounds = [];
+
+    // 6p: p2 alone at two (peek), p1 steals alone at three, follower pick after six
+    const sim = scenario(6, { thief: 'p1', dice: { p1: 3, p2: 2, p3: 1, p4: 4, p5: 5, p6: 6 } });
+    const sent = [];
+    const seats = mountAll(ui, sim, sent, { sounds });
+    for (let g = 0; g < 200; g++) {
+      pushViews(sim, seats);
+      if (sim.state.phase !== 'night') break;
+      sameForAll(sim, seats, `step ${sim.state.ix} ${sim.state.stage}`);
+      if (sim.state.stage === 'window') {
+        const k = st(sim);
+        if (k.k === 'open' && k.h === 2) {
+          gesture(seats.p2, '玩家4');
+          gesture(seats.p5, '玩家4');
+          assert.deepEqual(lastSent(sent, 'p2'), { type: 'peek', target: 'p4' });
+          assert.deepEqual(lastSent(sent, 'p5'), { type: 'ack' }, 'the same gesture is only a decoy for a sleeper');
+        }
+        if (k.k === 'open' && k.h === 3) {
+          assert.equal(sim.state.cheese.by, 'p1', 'the theft needs no tap at all in 5-8p');
+          click(bigButton(seats.p1));
+          assert.deepEqual(lastSent(sent, 'p1'), { type: 'ack' });
+        }
+        if (k.k === 'rec-pick') {
+          gesture(seats.p1, '玩家3');
+          gesture(seats.p6, '玩家3');
+          assert.deepEqual(lastSent(sent, 'p1'), { type: 'recruit', targets: ['p3'] });
+          assert.deepEqual(lastSent(sent, 'p6'), { type: 'ack' });
+        }
+        pushViews(sim, seats);
+        sameForAll(sim, seats, `after acting at step ${sim.state.ix}`);
+      }
+      if (sim.state.stage === 'cue') sim.cueDone(); else sim.advance();
+    }
+    assert.equal(sim.state.phase, 'day');
+    assert.deepEqual(sim.state.followers, ['p3']);
+    // the peek result sits under a cover that opens without a sound
+    const eyeCovers = seats.comps.covers.filter((c) => c.props?.backArt === '👁');
+    assert.ok(eyeCovers.length > 0);
+    for (const c of eyeCovers) assert.equal(c.props.openSound, 'none', 'the night peek cover is silent');
+
+    // 5p: the thief picks among two witnesses — same look as everybody else
+    const five = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 3, p4: 4, p5: 5 } });
+    const sent5 = [];
+    const seats5 = mountAll(ui, five, sent5, { sounds });
+    openHour(five, 3);
+    pushViews(five, seats5);
+    sameForAll(five, seats5, '5p pick');
+    gesture(seats5.p1, '玩家2');
+    gesture(seats5.p4, '玩家2');
+    assert.deepEqual(lastSent(sent5, 'p1'), { type: 'recruit', targets: ['p2'] });
+    pushViews(five, seats5);
+    sameForAll(five, seats5, '5p after the pick');
+
+    // 4p: the thief steals at its first wake with the very same big button
+    const four = scenario(4, { thief: 'p1', dice: { p1: [2, 5], p2: 1, p3: 3, p4: 4 } });
+    const sent4 = [];
+    const seats4 = mountAll(ui, four, sent4, { sounds });
+    openHour(four, 2);
+    pushViews(four, seats4);
+    sameForAll(four, seats4, '4p first wake');
+    assert.match(seats4.p1.root.textContent, /㩒落去＝而家偷芝士/, 'only the small line says what the tap does');
+    click(bigButton(seats4.p1));
+    click(bigButton(seats4.p3));
+    assert.deepEqual(lastSent(sent4, 'p1'), { type: 'steal' });
+    assert.equal(four.state.cheese.hour, 2);
+    pushViews(four, seats4);
+    sameForAll(four, seats4, '4p after the steal');
+
+    assert.deepEqual(sounds.filter((x) => x.phase === 'night'), [], 'the game UI makes no sound at night');
+    for (const all of [seats, seats5, seats4]) for (const s of Object.values(all)) s.handle.destroy();
   });
 });

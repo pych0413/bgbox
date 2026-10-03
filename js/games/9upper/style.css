@@ -81,6 +81,9 @@
 .g9-speaker.now .g9-speaker-state { color: var(--text); font-weight: 700; }
 .g9-speaker.done { opacity: .6; }
 .g9-speaker-call { flex: none; }
+.g9-speaker.callable { width: 100%; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
+.g9-speaker.callable:active { transform: scale(.98); border-color: var(--seat, var(--accent)); }
+.g9-speaker.callable .g9-speaker-state { color: var(--accent); font-weight: 700; }
 
 .g9-judgebtns { display: grid; grid-template-columns: 1fr 1.4fr; gap: .625rem; }
 .g9-judgebtns .btn { font-size: .9375rem; padding: .625rem .5rem; }

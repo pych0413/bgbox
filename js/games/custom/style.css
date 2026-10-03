@@ -88,6 +88,7 @@
 .cu-tag.seen   { background: rgba(78,201,122,.14); color: #8fe3ad; }
 .cu-tag.unseen { opacity: .7; }
 .cu-tag.role   { background: rgba(245,197,24,.2); color: #ffdc5e; font-size: .8125rem; font-weight: 700; }
+.cu-tag.role, .cu-tag.peek { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }   /* long-press = explain */
 .cu-tag.peek   { background: rgba(45,212,191,.16); color: #5eead4; }
 .cu-tag.dice   { font-variant-numeric: tabular-nums; }
 .cu-pill {

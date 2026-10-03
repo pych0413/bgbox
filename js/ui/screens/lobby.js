@@ -11,6 +11,7 @@ import { el, dieFace, sig, toast } from '../dom.js?v=1';
 import { sfx, primeAudio } from '../../core/sfx.js?v=1';
 import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
 import { fits } from '../logic.js?v=1';
+import { wantsPreflight } from '../preflight.js?v=1';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
 let qrLoading = null;
@@ -48,7 +49,8 @@ export function mountLobby(sh) {
   const title = el('h2');
   const topbar = el('header', { class: 'topbar' },
     el('button', { class: 'icon-btn', type: 'button', 'aria-label': '離開', onclick: () => sh.leave() }, '‹'),
-    title, sh.soundButton());
+    title, sh.timer.button(), sh.soundButton(), sh.settingsButton());
+  const timerStrip = sh.timer.strip();
 
   // ---------- room code ----------
   const bigCode = el('div', { class: 'big-code' });
@@ -116,11 +118,21 @@ export function mountLobby(sh) {
   addBtn.addEventListener('click', addSeat);
   addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSeat(); });
   const addRow = el('div', { class: 'add-seat' }, addInput, addBtn);
+
+  // #9: the seat order saved at the last start on this phone
+  const savedOrderBtn = el('button', { class: 'btn btn-ghost btn-sm saved-order', type: 'button' }, '↺ 用返上次座位');
+  savedOrderBtn.addEventListener('click', () => {
+    try { report(app.lobby.applySavedOrder()); sfx('tap'); } catch (err) { console.error(err); toast('排唔到'); }
+  });
   const addNote = el('p', { class: 'hint', style: { margin: '.5rem 0 0' }, text: '有人電話冇電或者冇數據？加佢喺度，部機傳嚟傳去玩。' });
+
+  // G3: an offline lobby seat is dropped after a grace period unless the host keeps it
+  const awayBox = el('div', { class: 'away-box' });
+  let awayKey = null;
 
   const seatsCard = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h3', { text: '玩家' }), countPill),
-    seatEditor.el, addRow, addNote);
+    seatEditor.el, awayBox, savedOrderBtn, addRow, addNote);
 
   // ---------- game picker ----------
   const gridHint = el('span', { class: 'hint' });
@@ -130,9 +142,11 @@ export function mountLobby(sh) {
     el('div', { class: 'card-head' }, el('h3', { text: '揀遊戲' }), gridHint), grid, detail);
 
   // ---------- config ----------
+  const presetsBox = el('div', { class: 'cfg-presets' });
+  let presetsKey = null;
   const configForm = ConfigForm({});
   const configCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h3', { text: '設定' })), configForm.el);
+    el('div', { class: 'card-head' }, el('h3', { text: '設定' })), presetsBox, configForm.el);
 
   const summaryTags = el('div', { class: 'cfg-summary' });
   const validBox = el('div');
@@ -164,6 +178,11 @@ export function mountLobby(sh) {
   rate.addEventListener('input', () => { narrator.set({ rate: Number(rate.value) }); rateLabel.textContent = `×${Number(rate.value).toFixed(2)}`; });
   rate.addEventListener('change', () => sh.saveNarration());
   testBtn.addEventListener('click', () => { narrator.prime(); narrator.test(); });
+  const checkBtn = el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button',
+    onclick: () => sh.openPreflight({ meta: last.room?.gameId ? sh.gameMeta(last.room.gameId) : null }),
+  }, '🔧 開波前檢查');
+  voiceBox.lastElementChild.append(checkBtn);
   const offVoices = narrator.onVoices(() => paintNarration(last));
 
   // ---------- history ----------
@@ -174,17 +193,29 @@ export function mountLobby(sh) {
   const startBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '開始 ▶');
   const status = el('p', { class: 'status' });
 
-  startBtn.addEventListener('click', async () => {
+  async function doStart() {
     // iOS gesture rule: prime speech and audio from the tap itself, before anything async
     narrator.prime();
     primeAudio();
     try {
       const res = await app.lobby.start();
       if (res && res.ok === false) toast(res.message || '開始唔到', 2600);
+      else if (res?.warnings?.length) toast(String(res.warnings[0]), 3200);
     } catch (err) {
       console.error(err);
       toast(String(err?.message ?? '開始唔到'), 2600);
     }
+  }
+
+  startBtn.addEventListener('click', () => {
+    narrator.prime();
+    primeAudio();
+    // #2: the first narrated game of the evening gets a 30-second check first; its own
+    // 開始 button is a fresh tap, so speech is primed again right where it starts
+    const st = app.state;
+    const meta = st.room?.gameId ? sh.gameMeta(st.room.gameId) : null;
+    if (wantsPreflight(st, meta)) { sh.openPreflight({ meta, onGo: doStart }); return; }
+    doStart();
   });
 
   // ---------- painting ----------
@@ -274,13 +305,64 @@ export function mountLobby(sh) {
 
     configCard.hidden = !(st.isHost && game);
     if (!configCard.hidden) {
+      paintPresets(room, game, n);
       let fields = [];
-      try { fields = game.config.fields(room.config, n) ?? []; } catch (err) { console.error('config.fields failed', err); }
+      // third argument: the content bag, so a 'categories' field can show 已用 / 總數 (#11)
+      try { fields = game.config.fields(room.config, n, { bag: app.bag }) ?? []; } catch (err) { console.error('config.fields failed', err); }
       configForm.update({
-        fields, value: room.config ?? {},
+        fields, value: room.config ?? {}, bag: app.bag ?? null,
         onChange: (cfg) => report(app.lobby.setConfig(cfg)),
+        onBagChange: () => sh.rerender(),
       });
     }
+  }
+
+  /** One-tap presets with a reason (BACKLOG #8): `config.presets?(n) → [{ id, label, reason, cfg }]`. */
+  function paintPresets(room, game, n) {
+    let list = [];
+    try { list = typeof game?.config?.presets === 'function' ? (game.config.presets(n) ?? []) : []; } catch (err) { console.error('config.presets failed', err); }
+    list = list.filter((p) => p && p.label && p.cfg && typeof p.cfg === 'object');
+    const cfg = room.config ?? {};
+    const same = (p) => Object.keys(p.cfg).every((k) => sig(cfg[k]) === sig(p.cfg[k]));
+    const current = list.find(same)?.id ?? null;
+    const key = sig([list, current]);
+    if (key === presetsKey) return;
+    presetsKey = key;
+    presetsBox.hidden = !list.length;
+    presetsBox.replaceChildren(...(list.length ? [
+      el('span', { class: 'field-label', text: '快速揀' }),
+      el('div', { class: 'cfg-presets-list' }, list.map((p) => el('button', {
+        class: 'cfg-preset' + (p.id === current ? ' on' : ''), type: 'button', 'aria-pressed': p.id === current ? 'true' : 'false',
+        onclick: () => { sfx('tap'); report(app.lobby.setConfig({ ...(app.state.room?.config ?? {}), ...p.cfg })); },
+      }, el('b', { text: p.label }), p.reason ? el('small', { text: p.reason }) : null))),
+    ] : []));
+  }
+
+  function paintAway(st) {
+    const list = st.isHost && typeof app.lobby?.keepSeat === 'function'
+      ? st.room.players.filter((p) => !p.connected && !p.spectator && p.dropAt && !p.keep)
+      : [];
+    const key = sig(list.map((p) => [p.id, p.name, p.dropAt]));
+    if (key === awayKey) return;
+    awayKey = key;
+    awayBox.replaceChildren(...list.map((p) => el('div', { class: 'banner' },
+      el('span', { class: 'grow', text: `📴 ${p.name} 斷咗線 — 一分鐘內返唔到就會移走` }),
+      el('button', {
+        class: 'btn btn-ghost btn-sm', type: 'button',
+        onclick: () => { report(app.lobby.keepSeat(p.id, true)); sfx('tap'); },
+      }, '保留個位'))));
+  }
+
+  /** #9: offer 「用返上次座位」 when the people here sat in a different order last time. */
+  function paintSavedOrder(st) {
+    const g = sh.savedGroup();
+    const canApply = st.isHost && typeof app.lobby?.applySavedOrder === 'function' && !!g;
+    if (!canApply) { savedOrderBtn.hidden = true; return; }
+    const saved = (Array.isArray(g.order) && g.order.every((x) => typeof x === 'string') ? g.order : g.names).map(String);
+    const here = st.room.players.filter((p) => !p.spectator).map((p) => p.name);
+    const both = here.filter((name) => saved.includes(name));
+    const savedHere = saved.filter((name) => both.includes(name));
+    savedOrderBtn.hidden = both.length < 2 || sig(both) === sig(savedHere);
   }
 
   function paintNarration(st) {
@@ -342,7 +424,7 @@ export function mountLobby(sh) {
   }
 
   const root = el('section', { class: 'screen', 'data-screen': 'lobby' },
-    topbar, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBtn, status);
+    topbar, timerStrip, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBtn, status);
 
   return {
     el: root,
@@ -379,6 +461,8 @@ export function mountLobby(sh) {
         },
       });
 
+      paintSavedOrder(st);
+      paintAway(st);
       paintGrid(st);
       paintDetail(st);
       paintConfig(st);

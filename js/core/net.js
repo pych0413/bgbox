@@ -5,13 +5,21 @@
 // opens one reliable DataChannel to it. No accounts, no backend.
 //
 // The room code doubles as the host's PeerJS id, so joining is just
-// "connect to cheesethief-v1-<CODE>".
+// "connect to bgbox-v2-<CODE>".
+//
+// The namespace changed from v1's `cheesethief-v1-` (G7): a v2 phone can never
+// dial a v1 host (which would seat it as a nameless ghost) and a phone still
+// running v1 simply does not find a v2 room. Hosts also refuse a v1-shaped
+// hello politely, should one ever get through.
 // ============================================================
 
 import { makeRoomCode, sleep } from './util.js?v=1';
 
-const NS = 'cheesethief-v1-';
-export const peerIdFor = (code) => NS + String(code);
+export const PEER_NS = 'bgbox-v2-';
+export const peerIdFor = (code) => PEER_NS + String(code);
+
+/** True when the PeerJS script has loaded. Only multi-phone rooms need it; one-phone play never asks. */
+export const hasPeer = () => typeof globalThis.Peer === 'function';
 
 // STUN gets us through most NATs; the free TURN relays rescue the
 // carrier-grade NATs that mobile data loves to sit behind.

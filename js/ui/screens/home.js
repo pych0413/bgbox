@@ -5,6 +5,7 @@
 import { el, toast, restartAnim } from '../dom.js?v=1';
 import { primeAudio } from '../../core/sfx.js?v=1';
 import { isRoomCode } from '../../core/util.js?v=1';
+import { inAppNotice, peerLooksDown } from '../status.js?v=1';
 
 const NAME_MAX = 12;
 const TILES = [
@@ -51,6 +52,10 @@ export function mountHome(sh) {
     el('span', { class: 'btn-icon', text: '📱' }), '一部手機玩');
 
   const resumeSlot = el('div');
+  // G18: rooms across phones need PeerJS (internet); one-phone play never does
+  const netNote = el('p', { class: 'warn net-note', text: '📡 多部手機玩要上網。而家冇網？揀「📱 一部手機玩」，唔使網絡都玩到。' });
+  const paintNet = () => { netNote.hidden = !peerLooksDown(); };
+  const peerTag = document.getElementById('peerjs');
 
   const currentName = () => name.value.trim().slice(0, NAME_MAX);
   const needName = () => {
@@ -132,6 +137,8 @@ export function mountHome(sh) {
   }
 
   const root = el('section', { class: 'screen', 'data-screen': 'home' },
+    el('div', { class: 'home-tools' }, sh.settingsButton({ preflight: () => sh.openPreflight({}) })),
+    inAppNotice(location.origin + location.pathname),
     el('div', { class: 'hub-hero' },
       el('div', { class: 'hub-dice', 'aria-hidden': 'true' },
         ['🎲', '🧀', '🐺', '🕵️', '🎨'].map((e, i) => el('span', { style: { '--i': String(i) }, text: e }))),
@@ -141,6 +148,7 @@ export function mountHome(sh) {
     el('div', { class: 'card' },
       el('label', { class: 'field' }, el('span', { class: 'field-label', text: '你個名' }), name)),
     el('div', { class: 'stack' }, hostBtn, joinBtn, localBtn),
+    netNote,
     status,
     resumeSlot,
     el('p', { class: 'fineprint' },
@@ -148,11 +156,21 @@ export function mountHome(sh) {
 
   paintResume();
   showHomeError();
+  paintNet();
+  window.addEventListener('online', paintNet);
+  window.addEventListener('offline', paintNet);
+  peerTag?.addEventListener('error', paintNet);
+  peerTag?.addEventListener('load', paintNet);
 
   return {
     el: root,
-    update() { showHomeError(); paintResume(); },
-    destroy() { /* nothing outlives the screen */ },
+    update() { showHomeError(); paintResume(); paintNet(); },
+    destroy() {
+      window.removeEventListener('online', paintNet);
+      window.removeEventListener('offline', paintNet);
+      peerTag?.removeEventListener('error', paintNet);
+      peerTag?.removeEventListener('load', paintNet);
+    },
   };
 }
 
@@ -162,8 +180,26 @@ export function mountLocalSetup(sh) {
   const { app } = sh;
   const MIN = 2;
   const MAX = 16;
+  // #9: the group that played last time on this phone, in their seat order
+  const saved = sh.savedGroup?.() ?? null;
+  const savedNames = (saved?.order ?? saved?.names ?? []).filter((n) => typeof n === 'string' && n).slice(0, MAX);
+  let prefilled = false;
+  if (!sh.drafts.localNames && savedNames.length >= MIN) {
+    sh.drafts.localNames = savedNames.slice();
+    prefilled = true;
+  }
   const names = (sh.drafts.localNames ??= [sh.drafts.name ?? '', '', '', '']).slice();
   const list = el('div', { class: 'local-names' });
+  const clearBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '✕ 清空重填');
+  const savedNote = el('div', { class: 'saved-note' },
+    el('span', { class: 'hint', text: '已經填返上次嗰班人，可以照改。' }), clearBtn);
+  savedNote.hidden = !prefilled;
+  clearBtn.addEventListener('click', () => {
+    names.splice(0, names.length, sh.drafts.name ?? '', '', '', '');
+    save();
+    savedNote.hidden = true;
+    paint();
+  });
   const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '＋ 加一個人');
   const startBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '開始');
   const status = el('p', { class: 'status' });
@@ -218,7 +254,7 @@ export function mountLocalSetup(sh) {
       el('span', { class: 'spacer' })),
     el('div', { class: 'card' },
       el('div', { class: 'card-head' }, el('h3', { text: '邊個玩？' }), el('span', { class: 'hint', text: '按坐位次序填' })),
-      list, addBtn),
+      savedNote, list, addBtn),
     el('p', { class: 'fineprint', text: '一部手機傳嚟傳去玩，唔使上網。夜晚、秘密行動會叫你交俾指定嗰個人。' }),
     startBtn, status);
 
