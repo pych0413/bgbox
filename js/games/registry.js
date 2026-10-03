@@ -23,21 +23,21 @@ export const GAMES = [
   },
   {
     id: 'onuw',
-    meta: { name: '一夜終極狼人', emoji: '🐺', players: [3, 10], minutes: [10, 20], batch: 1,
+    meta: { name: '一夜終極狼人', emoji: '🐺', players: [3, 10], minutes: [10, 20], batch: 2,
       singleDevice: 'partial', narration: 'recommended',
       blurb: '一晚換牌、一次投票，連自己係邊個都未必肯定。' },
     load: () => import('./onuw/index.js?v=20261003085536'),
   },
   {
     id: 'werewolf',
-    meta: { name: '狼人殺', emoji: '🐺', players: [6, 13], minutes: [25, 60], batch: 1,
+    meta: { name: '狼人殺', emoji: '🐺', players: [6, 13], minutes: [25, 60], batch: 2,
       singleDevice: 'partial', narration: 'required',
       blurb: '手機做上帝：夜晚閉眼、天光投票，揪出狼人。' },
     load: () => import('./werewolf/index.js?v=20261003085536'),
   },
   {
     id: 'avalon',
-    meta: { name: '阿瓦隆', emoji: '🏰', players: [5, 10], minutes: [30, 45], batch: 1,
+    meta: { name: '阿瓦隆', emoji: '🏰', players: [5, 10], minutes: [30, 45], batch: 2,
       singleDevice: 'full', narration: 'optional',
       blurb: '組隊出任務，好人要搵出內鬼，壞人要守住梅林。' },
     load: () => import('./avalon/index.js?v=20261003085536'),
@@ -72,7 +72,7 @@ export const GAMES = [
   },
   {
     id: '9upper',
-    meta: { name: '瞎掰王 9upper', emoji: '🎭', players: [3, 9], minutes: [15, 30], batch: 2,
+    meta: { name: '瞎掰王 9upper', emoji: '🎭', players: [3, 9], minutes: [15, 30], batch: 1,
       singleDevice: 'full', narration: 'optional',
       blurb: '一本正經噏下去，邊個講嘅係真、邊個係瞎掰？' },
     load: () => import('./9upper/index.js?v=20261003085536'),
