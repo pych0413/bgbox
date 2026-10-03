@@ -19,8 +19,8 @@
 // the list still scrolls normally everywhere else.
 // ============================================================
 
-import { el, sig } from '../dom.js?v=20261003075613';
-import { sfx } from '../../core/sfx.js?v=20261003075613';
+import { el, sig } from '../dom.js?v=20261003085536';
+import { sfx } from '../../core/sfx.js?v=20261003085536';
 
 export const SEAT_PALETTE = [
   '#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6', '#2dd4bf', '#facc15',

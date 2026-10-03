@@ -3,9 +3,9 @@
 // scoreboard, and (host only) 再玩一局 / 換遊戲.
 // ============================================================
 
-import { el } from '../dom.js?v=20261003075613';
-import { sfx } from '../../core/sfx.js?v=20261003075613';
-import { Scoreboard } from '../components/index.js?v=20261003075613';
+import { el } from '../dom.js?v=20261003085536';
+import { sfx } from '../../core/sfx.js?v=20261003085536';
+import { Scoreboard } from '../components/index.js?v=20261003085536';
 
 const CONFETTI = ['🎉', '✨', '🧀', '🎊', '⭐'];
 

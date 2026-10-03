@@ -32,9 +32,9 @@
 // reading and what games/custom/game.js already produces.
 // ============================================================
 
-import { el, sig, toast } from '../dom.js?v=20261003075613';
-import { fmtDuration } from '../logic.js?v=20261003075613';
-import { sfx } from '../../core/sfx.js?v=20261003075613';
+import { el, sig, toast } from '../dom.js?v=20261003085536';
+import { fmtDuration } from '../logic.js?v=20261003085536';
+import { sfx } from '../../core/sfx.js?v=20261003085536';
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const optValue = (o) => (o !== null && typeof o === 'object' ? (o.value ?? o.id) : o);

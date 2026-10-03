@@ -7,11 +7,11 @@
 // narrator and Web Audio are primed there, as the very first thing.
 // ============================================================
 
-import { el, dieFace, sig, toast } from '../dom.js?v=1';
-import { sfx, primeAudio } from '../../core/sfx.js?v=1';
-import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
-import { fits } from '../logic.js?v=1';
-import { wantsPreflight } from '../preflight.js?v=1';
+import { el, dieFace, sig, toast } from '../dom.js?v=20261003085536';
+import { sfx, primeAudio } from '../../core/sfx.js?v=20261003085536';
+import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=20261003085536';
+import { fits } from '../logic.js?v=20261003085536';
+import { wantsPreflight } from '../preflight.js?v=20261003085536';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
 let qrLoading = null;

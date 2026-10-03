@@ -22,7 +22,7 @@
 // The bar never speaks by itself: the app speaks cues and reports them done.
 // ============================================================
 
-import { el } from '../dom.js?v=20261003075613';
+import { el } from '../dom.js?v=20261003085536';
 
 /** Why the line did not come out (app.state.narration.reason) → what the host is told. */
 const STALL_TEXT = {
