@@ -25,7 +25,8 @@ const BOOLS = ['passPhone', 'scoreFloor', 'rePeek', 'antiStreak'];
 // not a real bank category would be spotted at once. tests/9upper.test.mjs fails if the bank grows a
 // category that is missing here.
 export const CATEGORIES = ['冷門中文詞語', '成語典故', '粵語俚語由來', '外語怪詞', '天文與太空', '科學與醫學名詞',
-  '心理學效應', '自然現象', '奇怪動物', '奇怪植物', '歷史冷知識', '世界怪習俗與節日', '奇怪法律'];
+  '心理學效應', '自然現象', '奇怪動物', '奇怪植物', '歷史冷知識', '世界怪習俗與節日', '奇怪法律', '香港冷知識',
+  '食物名稱由來', '冷門運動同遊戲術語'];
 
 // Only used when the bank cannot be loaded at all (offline first run, empty bank), so a round never dies.
 const FALLBACK_TERMS = [
@@ -95,7 +96,7 @@ export const rules = {
       + '出咗就收唔返，大家即刻見到；佢係咩身份要到揭曉先知。被出收皮啦嘅人照樣可以繼續講。\n'
       + '・對方係 9upper：佢 −1，諗樣 +1。\n'
       + '・對方係老實人：諗樣 −3。\n'
-      + '冇把握唔好亂出：中老實人要賠 3 分。' },
+      + '賺 1 蝕 3，大約有七成半把握先抵；不過 6 人或以上 9upper 多，求其出都唔蝕。' },
     { title: '難度同提示', body:
       '⭐ 簡單（1 分）：提示話你知屬於邊一類。\n'
       + '⭐⭐ 中等（2 分）：提示俾三個類別，得一個啱。9upper 可以跟啱嗰個講，亦可以故意揀錯嗰個。\n'

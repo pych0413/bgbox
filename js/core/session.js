@@ -91,6 +91,8 @@ export class Session {
    * @param {object}   o.game       { meta, config, engine, ... } — the loaded game module
    * @param {object[]} o.players    [{ id, name, seat, color }] in seat order
    * @param {object}   o.config
+   * @param {string|null} [o.hostPid] the host's own seat (G1) — moderator modes need to know who holds the host phone
+   * @param {*}        [o.carry]    the previous game's result().carry for the same game (anti-streak), or undefined
    * @param {Function} o.rng        () => [0,1)
    * @param {object}   o.bag        content bag (draw/stats)
    * @param {Function} o.now        () => host ms
@@ -130,6 +132,7 @@ export class Session {
     if (snap) {
       this.players = clone(snap.players);
       this.config = clone(snap.config);
+      this.hostPid = snap.hostPid ?? null;
       this.state = clone(snap.state);
       this.rev = snap.rev ?? 0;
       this.drawing = snap.ink ? clone(snap.ink) : emptyInk(this.state.inkEpoch ?? 0);
@@ -141,10 +144,14 @@ export class Session {
     } else {
       this.players = clone(o.players);
       this.config = clone(o.config);
+      this.hostPid = o.hostPid != null && this.players.some((p) => p.id === o.hostPid) ? o.hostPid : null;
       this.paused = false;
       this.pausedAt = 0;
       const ctx = this.#ctx();
-      const made = this.engine.setup({ players: clone(this.players), config: clone(this.config), ...ctx });
+      const made = this.engine.setup({
+        players: clone(this.players), config: clone(this.config), ...ctx, hostPid: this.hostPid,
+        ...(o.carry !== undefined && o.carry !== null ? { carry: clone(o.carry) } : {}),
+      });
       this.state = made === undefined ? null : made;
       if (!this.state) throw new Error('engine.setup returned nothing');
       this.drawing = emptyInk(this.state.inkEpoch ?? 0);
@@ -344,6 +351,20 @@ export class Session {
   }
   result() { return this.#query(() => jsonClone(this.engine.result?.(this.state) ?? null), null); }
   legal(pid) { return this.#query(() => this.engine.legalActions?.(this.state, pid) ?? [], []); }
+
+  /**
+   * Is the game actually WAITING on this seat (so a dead phone stalls the table)? Night decoys give every
+   * seat a legal action, so legality alone over-reports. Asks, in order: engine.blocking(state, pid) if the
+   * game has it; else whether focus() names the seat (when focus gives an answer); else legalActions.
+   */
+  blocking(pid) {
+    return this.#query(() => {
+      if (typeof this.engine.blocking === 'function') return !!this.engine.blocking(this.state, pid);
+      const f = this.engine.focus?.(this.state);
+      if (f && Array.isArray(f.pids)) return f.pids.includes(pid);
+      return (this.engine.legalActions?.(this.state, pid) ?? []).length > 0;
+    }, false);
+  }
   deadline() { return typeof this.state?.deadline === 'number' ? this.state.deadline : null; }
 
   // ---------- shared drawing ----------
@@ -377,6 +398,7 @@ export class Session {
       gameId: this.game.meta?.id ?? null,
       players: clone(this.players),
       config: clone(this.config),
+      hostPid: this.hostPid,
       state: clone(this.state),
       rev: this.rev,
       ink: clone(this.drawing),

@@ -2,7 +2,7 @@
 // ConfigForm — renders a game's `config.fields(cfg, n)` (DESIGN §3 Field[])
 // as the lobby's setup form.
 //
-//   ConfigForm({ fields, value, onChange(cfg) }) → { el, update(props), destroy() }
+//   ConfigForm({ fields, value, onChange(cfg), bag? }) → { el, update(props), destroy() }
 //
 // `value` is the whole config object; every edit calls onChange with the
 // whole object (the edited key replaced). The form reconciles IN PLACE by
@@ -20,9 +20,13 @@
 //                  add / delete (turned off by `fixed: true`). `max` caps each count.
 //                value: object { [roleId]: count } with field.options = [{ id, name, emoji, min?, max?, auto? }]
 //                  → counts only. `auto` roles show 「自動」 and are not written.
-//   categories { key, label, options: [v | {value,label}], levels?: [v | {value,label}], stats?: {used,total} }
+//   categories { key, label, options: [v | {value,label}], levels?: [v | {value,label}], stats?: {used,total},
+//                bank?, matches?(value, entry) }
 //                value: { cats: [...], levels: [...] }  (the keys `categories` / `level(s)` are
 //                  honoured too if the incoming value already uses them)
+//                Content bag (BACKLOG #11): with `stats` (or `bank` + `matches` and the
+//                optional `bag` prop = app.bag) the field prints 「已用 37 / 1,243」, warns
+//                when the filtered pool is used up, and offers 重置 (bag.reset(bank)).
 //
 // §15 leaves the roles / categories value shapes open; the above is the simplest
 // reading and what games/custom/game.js already produces.
@@ -291,15 +295,51 @@ function rolesField(emit) {
 
 // ---------- categories ----------
 
-function categoriesField(emit) {
+function categoriesField(emit, ctx) {
   let cur = { f: {}, v: {} };
   const headHost = el('div');
   const catHost = el('div', { class: 'c-configform-chips' });
   const levelHead = el('span', { class: 'field-label', text: '難度' });
   const levelHost = el('div', { class: 'c-configform-chips' });
-  const stats = el('p', { class: 'c-configform-stats' });
+  const statsText = el('span');
+  const resetBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '↺ 重置');
+  const stats = el('div', { class: 'c-configform-stats' }, statsText, resetBtn);
+  const dry = el('p', { class: 'warn', text: '揀咗嘅類別已經用晒，下局會由頭再洗過。想要新嘢可以揀多啲類別。' });
   const allBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '全選');
-  const root = el('div', { class: 'c-configform-field' }, headHost, catHost, allBtn, levelHead, levelHost, stats);
+  const root = el('div', { class: 'c-configform-field' }, headHost, catHost, allBtn, levelHead, levelHost, stats, dry);
+
+  /** The field's own numbers, else work them out from the bag (host only; null when unknown). */
+  function statsNow() {
+    if (cur.f.stats && Number.isFinite(Number(cur.f.stats.total))) return cur.f.stats;
+    const bag = ctx.bag;
+    if (!bag?.stats || !cur.f.bank) return null;
+    try {
+      const filter = typeof cur.f.matches === 'function' ? (e) => cur.f.matches(cur.v, e) : undefined;
+      const s = bag.stats(cur.f.bank, filter);
+      return s && Number.isFinite(s.total) ? s : null;
+    } catch { return null; }   // bank not loaded yet: show nothing rather than fail the form
+  }
+
+  function paintStats() {
+    const s = statsNow();
+    stats.hidden = !s;
+    dry.hidden = !s || !(s.total > 0 && s.used >= s.total);
+    if (!s) return;
+    statsText.textContent = `已用 ${Number(s.used ?? 0).toLocaleString('en-US')} / ${Number(s.total ?? 0).toLocaleString('en-US')}`;
+    resetBtn.hidden = !(ctx.bag?.reset && cur.f.bank) || !(s.used > 0);
+  }
+
+  resetBtn.addEventListener('click', () => {
+    let name = '';
+    try { name = ctx.bag.label?.(cur.f.bank) ?? ''; } catch { /* no label */ }
+    if (!window.confirm(`重置${name ? `「${name}」` : ''}？用過嘅會再出。`)) return;
+    try { if (ctx.bag.reset(cur.f.bank) === false) throw new Error('reset refused'); } catch (err) { console.error(err); toast('重置唔到'); return; }
+    sfx('tap');
+    toast('已經重置');
+    cur = { ...cur, f: { ...cur.f, stats: undefined } };   // the field's numbers are stale now; ask the bag
+    paintStats();
+    ctx.changed?.();
+  });
 
   const keyOf = (names, v) => names.find((k) => v && k in v) ?? names[0];
   const get = (names) => { const k = keyOf(names, cur.v); return Array.isArray(cur.v?.[k]) ? cur.v[k] : []; };
@@ -345,9 +385,7 @@ function categoriesField(emit) {
       allBtn.textContent = get(CATS).length === (f.options ?? []).length ? '全部取消' : '全選';
       levelHead.hidden = levelHost.hidden = !f.levels?.length;
       if (f.levels?.length) chips(levelHost, f.levels, LEVELS);
-      const s = f.stats;
-      stats.hidden = !s;
-      if (s) stats.textContent = `已用 ${Number(s.used ?? 0).toLocaleString('en-US')} / ${Number(s.total ?? 0).toLocaleString('en-US')}`;
+      paintStats();
     },
   };
 }
@@ -370,6 +408,11 @@ export function ConfigForm(props = {}) {
   let local = {};
   const views = new Map();   // key → { type, view }
   const root = el('div', { class: 'c-configform' });
+  // what field builders may read besides their own field: the content bag (host only)
+  const ctx = {
+    get bag() { return p.bag ?? null; },
+    changed: () => p.onBagChange?.(),
+  };
 
   // Keep a local copy so two quick taps before the host echoes do not lose the first.
   const emit = (key, val) => {
@@ -387,7 +430,7 @@ export function ConfigForm(props = {}) {
       for (const f of fields) {
         let entry = views.get(f.key);
         if (!entry || entry.type !== f.type) {
-          entry = { type: f.type, view: (BUILDERS[f.type] ?? unknownField)(emit) };
+          entry = { type: f.type, view: (BUILDERS[f.type] ?? unknownField)(emit, ctx) };
           views.set(f.key, entry);
         }
         entry.view.update(f, local[f.key]);

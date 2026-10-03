@@ -517,7 +517,7 @@ function explainLines(s, o) {
     }
     case 'guess-right':
       lines.push(two
-        ? `${by} 停鐘亮身分，另一個間諜都要估；真正地點係 ${locLabel(s, o.loc)}。`
+        ? `${by} 停鐘亮身分，兩個間諜都要估；真正地點係 ${locLabel(s, o.loc)}。`
         : `${by} 停鐘亮身分，估中地點 ${locLabel(s, o.loc)}！`);
       if (two) {
         for (const id of o.picks ? Object.keys(o.picks) : []) {
@@ -532,7 +532,7 @@ function explainLines(s, o) {
         for (const id of Object.keys(o.picks)) lines.push(`${nameOf(s, id)} 揀咗「${locOf(s, o.picks[id]).name}」✗`);
       }
       lines.push('每個非間諜 +1。');
-      if (accs.some((a) => spies.includes(a.suspect))) lines.push('間諜係自己估錯，所以冇指控獎勵。');
+      if (accs.some((a) => spies.includes(a.suspect))) lines.push('間諜自己估錯，所以指控過佢嘅人冇額外分。');
     }
   }
   return lines;

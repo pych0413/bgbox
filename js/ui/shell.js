@@ -27,14 +27,18 @@
 //    if it is missing they stay greyed out as 「即將推出」.
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261003075613';
-import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=20261003075613';
-import { sfx, setMuted, primeAudio } from '../core/sfx.js?v=20261003075613';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003075613';
-import { mountJoin } from './screens/join.js?v=20261003075613';
-import { mountLobby } from './screens/lobby.js?v=20261003075613';
-import { mountPlay } from './screens/play.js?v=20261003075613';
-import { mountResults } from './screens/results.js?v=20261003075613';
+import { el, toast } from './dom.js?v=1';
+import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=1';
+import * as sfxMod from '../core/sfx.js?v=1';
+import { createTableTimer } from './timer.js?v=1';
+import { createStatus } from './status.js?v=1';
+import { openSettings, applyTextSize } from './settings.js?v=1';
+import { openPreflight } from './preflight.js?v=1';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=1';
+import { mountJoin } from './screens/join.js?v=1';
+import { mountLobby } from './screens/lobby.js?v=1';
+import { mountPlay } from './screens/play.js?v=1';
+import { mountResults } from './screens/results.js?v=1';
 
 const RESUME_KEY = 'bgb:resume';   // written by core/client.js; the shell only reads and clears it
 const RESUME_TTL = 8 * 60 * 60 * 1000;   // 8h — long enough for an evening of games
@@ -49,6 +53,8 @@ const ACCENTS = {
   '9upper': '#c084fc', custom: '#2dd4bf',
 };
 
+const { sfx, setMuted, primeAudio } = sfxMod;
+
 const silentNarrator = () => ({
   prime() {}, voices: () => [], pickDefault: () => null, set() {}, speak: () => Promise.resolve(),
   cancel() {}, hasCantonese: () => false, onVoices: () => () => {}, test: () => Promise.resolve(),
@@ -58,7 +64,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=20261003075613');
+    const m = await import('../games/registry.js?v=1');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);
@@ -74,13 +80,22 @@ export async function startShell(app, root, opts = {}) {
   const loading = new Map();    // game id → Promise
   const soundButtons = new Set();
   const host = el('main', { class: 'screen-host' });
-  const nightDim = el('div', { class: 'night-dim', 'aria-hidden': 'true' }, el('span', { text: '閉 眼' }));
+  // Eyes-closed screen (BACKLOG #4): near-black, fades only, never a white flash.
+  const nightDim = el('div', { class: 'night-dim', 'aria-hidden': 'true' },
+    el('span', { class: 'nd-title', text: '閉 眼' }),
+    el('span', { class: 'nd-hint', text: '🌙 可以將螢幕調暗啲' }));
   const netbarEl = document.getElementById('netbar') ?? el('div', { class: 'netbar hidden', id: 'netbar', role: 'alert' });
 
-  // ---------- sound: the user's toggle, plus the night-time mute on top ----------
+  // ---------- sound: the user's toggle, plus the night-time silence on top ----------
+  // G13: the night uses core/sfx's separate "suppressed" flag, so it never touches
+  // (or persists over) the user's own mute. An older core without it falls back to muting.
   let userMuted = !!lsGet(MUTE_KEY, false);
   let nightMuted = false;
-  const applyMute = () => setMuted(userMuted || nightMuted);
+  const canSuppress = typeof sfxMod.setSuppressed === 'function';
+  const applyMute = () => {
+    if (canSuppress) { setMuted(userMuted); sfxMod.setSuppressed(nightMuted); }
+    else setMuted(userMuted || nightMuted);
+  };
   const paintSoundButtons = () => {
     for (const b of soundButtons) {
       b.textContent = userMuted ? '🔇' : '🔊';
@@ -199,6 +214,22 @@ export async function startShell(app, root, opts = {}) {
     clearResume() { lsDel(RESUME_KEY); },
   };
 
+  // ---------- services every screen shares ----------
+  sh.timer = createTableTimer(sh);
+  const status = createStatus(sh);
+  /** ⚙️ — text size, sound, and (host) the pre-flight check. */
+  sh.openSettings = (opts = {}) => openSettings(sh, {
+    preflight: () => sh.openPreflight({ meta: app.state.room?.gameId ? sh.gameMeta(app.state.room.gameId) : null }),
+    ...opts,
+  });
+  sh.openPreflight = (opts = {}) => openPreflight(sh, opts);
+  sh.settingsButton = (opts) => el('button', { class: 'icon-btn sm', type: 'button', 'aria-label': '設定', onclick: () => sh.openSettings(opts) }, '⚙️');
+  /** The group saved at the last start on this device: { names, colours, order } | null (BACKLOG #9). */
+  sh.savedGroup = () => {
+    const g = 'savedGroup' in app.state ? app.state.savedGroup : lsGet('bgb:group', null);
+    return g && typeof g === 'object' && Array.isArray(g.names) && g.names.length ? g : null;
+  };
+
   // ---------- routing ----------
   const MOUNT = {
     home: mountHome, join: mountJoin, local: mountLocalSetup, connecting: mountConnecting,
@@ -242,8 +273,11 @@ export async function startShell(app, root, opts = {}) {
     if (!current || current.key !== key) {
       try { current?.ctl.destroy(); } catch (err) { console.error(err); }
       soundButtons.clear();   // the old screen's buttons die with it
+      sh.timer.forgetScreen();
       // leaving play: nothing may stay dimmed or muted
       if (current?.key === 'play') sh.sound.night(false);
+      // leaving the room altogether: no clock may keep ringing or covering the screen
+      if (!st.mode) sh.timer.reset();
       sh.cameFrom = current?.key ?? null;
       mount(key);
     }
@@ -262,6 +296,8 @@ export async function startShell(app, root, opts = {}) {
 
   function chrome(st) {
     netbar(st);
+    try { status.update(st); } catch (err) { console.error('[shell] status failed', err); }
+    try { sh.timer.update(st); } catch (err) { console.error('[shell] timer failed', err); }
     const inRoom = !!st.mode;
     if (inRoom !== awake) { awake = inRoom; keepAwake(inRoom); }
   }
@@ -297,8 +333,9 @@ export async function startShell(app, root, opts = {}) {
   }
 
   // ---------- boot ----------
+  applyTextSize();
   root.replaceChildren(host);
-  document.body.append(nightDim);
+  document.body.append(nightDim, status.el);
   if (!netbarEl.isConnected) document.body.append(netbarEl);
 
   // deep link ?r=1352 → join screen with the code filled in
@@ -314,7 +351,10 @@ export async function startShell(app, root, opts = {}) {
 
   app.on('change', schedule);
   // one-line news from the core (a content bank ran out and reshuffled, a seat was handed over…)
-  app.on('notice', (text) => toast(String(text), 3200));
+  app.on('notice', (text, info) => {
+    toast(String(text), info?.kind === 'save-failed' ? 4200 : 3200);
+    if (info?.kind === 'bag-reshuffle') schedule();   // the lobby's 已用 / 總數 changed
+  });
 
   // Batch-2 games: playable the moment their module exists, 「即將推出」 until then.
   for (const entry of catalog.filter((c) => !c.ready)) {

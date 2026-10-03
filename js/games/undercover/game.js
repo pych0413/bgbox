@@ -690,7 +690,7 @@ function resolveVote(s, ctx) {
     e.reason = 'tie';
   } else {
     e.kind = 'pk';
-    e.cands = top.slice();
+    e.cands = s.seats.filter((p) => top.includes(p));       // seat order, for the PK ballot
   }
 
   // Loop guard: too many rounds in a row without anybody leaving.

@@ -4,10 +4,11 @@
 // drops in), then your name.
 // ============================================================
 
-import { el, dieFace, addPips, toast } from '../dom.js?v=20261003075613';
-import { sfx } from '../../core/sfx.js?v=20261003075613';
-import { isRoomCode, CODE_LEN } from '../../core/util.js?v=20261003075613';
-import { friendlyError } from './home.js?v=20261003075613';
+import { el, dieFace, addPips, toast } from '../dom.js?v=1';
+import { sfx } from '../../core/sfx.js?v=1';
+import { isRoomCode, CODE_LEN } from '../../core/util.js?v=1';
+import { friendlyError } from './home.js?v=1';
+import { inAppNotice, peerLooksDown } from '../status.js?v=1';
 
 const NAME_MAX = 12;
 
@@ -28,6 +29,14 @@ export function mountJoin(sh) {
   });
   const joinBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '加入');
   const status = el('p', { class: 'status' });
+  // #6: the name belongs to a seat that dropped off — offer to take it back (the host approves)
+  const claimBox = el('div');
+  const cancelBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { margin: '.5rem auto 0' } }, '取消');
+  cancelBtn.hidden = true;
+  let claiming = false;
+  // G18: multi-phone play needs the internet (PeerJS)
+  const netNote = el('p', { class: 'warn', text: '📡 多部手機玩要上網。冇網絡可以返去揀「一部手機玩」。' });
+  const paintNet = () => { netNote.hidden = !peerLooksDown(); };
 
   const codeString = () => drafts.joinCode.join('');
 
@@ -70,6 +79,7 @@ export function mountJoin(sh) {
 
   async function doJoin() {
     if (busy) return;
+    claimBox.replaceChildren();
     sh.narrator.prime();   // iOS gesture rule: before the first await of this tap
     const code = codeString();
     const n = name.value.trim().slice(0, NAME_MAX);
@@ -99,15 +109,65 @@ export function mountJoin(sh) {
     // join() tears itself down on failure; leave() is only needed if it is still half-joined
     try { if (app.state.mode) app.leave(); } catch { /* already clean */ }
     busy = false;
+    claiming = false;
+    cancelBtn.hidden = true;
     name.disabled = false;
     paintSlots();
     setStatus('❌ ' + message, 'err');
+    paintClaim();
+    // the offer card explains it better than 「已經有人叫…」
+    if (claimBox.childElementCount) setStatus('');
   }
+
+  /** After a refused join: if the host says the name is an offline seat of this room, offer to reclaim it. */
+  function paintClaim() {
+    const c = app.state.claimable;
+    const ok = !busy && c && typeof c.pid === 'string' && c.code === codeString() && typeof app.claimSeat === 'function';
+    if (!ok) { claimBox.replaceChildren(); return; }
+    const who = c.name || name.value.trim() || '我';
+    claimBox.replaceChildren(el('div', { class: 'card claim-offer' },
+      el('p', { text: `「${who}」個位而家斷咗線。係你嘅話，可以攞返個位 — 房主㩒「批准」就得。` }),
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: () => doClaim(c) }, `🙋 我係 ${who}，之前斷咗線`)));
+  }
+
+  async function doClaim(c) {
+    if (busy) return;
+    sh.narrator.prime();
+    busy = true;
+    claiming = true;
+    claimBox.replaceChildren();
+    paintSlots();
+    name.disabled = true;
+    setStatus('問緊房主…');
+    try {
+      if (!(await sh.whenPeer())) throw new Error(sh.peerMissing);
+      const res = await app.claimSeat(c.code, c.pid);
+      if (!busy) return;                       // cancelled meanwhile
+      if (res?.status !== 'approved') {
+        setStatus('⏳ 等緊房主批准… 叫房主㩒「批准」');
+        cancelBtn.hidden = false;
+      }
+    } catch (err) {
+      console.error(err);
+      if (busy) failJoin(friendlyError(err, '問唔到房主。'));
+    }
+  }
+
+  cancelBtn.addEventListener('click', () => {
+    try { if (app.state.mode) app.leave(); } catch { /* already clean */ }
+    busy = false;
+    claiming = false;
+    cancelBtn.hidden = true;
+    name.disabled = false;
+    paintSlots();
+    setStatus('已經取消');
+  });
 
   joinBtn.addEventListener('click', doJoin);
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
   name.addEventListener('input', () => { drafts.name = name.value; });
 
+  const inApp = inAppNotice(drafts.joinCode.length === CODE_LEN ? sh.roomLink(codeString()) : location.href);
   const root = el('section', { class: 'screen', 'data-screen': 'join' },
     el('header', { class: 'topbar' },
       el('button', {
@@ -116,26 +176,40 @@ export function mountJoin(sh) {
       }, '‹'),
       el('h2', { text: '入房' }),
       el('span', { class: 'spacer' })),
+    inApp,
+    netNote,
     el('div', { class: 'card' },
       el('span', { class: 'field-label', text: '房間號碼 — 照住房主部機㩒' }),
       frame, hint, pad,
       el('div', { class: 'pad-actions' }, backBtn, clearBtn)),
     el('div', { class: 'card' },
       el('label', { class: 'field' }, el('span', { class: 'field-label', text: '你個名' }), name)),
-    joinBtn, status);
+    joinBtn, status, claimBox, cancelBtn);
 
   paintSlots();
+  paintNet();
+  window.addEventListener('online', paintNet);
+  window.addEventListener('offline', paintNet);
+  const peerTag = document.getElementById('peerjs');
+  peerTag?.addEventListener('error', paintNet);
+  peerTag?.addEventListener('load', paintNet);
   if (drafts.joinError) { setStatus('❌ ' + drafts.joinError, 'err'); drafts.joinError = ''; }
 
   return {
     el: root,
     update(st) {
       if (!busy) return;
-      // the host can refuse after the dial succeeded (room full, game running…)
-      if (st.conn === 'error') failJoin(st.connMessage || '入唔到房，房主拒絕咗。');
-      // otherwise show what the core says it is doing (e.g. "揾唔到房主 — 佢可能熄咗個頁面")
-      else if (st.connMessage) setStatus(st.connMessage);
+      // the host can refuse after the dial succeeded (room full, game running, claim refused…)
+      if (st.conn === 'error') failJoin(st.connMessage || (claiming ? '房主唔批准。' : '入唔到房，房主拒絕咗。'));
+      // otherwise show what the core says it is doing (e.g. "揾唔到房主 — 佢可能熄咗個頁面", 「等緊房主批准…」)
+      else if (st.connMessage) setStatus(claiming && st.claim?.status === 'waiting' ? `⏳ ${st.connMessage}` : st.connMessage);
     },
-    destroy() { clearTimeout(watchdog); },
+    destroy() {
+      clearTimeout(watchdog);
+      window.removeEventListener('online', paintNet);
+      window.removeEventListener('offline', paintNet);
+      peerTag?.removeEventListener('error', paintNet);
+      peerTag?.removeEventListener('load', paintNet);
+    },
   };
 }

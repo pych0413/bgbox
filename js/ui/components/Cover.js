@@ -4,7 +4,7 @@
 //   Cover({ front: Node, backArt: string | Node, backLabel, lockMode, locked, onOpen(open) })
 //     → { el, update(props), destroy(), close(), shake(), isOpen() }
 //
-// Optional extras: `openSound` (sfx name, default 'flip'), `lockedMessage`
+// Optional extras: `openSound` (sfx name, default 'flip'; null / false / 'none' = silent), `lockedMessage`
 // (toast when a locked cover refuses), `ariaLabel`.
 //
 // The two locks guard different things. lockMode 'peek' (a role card) means
@@ -69,7 +69,11 @@ export function Cover(props = {}) {
     if (open === v) return;
     open = v;
     root.classList.toggle('open', v);
-    if (v) sfx(p.openSound ?? 'flip');
+    if (v) {
+      // an explicit null / false / 'none' means silent (a night peek must make no sound)
+      const sound = p.openSound === undefined ? 'flip' : p.openSound;
+      if (sound && sound !== 'none') sfx(sound);
+    }
     p.onOpen?.(v);
   }
 

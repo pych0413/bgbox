@@ -1,6 +1,7 @@
 # 間諜 (Spyfall) — play-flow spec
 
-> Rules source: `docs/research/spyfall.md` (paraphrased from the official rulebooks; nothing copied).
+> Rules source: `docs/research/spyfall.md` (paraphrased from the official rulebooks; nothing copied). Its
+> "## Verification" section (fact-check 2026-10-03 UTC) overrides the draft; this spec follows the verified text.
 > Code: `js/games/spyfall/{game,ui,index}.js`, tests: `tests/spyfall.test.mjs`.
 > Template: `docs/DESIGN.md` §15.9. All times UTC. All player-facing text is Hong Kong Cantonese.
 
@@ -33,19 +34,38 @@ no longer be the answer.
 | key | UI label | type | default | notes |
 |---|---|---|---|---|
 | `rounds` | 幾多局 | int 1–10 | 3 | 1 = quick game (no scoring emphasis). The rulebook suggests 5 for a first session; 3 suits a travelling group that plays several games an evening. Capped at the list size. |
-| `minutes` | 每局幾多分鐘 | int 2–20 | by head-count | 3–4 → 6, 5–6 → 7, 7–8 → 8, 9–10 → 9, 11–12 → 10 (the Spyfall 2 table) |
-| `spies` | 間諜人數 | int 1–2 | 1, or 2 from 9 players | 2 needs at least 6 players |
+| `minutes` | 每局幾多分鐘 | int 2–20 | by head-count | 3–4 → 6, 5–6 → 7, 7–8 → 8, 9–10 → 9, 11–12 → 10 (Russian S1 v1.1 / S2 / TT table). Help: first-timers may take 12. |
+| `spies` | 間諜人數 | select 1 / 2 | 1, or 2 from 9 players | 2 is only offered from 6 players. Option labels carry the reason: 「1 個（官方建議）」, 「2 個（熟手：互相唔知對方）」; the field help is the head-count reason (below). |
+| `twoSpyThreshold` | 兩個間諜：幾多人反對都算通過 | select `n-2` / `n-3` | `n-2` | Shown only with 2 spies. `n-2` = one dissenter allowed (verified default reading), `n-3` = two (literal reading, option) |
 | `voteMode` | 投票方式 | select | `phone` | `phone` = everyone taps yes/no on their own phone. `hands` = everyone raises hands, one person taps the result (single-device play) |
 | `listSize` | 地點清單長度 | select 16/20/24/30 | 24 | |
 | `categories` | 地點類別 | categories | all | value = `{ cats: [names] }` (the ConfigForm shape; a bare array is tolerated), empty = all |
+| `accuserBonus` | 指控獎勵 +1 畀邊個 | select | `first-midround` | `first-midround` (S2/TT, default), `successful` (Spyfall 1), `first-any` (house reading). See 5.6. |
+| `antiStreak` | 唔好連續做間諜 | bool | false | BACKLOG #20. Last round's spies sit out the spy draw when enough others remain. Off by default: not in any rulebook, and everyone then knows last round's spy is safe. |
 
-`config.defaults(n, prev)` keeps `rounds`, `listSize`, `voteMode` and `categories` from the last game but
-re-derives `minutes` and `spies` from the head-count.
+`config.defaults(n, prev)` keeps `rounds`, `listSize`, `voteMode`, `categories`, `accuserBonus`,
+`twoSpyThreshold` and `antiStreak` from the last game but re-derives `minutes` and `spies` from the head-count.
+A config saved before the newer keys existed still validates; the engine fills in the defaults.
+
+### Presets with a reason (BACKLOG #8)
+
+`config.presets(n) → [{ id, label, reason, cfg }]`, `cfg` a patch over the current config. The first entry is what
+`defaults(n)` gives. Every preset passes `validate` for that n (tested for 3–12).
+
+| id | label | when | patch | reason (example for 6) |
+|---|---|---|---|---|
+| `standard` | 標準 | always | spies + minutes from the tables | 「6 人：1 個間諜 · 每局 7 分鐘 — 官方建議，6 人最好玩」 (3–4: 「人少易估，當熱身」; 9+: 「官方建議：9 人以上用 2 個間諜」) |
+| `beginner` | 新手 | always | same spies, 12 minutes | 「第一次玩：1 個間諜 · 每局 12 分鐘 — 多啲時間諗問題」 |
+| `two-spies` | 兩個間諜 | 6–8 players | spies 2, `n-2` | 「6 人熟手：2 個間諜互相唔知，最多 1 人反對都算通過」 |
+| `quick` | 快玩 | always | rounds 1 | 「淨係玩一局試吓手」 |
+
+Until the shell renders presets (§8), the standard reason is shown as the help line of 間諜人數.
 
 ### Validation
 
 Errors (block start): head-count outside 3–12, rounds outside 1–10, minutes outside 2–20, spies not 1 or 2, two
-spies with fewer than 6 players, unknown list size or vote mode.
+spies with fewer than 6 players, unknown list size, vote mode, accuser-bonus mode or two-spy threshold, a
+non-boolean `antiStreak`.
 
 Warnings (shown, do not block):
 - 3 players: 「3 個人玩間諜好易估到，5–8 人先最好玩」
@@ -62,11 +82,13 @@ Warnings (shown, do not block):
 2. The list is shuffled, then grouped by category (so the spy can scan it), and the order carries no
    information about the secret.
 3. One distinct secret per round is chosen at setup (`state.plan`). Only these keep their role pool in state.
-4. Each round: spies are chosen uniformly (no "previous spy cannot repeat" rule), each non-spy gets a role from
-   the secret location's role list, no repeats while the list allows (the bank has 7 roles, so tables of 9+ with
-   few spies repeat roles; roles are flavour only).
-5. Dealer: random in round 1, then one seat clockwise each round. The dealer asks the first question and
-   starts the final vote.
+4. Each round: spies are chosen uniformly over all seats (with `antiStreak` on, last round's spies are left out
+   of the draw when enough other seats remain), each non-spy gets a role from the secret location's role list, no
+   repeats while the list allows (the bank has 7 roles, so tables of 9+ with few spies repeat roles; roles are
+   flavour only).
+5. Dealer: random over ALL seats in round 1, drawn before and independently of the spies (so the dealer is the
+   spy 1 time in N, BACKLOG #20); then one seat clockwise each round (Spyfall 2 rotation, the verified default).
+   The dealer asks the first question and is the first suspect of the final vote.
 
 ## 3. Flow
 
@@ -123,11 +145,16 @@ spy-stop pauses are the engine's own: the remaining time is stored exactly and r
 ### 3.3 vote — accusation (mid-round) or final vote
 
 The clock is stopped. All phones show a banner:
-- accusation: 「🙋 阿明 指控 阿華」 and the rule 「要所有人贊成先成立」 (two spies: 「最多 1 個人反對」)
-- final vote: 「⏰ 時間到 · 最後投票 2/5」 and 「阿華 係唔係間諜？」, plus the frozen clock (「鐘停咗 · 剩 3:12」 or 「時間到」)
+- accusation: 「🙋 阿明 指控 阿華」 and the rule 「要所有人（除咗被指控嗰個）贊成先成立」 (two spies:
+  「兩個間諜：最多 1 個人反對都成立」, or 2 with `n-3`), plus 「投票時唔好講理由」 (the rulebook: reasons leak the
+  location while a vote is open)
+- final vote: 「⏰ 最後投票 2/5」 and 「阿華 係唔係間諜？」, plus the frozen clock (「鐘停咗 · 剩 3:12」 or 「時間到」) and
+  the reminder 「間諜已經唔可以估地點。可以傾，但唔好講出地點。」 (Cryptozoic ruling: talk is allowed between the
+  final-vote suspects, but nobody may name the location or describe card details, because the spy can no longer guess)
 
 **Narration (accusation, cue `accuse`):** 「鐘停咗。{accuser}指控{suspect}，大家投票。」
-**Narration (time up, cue `timeup`):** 「時間到！進入最後投票，由{dealer}開始。」 Later suspects (cue `final`, 1.5 s): 「下一位：{suspect}。」
+**Narration (time up, cue `timeup`):** 「時間到！間諜唔可以再估地點。最後投票由{dealer}開始，可以傾，但唔好講出地點。」
+Later suspects (cue `final`, 1.5 s): 「下一位：{suspect}。」
 
 #### phone mode
 - A voter who has not voted: two big buttons 「👍 贊成」 and 「👎 反對」. After voting: 「你投咗：贊成」 and the list
@@ -140,11 +167,14 @@ The clock is stopped. All phones show a banner:
 #### hands mode
 - Everyone sees 「全部人同時舉手，贊成嘅舉手（被指控嘅人唔投）」.
 - The **reporter** (the accuser; in the final vote the dealer, or the next seat when the dealer is the suspect)
-  sees the result buttons: one spy → 「全部贊成」 / 「有人反對」; two spies → 「全部贊成」 / 「1 人反對」 / 「2 人或以上反對」.
+  sees the result buttons: one per "no" count a conviction survives, then one for too many — one spy →
+  「全部贊成」 / 「有人反對」; two spies → 「全部贊成」 / 「1 人反對」 / 「2 人或以上反對」 (with `n-3` one more step).
   Everyone else sees 「等 {reporter} 報告結果」.
 
-**Rule:** a suspect is convicted when the number of "no" votes is at most `spies − 1` (everyone else yes; with two
-spies one dissenter is allowed). The suspect never votes.
+**Rule:** a suspect is convicted when the number of "no" votes is at most `maxNo` (`view.vote.maxNo`, also
+`view.rules.maxNo`): 0 with one spy (everyone but the suspect votes yes); 1 with two spies (N−2 yes, default);
+2 with two spies and `twoSpyThreshold: 'n-3'`. The suspect never votes. The same test applies to mid-round
+accusations and to every final-vote suspect.
 
 ### 3.4 tally — the result lingers 3.5 s
 
@@ -156,8 +186,10 @@ Phone mode lists 「贊成：阿明、阿B」 and 「反對：阿C」; hands mod
 - accusation failed: 「唔通過，鐘繼續行。」
 - final vote failed: 「唔通過。」
 
-After 3.5 s (`deadline`): convicted → round end; failed accusation → back to play, with the exact remaining time;
-failed final vote → next suspect (seat order starting at the dealer); every seat tried → the spy survives.
+After 3.5 s (`deadline`): convicted → round end; failed accusation → back to play, with the exact remaining time
+(and the spy may stop the clock again — Russian v1.1); failed final vote → next suspect (seat order starting at
+the dealer, each seat once); every seat tried → the spy survives. The first conviction ends the round, also with
+two spies.
 
 ### 3.5 guess — a spy stopped the clock
 
@@ -188,9 +220,11 @@ Shown to everyone, no secrets left:
 ### 3.7 over
 
 The engine's `result()` becomes non-null; the shell shows the results screen. **Narration (cue `over`):**
-「{n}局打完。{winner} 贏咗，共 {points} 分。」 (tie: 「A、B 同分奪冠，各 {points} 分」). `result.lines` lists
-every round (location, spies, headline) and the explanation of the last round; the ranking is left to the shell's
-own points display (`result.points` = running totals).
+「{n}局打完。{winner} 贏咗，共 {points} 分。」 (tie: 「A、B 同分奪冠，各 {points} 分」). `result.lines` (BACKLOG #10):
+one line per round with what was hidden during play — 「第 1 局 🏦 銀行（間諜：阿華）— 間諜贏：全場錯怪咗阿B ·
+阿華 +4」 (agent wins with many scorers: 「非間諜各 +1，阿明 +2」) — then 「第 N 局點解咁計：」 and the explanation
+of the last round (5.6). The ranking is left to the shell's own points display (`result.points` = running totals).
+The per-round lines also show the spy history, which matters when `antiStreak` is on.
 
 ## 4. Single-device play
 
@@ -216,7 +250,10 @@ cfg            normalised config
 players, order seat order
 list[]         PUBLIC { name, emoji, cat }
 plan[]         PRIVATE { loc, roles[] } one entry per round
-roundNo, totals{pid:n}, history[] (finished rounds, public once finished)
+roundNo, totals{pid:n}
+history[]      finished rounds, public once finished: { n, loc, dealer, spies, code, winTeam, suspect,
+               suspectRole (role of a convicted innocent), by, caught, bonusTo, bonusMode,
+               accusations[{by,suspect}], picks, rightSpies, deltas }
 round: {
   n, dealer,
   loc            PRIVATE index into list
@@ -271,8 +308,9 @@ A timer that fires up to 250 ms early is ignored.
 
 ### 5.5 autoAct (stalled seat)
 
-reveal → `ready`; phone vote → `no`; hands reporter → a verdict one dissenter too many to convict; guess → a random
-location; roundEnd → `next-round`; play → `null` (never moves the question). An automatic action never convicts.
+reveal → `ready`; phone vote → `no`; hands reporter → `maxNo + 1` "no" votes (one dissenter too many to convict);
+guess → a random location; roundEnd → `next-round`; play → `null` (never moves the question). An automatic action
+never convicts. (A stalled voter therefore blocks every conviction — see §8, disconnects.)
 
 ### 5.6 Results and explanation
 
@@ -284,18 +322,49 @@ Outcome codes and points (one spy; `×` = each of the two spies when there are t
 | `final-innocent` | 間諜贏：最後投票錯怪咗{X} | spy +2 |
 | `accused-innocent` | 間諜贏：全場錯怪咗{X} | spy +4 |
 | `guess-right` | 間諜贏：估中地點 | spy +4 (2 + 2 for the guess); two spies: each +2, a spy who guessed right +2 more |
-| `accused-spy` | 非間諜贏：捉到間諜{X} | each non-spy +1; the first accuser of that spy +1 more; two spies: the uncaught spy +1 |
-| `final-spy` | 非間諜贏：最後投票揪出{X} | as above |
+| `accused-spy` | 非間諜贏：捉到間諜{X} | each non-spy +1; accuser bonus +1 (below); two spies: the uncaught spy +1 as a non-spy (and may hold the bonus) |
+| `final-spy` | 非間諜贏：最後投票揪出{X} | each non-spy +1; two spies: the uncaught spy +1; **no accuser bonus** (default) |
 | `guess-wrong` | 非間諜贏：間諜估錯地點 | each non-spy +1, no bonus |
 
-First-accuser bonus: the first player whose mid-round accusation named the spy who is eventually convicted,
-even if their own vote failed and the spy was convicted later (mid-round or at the final vote). No one gets it
-when no accusation ever named that spy, nor after a wrong guess.
+**Accuser bonus (verified, `bonusFor()` in game.js).** Every Hobby World text ties it to a successful vote *before
+the end of the round*, so it exists only for `accused-spy`:
+- `first-midround` (default, Spyfall 2 / Time Travel): the first player whose mid-round accusation named the caught
+  spy, even if that vote failed and another player's mid-round vote caught the spy later.
+- `successful` (Spyfall 1): the player whose mid-round accusation succeeded.
+- `first-any` (house reading, not in any rulebook): the first mid-round accuser, also paid on `final-spy`.
 
-The `lines` under the reveal explain each point, for example:
-- 「阿明 停鐘指控 阿華，全票通過 — 佢真係間諜！」「每個非間諜 +1。」「阿B 最先指控咗 阿華，額外 +1。」
-- 「阿華 停鐘亮身分，估咗「銀行」，真正地點係 🏥 醫院。」「每個非間諜 +1。」
-- 「最後投票，阿明 被全票通過，但佢唔係間諜。」「間諜 阿華 贏，+2。」
+No one gets it when no accusation named that spy, after a wrong guess, or (default) when the spy is only caught at
+the final vote. With two spies the uncaught spy scores "as if a non-spy", so if they were the first mid-round
+accuser of their partner they take the bonus too. An innocent convicted at the final vote is `final-innocent`
+(+2, no extra) — the verified default reading.
+
+The `lines` under the reveal explain each point, including what was hidden during play, for example:
+- 「阿明 停鐘指控 阿華，全票通過 — 佢真係間諜！」「每個非間諜 +1。」「阿B 最先指控 阿華（嗰次唔通過），額外 +1。」
+- 「最後投票，阿華 被全票通過 — 佢真係間諜！」「每個非間諜 +1。」「阿B 中途指控過 阿華，不過要中途全票捉到先有額外分。」
+- 「阿華 停鐘亮身分，估咗「銀行」，真正地點係 🏥 醫院。」「每個非間諜 +1。」「間諜自己估錯，所以指控過佢嘅人冇額外分。」
+- 「阿明 停鐘指控 阿B，全票通過，但 阿B 唔係間諜（佢嘅身分係「護士」）。」「間諜 阿華 贏，+4（贏 +2，中途錯怪好人再 +2）。」
+- 「最後投票，阿明 被全票通過，但佢唔係間諜（…）。」「間諜 阿華 贏，+2（最後投票錯怪好人冇額外分）。」
+
+### 5.7 Hints (BACKLOG U1)
+
+`view.hint` — one line 「而家要做咩」 for a first-timer, shown only when the player taps 💡 (the shell; never
+auto-shown). Per seat, but built from public facts only (phase, who holds the question, who is accused /
+reporting / guessing, whether this seat has readied or voted) — a test swaps the spy and asserts every seat's hint
+is unchanged. ≤ 50 characters, never a location or role name.
+
+| phase | this seat | hint |
+|---|---|---|
+| reveal | not ready / ready / spectator | 「㩒住張卡睇自己身分，睇完㩒「準備好」。」 / 「等其他人睇完，齊人就開始計時。」 / 「大家睇緊身分，齊人準備好就開始。」 |
+| play | holds the question / anyone else | 「輪到你：揀一個人問一條關於地點嘅問題，再㩒佢個名。」 / 「聽{holder}問同大家答；覺得邊個係間諜，可以㩒「🙋 指控」。」 |
+| vote (accusation, phone) | voter / accuser / voted / suspect | 「{X}係唔係間諜？係就㩒贊成，唔係就反對；唔好講理由。」 / 「你指控咗{X}，自動當贊成，等其他人投。」 / 「投咗喇，等其他人投完。」 / 「你被指控，唔使投票，等大家決定。」 |
+| vote (final, phone) | voter / suspect | 「最後投票：覺得{X}係間諜就㩒贊成；可以傾，但唔好講出地點。」 / 「輪到大家投你，你唔使投；可以解釋，但唔好講出地點。」 |
+| vote (hands) | reporter / others | 「叫大家一齊舉手（覺得{X}係間諜先舉），數吓幾多人冇舉，㩒結果。」 / 「覺得{X}係間諜就舉手，等{reporter}㩒結果。」 |
+| tally | all | 「睇吓投票結果，幾秒後自動繼續。」 |
+| guess | guessing spy / others | 「喺地點清單揀你估嘅地點，再㩒「就係…」確定。」 / 「等{spy}喺清單揀地點：估中間諜贏，估錯大家贏。」 |
+| roundEnd / over | all | 「睇吓地點、間諜同點計分，睇完㩒「下一局」。」 (last: 「睇總分」) / 「打完喇！睇吓總分同每局發生咩事。」 |
+
+`view.mine.role` = `'spy' | 'agent'` (a `rules.roles` id) so the 💡 sheet can show 「你嘅角色」. It is as secret as
+the card. `rules.quick` is 6 short lines; each role's `text` says what you do and 「點贏」.
 
 Game end: highest total wins, ties share (`winners` has all of them). `result.points` = totals.
 
@@ -308,6 +377,13 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 | `index.js` is the §15.1 module | `index.js is the §15.1 module…` |
 | the shipped bank fits the engine (categories, roles, full games on it) | `the shipped bank … fits what the engine assumes` |
 | config validation + warnings | `config.validate rejects nonsense…` |
+| presets with a reason, all valid (#8) | `#8 presets — every head-count…` |
+| invalid compositions/options blocked, old configs load (#8) | `#8 validate blocks invalid compositions…` |
+| first asker random over all seats, independent of the spy (#20) | `#20 — the first asker…` |
+| anti-streak option, off by default (#20) | `#20 option antiStreak…` |
+| quick ≤ 6 lines, roles say what + how to win (U1) | `U1 — rules.quick…` |
+| hint for every phase/seat, independent of the spy (U1) | `U1 — every phase has a hint…` |
+| results explain why, incl. hidden info (#10) | `#10 — result lines…` |
 | spies count, role distinctness, list holds the secret | `setup deals the right number of spies…` |
 | list grouped by category, secret not tied to position | `the list is grouped by category…` |
 | category filter, top-up, unknown category | `category filter restricts the list…` |
@@ -336,7 +412,15 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 | three players need both | `with three players both others must agree` |
 | two spies: threshold, guess flow, scoring | `with two spies one dissenter…`, `two-spy guess…`, `two spies both wrong…`, … |
 | scoring table | `scoreRound — every outcome…` |
-| first-accuser bonus rules | `first-accuser bonus…`, `the bonus also applies…` |
+| first-accuser bonus: first mid-round accuser, even if that vote failed | `first-accuser bonus goes to…` |
+| **verified:** no bonus when the spy is caught at the final vote | `rule — accuser bonus only for a mid-round conviction…` |
+| bonus options (`successful`, `first-any`) and the pure table | `option accuserBonus=…` (two tests), `bonusFor — every outcome…` |
+| **verified:** uncaught second spy = non-spy, bonus included | `rule — the uncaught second spy…` |
+| **verified:** two spies, final-vote catch: other spy +1, no bonus | `rule — two spies, one caught at the final vote…` |
+| **verified:** spy may reveal again after a failed vote | `rule — the spy may stop the clock again…` |
+| **verified:** final-vote talk reminder, no guess after time-up | `rule — at time-up the spy can no longer guess…` |
+| final vote order and first conviction (two spies) | `rule — final vote: suspects in seat order…` |
+| two-spy threshold option `n-3` | `option twoSpyThreshold=n-3…` |
 | spy may accuse | `a spy may accuse as a feint…` |
 | hands mode | `hands mode — …` (three tests) |
 | game end, ties, result | `next-round needs the round to be over…`, `totals are the sum…` |
@@ -345,7 +429,7 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 | junk input | `act never throws and ignores junk…` |
 | legalActions agrees with act | `legalActions and act agree exactly…` |
 | views whitelisted, identical per seat, no leaks | `views are whitelisted…`, `a seat that is not in the game…` |
-| fuzz, every head-count × 100 seeds | `fuzz — every player count × 100 seeds…` |
+| fuzz, every head-count × 100 seeds, all options; role-count invariants every deal | `fuzz — every player count × 100 seeds…` |
 
 ## 7. 貼心 touches
 
@@ -359,7 +443,9 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 - The clock is **exact across pauses**; the Timer beeps at 60 s, 10 s and zero; the host's pause freezes it.
 - **No tells**: same card and button layout for spy and non-spy, the spy button exists on every phone, the vote waits
   for everyone, the narrator never says anything secret.
-- **The reveal explains every point**, including the first-accuser bonus, so nobody has to ask the rulebook.
+- **The reveal explains every point**, including the first-accuser bonus and why it was NOT paid (caught only at the
+  final vote, or the spy guessed wrong), and the hidden role of an innocent who was convicted.
+- **Presets with a reason** per head-count; the final vote reminds everyone not to name the location.
 - 1-round **quick game**, 5-round **full game**; ties share the win.
 - No vibration (Safari has none); the toast and sounds do the work.
 
@@ -373,3 +459,18 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 - For hands mode the shell's focus walk should treat `focus.pids` as "the seat that must act", which it does for the
   PassGate; nothing else is needed.
 - `RoleCard` is passed `team: 'card'` so no team colour or label differs between spy and non-spy.
+- **Presets (BACKLOG #8, ConfigForm/lobby owner):** render `config.presets(n)` as one-tap chips above the form
+  (label + reason), tap = `setConfig({ ...config, ...preset.cfg })`, highlight the chip whose patch matches the
+  current config. Proposed as a §3 addition: `config.presets?(n) → [{ id, label, reason, cfg }]`.
+- **💡 sheet (U1, shell owner):** `view.hint` is per seat and exists in every phase. `view.mine.role` is the
+  `rules.roles` id for 「你嘅角色」 — it is secret in this game, so the sheet must show it behind hold-to-peek (or
+  not at all on a shared phone), never as plain text.
+- **Disconnects (doc edge case, not done):** the rules doc wants the host to mark a seat absent (unanimity over the
+  connected seats) or void the round (always void if the spy left). There is no host action for that in §4;
+  today a stalled voter's auto-vote is 「反對」, so a missing phone blocks every conviction. Needs a generic
+  host-internal action (e.g. `{ type: '@absent', pid }`) before the engine can support it.
+- **Bank (data owner):** the rules doc asks for ≥ 11 roles per location so a 12-seat table never repeats a role;
+  `js/data/spyfall-locations.js` has 7 for all 174 locations.
+- Not implemented (variants the doc lists as options only): Cryptozoic accuser-rotation and German majority final
+  votes, Old pals, previous-spy dealer rotation, the strict "+1 only" uncaught-spy reading, Time Travel 2/3-player
+  and team variants.

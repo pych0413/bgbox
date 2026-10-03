@@ -6,8 +6,11 @@
 import { test, assert, Sim, makePlayers, assertNoKeys, HOST, ACT } from './lib.mjs';
 import { mulberry32, clone } from '../js/core/engine-kit.js';
 import * as game from '../js/games/custom/game.js';
+import { GAMES } from '../js/games/registry.js';
+import { roleParts, roleFor } from '../js/ui/logic.js';
 
 const { engine, config, meta, rules } = game;
+const PRESETS = ['traitor', 'teams', 'king', 'killer', 'werewolf', 'custom'];
 
 // ---------- helpers ----------
 
@@ -35,7 +38,7 @@ function roleCounts(sim) {
   return counts;
 }
 
-const strip = (v) => { const { me, controller, all, can, ...rest } = v; return rest; };   // eslint-disable-line no-unused-vars
+const strip = (v) => { const { me, controller, all, can, hint, ...rest } = v; return rest; };   // eslint-disable-line no-unused-vars
 
 /** Nobody's view carries another seat's secret. */
 function checkLeaks(sim) {
@@ -104,6 +107,206 @@ test('custom: meta and rules are well-formed', () => {
   }
 });
 
+test('custom: registry meta matches game meta (G16)', () => {
+  const e = GAMES.find((g) => g.id === 'custom');
+  assert.ok(e);
+  for (const k of ['name', 'emoji', 'blurb']) assert.equal(e.meta[k], meta[k], k);
+  assert.deepEqual(e.meta.players, meta.players);
+  assert.deepEqual(e.meta.minutes, meta.minutes);
+});
+
+test('custom: U1 — quick rules are ≤ 6 short lines and every role says what you do and how you win', () => {
+  assert.ok(rules.quick.length <= 6, `${rules.quick.length} quick lines`);
+  for (const l of rules.quick) assert.ok(l.length <= 30, `quick line too long: ${l}`);
+  for (const r of rules.roles) {
+    assert.match(r.text, /做乜/, `${r.id}: what you do`);
+    assert.match(r.text, /點贏/, `${r.id}: how you win`);
+    const { what, win } = roleParts(r.text);   // as the 💡 sheet shows it
+    assert.ok(what && win && !/做乜|點贏/.test(what + win), `${r.id}: splits cleanly into 做乜 / 點贏`);
+    assert.notEqual(r.team, 'neutral', `${r.id}: 'neutral' renders as 第三陣營`);
+  }
+  // rules.roles ids never clash with dealt role ids (<preset>_<n>), so nothing can show the wrong text for a card
+  const dealt = new Set(PRESETS.flatMap((p) => config.defaults(16, { preset: p })[`roles_${p}`].map((r) => r.id)));
+  for (const r of rules.roles) assert.ok(!dealt.has(r.id), r.id);
+});
+
+test('custom: G17 — no invented Cheese Thief presets or roles (偵探 / 守衛); a saved v1 cheese setup falls back to the default', () => {
+  const everything = [JSON.stringify(rules)];
+  for (let n = 2; n <= 16; n++) {
+    const c = config.defaults(n);
+    everything.push(JSON.stringify(c), JSON.stringify(config.fields(c, n)), JSON.stringify(config.summary(c, n)));
+  }
+  const text = everything.join('\n');
+  for (const bad of ['偵探', '守衛', '芝士小偷', 'Cheese Thief', 'cheese']) assert.ok(!text.includes(bad), `still mentions ${bad}`);
+  assert.match(rules.sections[0].body, /芝士大盜/, 'points people to the real game');
+  const v1 = config.defaults(6, {
+    preset: 'cheeseGang', diceCount: 2,
+    roles_cheese: [{ id: 'a', name: '偵探', emoji: '🔍', count: 1 }, { id: 'b', name: '村民', emoji: '🧑', filler: true }],
+  });
+  assert.equal(v1.preset, 'traitor');
+  assert.equal(v1.diceCount, 2, 'the rest of the saved setup survives');
+  assert.equal(v1.roles_cheese, undefined);
+  assert.ok(config.validate(v1, 6).ok);
+});
+
+// ---------- presets (BACKLOG #8) ----------
+
+test('custom: #8 — every preset is valid for every head-count, host playing or moderating, with a reason in the picker', () => {
+  for (let n = 2; n <= 16; n++) {
+    for (const hostPlays of [true, false]) {
+      if (!hostPlays && n < 3) continue;
+      const k = hostPlays ? n : n - 1;
+      for (const preset of PRESETS) {
+        const c = config.defaults(n, { preset, hostPlays });
+        const v = config.validate(c, n);
+        assert.ok(v.ok, `n=${n} host=${hostPlays} ${preset}: ${v.message}`);
+        assert.equal(c.preset, preset);
+        assert.equal(c.hostPlays, hostPlays);
+        const f = config.fields(c, n).find((x) => x.key === 'preset');
+        if (preset !== 'custom') assert.ok(f.help.startsWith(hostPlays ? `${k} 人：` : `${k} 人攞牌：`), `${preset}: ${f.help}`);
+        assert.ok(f.help.length <= 75, `reason too long: ${f.help}`);
+        for (const o of f.options) if (o.value !== 'custom') assert.match(o.label, / — \S.*\d/, `option shows the mix: ${o.label}`);
+        // the stock text is complete (not cut by the 60-character limit) and says how you win
+        for (const r of c[`roles_${preset}`]) {
+          if (preset === 'custom') continue;
+          assert.ok(r.desc.length <= 60 && r.desc.endsWith('。'), `${preset}/${r.name}: ${r.desc}`);
+          const parts = roleParts(r.desc);   // the shell's 💡 sheet splits the card text the same way
+          assert.ok(parts.what && parts.win, `${preset}/${r.name} says what you do and how you win: ${r.desc}`);
+        }
+        // the mix in the picker adds up to the card holders
+        const opt = f.options.find((o) => o.value === preset);
+        if (!['custom', 'king'].includes(preset)) {
+          const sum = [...opt.label.split(' — ')[1].matchAll(/(\d+)/g)].reduce((s, m) => s + Number(m[1]), 0);
+          assert.equal(sum, k, `${preset} n=${n}: ${opt.label}`);
+        }
+      }
+    }
+  }
+});
+
+test('custom: #8 — an untouched preset follows the head-count; an edited one is kept and repaired', () => {
+  const at8 = config.defaults(8, { preset: 'werewolf' });
+  const wolves = (c) => c.roles_werewolf.find((r) => r.name === '狼人' || r.name === '大灰狼').count;
+  assert.equal(wolves(at8), 2);
+  assert.equal(wolves(config.defaults(12, at8)), 3, 'untouched: 12 players get 3 wolves');
+  assert.equal(wolves(config.defaults(5, at8)), 1);
+  const edited = clone(at8);
+  edited.roles_werewolf[0].name = '大灰狼';
+  const e12 = config.defaults(12, edited);
+  assert.equal(e12.roles_werewolf[0].name, '大灰狼');
+  assert.equal(wolves(e12), 2, 'edited: the count is the host\'s choice');
+  // a one-of-a-kind deck (國王 + numbers) is trimmed, never padded with a repeated card
+  const k5 = config.defaults(5, { preset: 'king' });
+  assert.equal(k5.roles_king.length, 5);
+  assert.equal(config.defaults(9, k5).roles_king.length, 9, 'untouched king deck grows with the table');
+  const renamed = clone(k5);
+  renamed.roles_king[0].name = '皇帝';
+  const r4 = config.defaults(4, renamed);
+  assert.ok(config.validate(r4, 4).ok);
+  assert.equal(r4.roles_king[0].name, '皇帝', 'trimmed, rename kept');
+  assert.ok(r4.roles_king.every((r) => !r.filler && r.count <= 1));
+  const r9 = config.defaults(9, renamed);
+  assert.ok(config.validate(r9, 9).ok);
+  assert.ok(r9.roles_king.every((r) => !r.filler && r.count <= 1), 'never two kings or two 3 號');
+});
+
+test('custom: king preset deals one 國王 and a different number to everybody else', () => {
+  for (let n = 2; n <= 16; n++) {
+    for (const hostPlays of [true, false]) {
+      if (!hostPlays && n < 3) continue;
+      const sim = mk(n, { seed: n, patch: { preset: 'king', hostPlays } });
+      const names = holderIds(sim).map((id) => sim.state.roles.find((r) => r.id === seatOf(sim, id).roleId).name);
+      assert.equal(names.filter((x) => x === '國王').length, 1);
+      assert.equal(new Set(names).size, names.length, `n=${n}: numbers are unique`);
+      const k = hostPlays ? n : n - 1;
+      assert.deepEqual(names.filter((x) => x !== '國王').map((x) => parseInt(x, 10)).sort((a, b) => a - b), Array.from({ length: k - 1 }, (_, i) => i + 1));
+    }
+  }
+  const lines = config.summary(config.defaults(16, { preset: 'king' }), 16);
+  assert.ok(lines.length <= 8, `16-player king summary stays short: ${lines.length} lines`);
+  assert.ok(lines.join(' ').includes('15 號'));
+});
+
+test('custom: killer preset is 1 : 1 : 2 and asks for a moderator only while the host plays', () => {
+  const count = (c) => c.roles_killer.map((r) => r.count);
+  const p8 = config.defaults(8, { preset: 'killer' });
+  assert.deepEqual(count(p8).slice(0, 2), [2, 2]);
+  assert.match(config.summary(p8, 8).join('|'), /平民 ×4/);
+  assert.ok(config.validate(p8, 8).warnings.some((w) => /主持/.test(w)));
+  const m9 = config.defaults(9, { preset: 'killer', hostPlays: false });
+  assert.deepEqual(count(m9).slice(0, 2), [2, 2], '9 seats, 8 card holders');
+  assert.deepEqual(config.validate(m9, 9).warnings, []);
+  assert.deepEqual(count(config.defaults(3, { preset: 'killer' })).slice(0, 2), [1, 1]);
+  assert.ok(config.validate(config.defaults(6, { preset: 'werewolf' }), 6).warnings.length === 1);
+  assert.deepEqual(config.validate(config.defaults(6, { preset: 'traitor' }), 6).warnings, [], 'the default asks for nothing');
+});
+
+test('custom: #20 — anti-streak (off by default) keeps a special card from going to the same seat twice running', () => {
+  assert.equal(config.defaults(6).antiStreak, false);
+  const kingOf = (sim) => holderIds(sim).find((id) => sim.state.roles.find((r) => r.id === seatOf(sim, id).roleId).name === '國王');
+  // on: never the same 國王 (or the same number) twice running, and still no seat bias
+  const sim = mk(5, { seed: 3, patch: { preset: 'king', antiStreak: true } });
+  const kings = Array(5).fill(0);
+  let prev = kingOf(sim);
+  let prevCards = clone(sim.state.seats);
+  for (let r = 0; r < 1500; r++) {
+    changed(sim, 'p1', { type: r % 2 ? 'redeal' : 'next-round' });
+    const k = kingOf(sim);
+    assert.notEqual(k, prev, `round ${r}: same king twice`);
+    for (const id of holderIds(sim)) assert.notEqual(seatOf(sim, id).roleId, prevCards[id].roleId, 'same number twice');
+    kings[Number(k.slice(1)) - 1]++;
+    prev = k;
+    prevCards = clone(sim.state.seats);
+  }
+  for (const n of kings) assert.ok(n > 230 && n < 370, `king spread ${kings}`);
+  // off: repeats happen (plain shuffle)
+  const free = mk(5, { seed: 3, patch: { preset: 'king' } });
+  let repeats = 0;
+  let last = kingOf(free);
+  for (let r = 0; r < 300; r++) { changed(free, 'p1', { type: 'next-round' }); if (kingOf(free) === last) repeats++; last = kingOf(free); }
+  assert.ok(repeats > 20, `plain shuffle repeats sometimes (${repeats})`);
+  // a big group (紅隊 is half the table) is not "special": no forced flip-flop
+  const teams = mk(6, { seed: 2, patch: { preset: 'teams', antiStreak: true } });
+  let stay = 0;
+  for (let r = 0; r < 200; r++) {
+    const before = seatOf(teams, 'p2').roleId;
+    changed(teams, 'p1', { type: 'next-round' });
+    if (seatOf(teams, 'p2').roleId === before) stay++;
+  }
+  assert.ok(stay > 50 && stay < 150, `teams stay random (${stay}/200)`);
+});
+
+test('custom: #20 — anti-streak carries over to the next game through result().carry, by role name', () => {
+  const cfg = cfgFor(6, { preset: 'traitor', antiStreak: true });
+  let carried = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const g1 = new Sim(game, { n: 6, seed, config: cfg });
+    const traitor = holderIds(g1).find((id) => seatOf(g1, id).roleId === g1.state.roles[0].id);
+    changed(g1, 'p1', { type: 'end' });
+    const carry = g1.result().carry;
+    assert.equal(carry.roles[traitor], '內鬼');
+    assert.ok(!g1.result().lines.join('').includes('carry'));
+    const g2 = new Sim(game, { n: 6, seed: seed + 1000, config: cfg, carry });
+    assert.notEqual(seatOf(g2, traitor).roleId, g2.state.roles[0].id, 'the last game\'s 內鬼 is not the 內鬼 again');
+    // switched off, or garbage carry: a plain deal
+    const off = new Sim(game, { n: 6, seed: seed + 1000, config: { ...cfg, antiStreak: false }, carry });
+    if (seatOf(off, traitor).roleId === off.state.roles[0].id) carried++;
+    assert.doesNotThrow(() => new Sim(game, { n: 6, seed, config: cfg, carry: { roles: { p1: 5, __proto__: 'x' } } }));
+    assert.doesNotThrow(() => new Sim(game, { n: 6, seed, config: cfg, carry: 'nope' }));
+  }
+  assert.ok(carried > 0, 'without anti-streak the same 內鬼 can come back');
+  assert.match(config.summary(cfg, 6).join('|'), /唔會連續攞同一張特別牌/);
+});
+
+test('custom: teams preset splits the table evenly (an odd table gives red one more)', () => {
+  for (let n = 2; n <= 16; n++) {
+    const sim = mk(n, { seed: n + 40, patch: { preset: 'teams' } });
+    const red = holderIds(sim).filter((id) => sim.state.roles.find((r) => r.id === seatOf(sim, id).roleId).name === '紅隊').length;
+    assert.equal(red, Math.ceil(n / 2));
+    assert.equal(n - red, Math.floor(n / 2));
+  }
+});
+
 // ---------- config ----------
 
 test('custom: config.defaults is valid for every head-count and every preset', () => {
@@ -111,7 +314,7 @@ test('custom: config.defaults is valid for every head-count and every preset', (
     const base = config.defaults(n);
     const v = config.validate(base, n);
     assert.ok(v.ok, `n=${n}: ${v.message}`);
-    for (const preset of ['cheese', 'cheeseGang', 'werewolf', 'undercover', 'custom']) {
+    for (const preset of PRESETS) {
       const c = { ...base, preset };
       const vv = config.validate(c, n);
       assert.ok(vv.ok, `n=${n} preset=${preset}: ${vv.message}`);
@@ -138,7 +341,7 @@ test('custom: defaults(n, prev) keeps the last setup and repairs it for a new he
 
 test('custom: defaults repairs a no-filler list and a moderator that no longer fits', () => {
   const prev = config.defaults(5);
-  prev.roles_cheese = [
+  prev.roles_traitor = [
     { id: 'a', name: 'A', emoji: '🅰️', count: 2, desc: '', filler: false },
     { id: 'b', name: 'B', emoji: '🅱️', count: 3, desc: '', filler: false },
   ];
@@ -153,7 +356,7 @@ test('custom: defaults repairs a no-filler list and a moderator that no longer f
   assert.ok(config.validate(two, 2).ok);
   // garbage prev is ignored
   assert.deepEqual(config.defaults(4, 'nope'), config.defaults(4));
-  assert.ok(config.validate(config.defaults(4, { preset: 'zzz', diceSides: 7, diceCount: 99, roles_cheese: [1, null] }), 4).ok);
+  assert.ok(config.validate(config.defaults(4, { preset: 'zzz', diceSides: 7, diceCount: 99, roles_traitor: [1, null] }), 4).ok);
 });
 
 test('custom: validate catches every bad setup with a Cantonese message', () => {
@@ -163,18 +366,18 @@ test('custom: validate catches every bad setup with a Cantonese message', () => 
   assert.deepEqual(config.validate(good, n).warnings, []);
 
   const tooMany = clone(good);
-  tooMany.roles_cheese[0].count = 6;
+  tooMany.roles_traitor[0].count = 6;
   let v = config.validate(tooMany, n);
   assert.equal(v.ok, false);
   assert.match(v.message, /減少啲/);
 
   const noFiller = clone(good);
-  noFiller.roles_cheese[2].filler = false; noFiller.roles_cheese[2].count = 1;
+  noFiller.roles_traitor[1].filler = false; noFiller.roles_traitor[1].count = 1;
   v = config.validate(noFiller, n);
   assert.equal(v.ok, false);
   assert.match(v.message, /啱數/);
-  noFiller.roles_cheese[2].count = 3;
-  assert.equal(config.validate(noFiller, n).ok, true, '1+1+3 = 5 exactly');
+  noFiller.roles_traitor[1].count = 4;
+  assert.equal(config.validate(noFiller, n).ok, true, '1+4 = 5 exactly');
 
   assert.equal(config.validate({ ...good, diceCount: 0 }, n).ok, false);
   assert.equal(config.validate({ ...good, diceCount: 6 }, n).ok, false);
@@ -182,9 +385,9 @@ test('custom: validate catches every bad setup with a Cantonese message', () => 
   assert.equal(config.validate({ ...good, diceSides: 7 }, n).ok, false);
   for (const s of [4, 6, 8, 10, 12, 20]) assert.equal(config.validate({ ...good, diceSides: s }, n).ok, true);
 
-  const oneRole = { ...good, roles_cheese: [good.roles_cheese[0]] };
+  const oneRole = { ...good, roles_traitor: [good.roles_traitor[0]] };
   assert.equal(config.validate(oneRole, n).ok, false);
-  assert.equal(config.validate({ ...good, roles_cheese: undefined }, n).ok, false);
+  assert.equal(config.validate({ ...good, roles_traitor: undefined }, n).ok, false);
 
   // head-counts and moderator
   assert.equal(config.validate(good, 1).ok, false);
@@ -199,21 +402,21 @@ test('custom: validate catches every bad setup with a Cantonese message', () => 
 test('custom: validate warns on duplicate names and an all-same deck, and accepts form-typed numbers', () => {
   const n = 6;
   const c = config.defaults(n);
-  c.roles_cheese[1].name = c.roles_cheese[0].name;
+  c.roles_traitor[1].name = c.roles_traitor[0].name;
   let v = config.validate(c, n);
   assert.equal(v.ok, true);
   assert.equal(v.warnings.length, 1);
   assert.match(v.warnings[0], /同名/);
 
   const flat = config.defaults(n);
-  flat.roles_cheese[0].count = 0; flat.roles_cheese[1].count = 0;
+  flat.roles_traitor[0].count = 0;
   v = config.validate(flat, n);
   assert.equal(v.ok, true);
   assert.ok(v.warnings.some((w) => /所有人都係/.test(w)));
 
   // a <select>/<input> hands strings back
   const typed = { ...config.defaults(n), diceCount: '3', diceSides: '8' };
-  typed.roles_cheese = typed.roles_cheese.map((r) => ({ ...r, count: String(r.count) }));
+  typed.roles_traitor = typed.roles_traitor.map((r) => ({ ...r, count: String(r.count) }));
   assert.equal(config.validate(typed, n).ok, true);
   const s = new Sim(game, { n, seed: 2, config: typed });
   assert.equal(s.state.dice.count, 3);
@@ -223,7 +426,7 @@ test('custom: validate warns on duplicate names and an all-same deck, and accept
 test('custom: role lists are sanitised (ids, single filler, counts, names)', () => {
   const n = 5;
   const c = config.defaults(n);
-  c.roles_cheese = [
+  c.roles_traitor = [
     { id: 'x', name: '  ', emoji: '', count: -3, desc: 5, filler: false },
     { id: 'x', name: '一二三四五六七八九十一二三四五六七八九十', emoji: '🧑‍🌾🧑‍🌾🧑‍🌾', count: 1.9, filler: true },
     { name: 'C', emoji: '🐱', count: '2', filler: true },   // second filler must lose its flag
@@ -246,12 +449,12 @@ test('custom: fields and summary describe the setup', () => {
   const c = config.defaults(n);
   let fields = config.fields(c, n);
   const keys = fields.map((f) => f.key);
-  assert.deepEqual(keys, ['preset', 'roles_cheese', 'hostPlays', 'diceCount', 'diceSides', 'selfRoll']);
+  assert.deepEqual(keys, ['preset', 'roles_traitor', 'hostPlays', 'diceCount', 'diceSides', 'selfRoll', 'antiStreak']);
   const rolesField = fields.find((f) => f.type === 'roles');
   assert.equal(rolesField.max, n);
   assert.match(rolesField.help, /✓/);
   const preset = fields.find((f) => f.key === 'preset');
-  assert.deepEqual(preset.options.map((o) => o.value), ['cheese', 'cheeseGang', 'werewolf', 'undercover', 'custom']);
+  assert.deepEqual(preset.options.map((o) => o.value), PRESETS);
   // the roles editor follows the preset, and its key exists in the config
   const w = { ...c, preset: 'werewolf' };
   fields = config.fields(w, n);
@@ -264,12 +467,14 @@ test('custom: fields and summary describe the setup', () => {
   assert.ok(config.fields(c, n).every((f) => ['int', 'bool', 'select', 'roles'].includes(f.type)));
 
   const lines = config.summary(c, n);
-  assert.deepEqual(lines, ['🐭 芝士小偷 ×1', '🔍 偵探 ×1', '🧑‍🌾 村民 ×4', '🎲 1 × d6', '房主一齊玩']);
+  assert.deepEqual(lines, ['🎭 一個內鬼', '🎭 內鬼 ×1', '🙂 好人 ×5', '🎲 1 × d6', '房主一齊玩']);
+  const edited = clone(c); edited.roles_traitor[0].name = '鬼';
+  assert.equal(config.summary(edited, n)[0], '🎭 一個內鬼（改過）', 'an edited preset says so in the lobby');
   const lines2 = config.summary({ ...cfgFor(n, { hostPlays: false, modSees: true, selfRoll: false, diceCount: 2, diceSides: 10 }) }, n);
   assert.ok(lines2.includes('🎲 2 × d10（淨係主持搖得）'));
   assert.ok(lines2.some((l) => /主持/.test(l) && /睇到所有人角色/.test(l)));
   // an invalid setup still summarises
-  const bad = clone(c); bad.roles_cheese[0].count = 9;
+  const bad = clone(c); bad.roles_traitor[0].count = 9;
   assert.ok(config.summary(bad, n).length >= 3);
 });
 
@@ -301,16 +506,16 @@ test('custom: same seed gives the same deal, different seeds differ', () => {
   const b = mk(8, { seed: 5 });
   assert.deepEqual(a.state, b.state);
   const deals = new Set();
-  for (let s = 1; s <= 30; s++) deals.add(JSON.stringify(Object.values(mk(8, { seed: s }).state.seats).map((x) => x.roleId)));
+  for (let s = 1; s <= 30; s++) deals.add(JSON.stringify(Object.values(mk(8, { seed: s, patch: { preset: 'werewolf' } }).state.seats).map((x) => x.roleId)));
   assert.ok(deals.size > 20, 'dealing looks shuffled');
 });
 
-test('custom: every seat is equally likely to hold the single thief (no seat bias)', () => {
+test('custom: every seat is equally likely to hold the single 內鬼 (no seat bias)', () => {
   const n = 5;
   const hits = Array(n).fill(0);
   for (let s = 1; s <= 2000; s++) {
     const sim = mk(n, { seed: s });
-    const thief = sim.state.roles[0].id;
+    const thief = sim.state.roles[0].id;   // 🎭 內鬼 ×1 at n = 5
     holderIds(sim).forEach((id, i) => { if (seatOf(sim, id).roleId === thief) hits[i]++; });
   }
   for (const h of hits) assert.ok(h > 300 && h < 500, `seat bias: ${hits}`);
@@ -318,7 +523,7 @@ test('custom: every seat is equally likely to hold the single thief (no seat bia
 
 test('custom: setup throws on an invalid config (the room validates first)', () => {
   const bad = config.defaults(5);
-  bad.roles_cheese[0].count = 9;
+  bad.roles_traitor[0].count = 9;
   assert.throws(() => engine.setup({ players: makePlayers(5), config: bad, rng: mulberry32(1), now: 0 }), /invalid config/);
 });
 
@@ -338,6 +543,13 @@ test('custom: host identity comes from hostPid, then an isHost flag, then the fi
   // seat order, not array order, decides the fallback
   const shuffled = [players[3], players[0], players[4], players[2], players[1]].map((p, i) => ({ ...p, seat: [3, 0, 4, 2, 1][i] }));
   assert.equal(engine.setup({ players: shuffled, config: cfg, rng: rng(), now: 0 }).hostPid, 'p1');
+  // G1: the room now passes the host's seat — a host who moved off seat 0 still moderates and holds the controls
+  const moved = new Sim(game, { n: 5, seed: 1, config: cfg, hostPid: 'p3' });
+  assert.equal(moved.state.seats.p3.playing, false);
+  assert.equal(moved.view('p3').controller, true);
+  assert.equal(moved.view('p1').controller, false);
+  unchanged(moved, 'p1', { type: 'roll-all' });
+  changed(moved, 'p3', { type: 'roll-all' });
 });
 
 test('custom: only the host seat can use host actions', () => {
@@ -634,13 +846,14 @@ test('custom: ending reveals everything, produces a result and shuts the table',
   const res = sim.result();
   assert.deepEqual(res.winners, []);
   assert.match(res.summary, /2 回合/);
-  assert.equal(res.lines.length, 1 + 4);
+  assert.match(res.lines[0], /唔計輸贏/);
+  assert.match(res.lines[1], /第 2 回合/);
   for (const id of sim.state.order) {
     const seat = seatOf(sim, id);
     const role = sim.state.roles.find((r) => r.id === seat.roleId);
     const line = res.lines.find((l) => l.startsWith(`${seat.name}：`));
     assert.ok(line.includes(role.name), line);
-    if (seat.dice) assert.ok(line.includes(`🎲 ${seat.dice.join(' ')}`), line);
+    if (seat.dice) assert.ok(line.includes(`🎲 ${seat.dice.join(' ')}（= ${seat.dice[0] + seat.dice[1]}）`), line);
     else assert.ok(!line.includes('🎲'), line);
   }
   assert.equal(sim.state.phase, 'ended');
@@ -652,6 +865,25 @@ test('custom: ending reveals everything, produces a result and shuts the table',
     for (const type of ['roll', 'seen', 'roll-all', 'next-round', 'redeal', 'end']) unchanged(sim, p.id, { type });
   }
   assert.equal(sim.focus(), null);
+});
+
+test('custom: #10 — the result says why nobody wins, opens every card and cup, and groups repeated roles', () => {
+  const sim = mk(9, { seed: 3, patch: { preset: 'killer', hostPlays: false } });   // 8 card holders: 2 殺手 2 警察 4 平民
+  changed(sim, 'p1', { type: 'end' });
+  const res = sim.result();
+  assert.match(res.lines[0], /app 唔計輸贏，邊個贏由你哋自己講/);
+  assert.ok(res.lines.includes('今回合冇人擲過骰。'));
+  for (const name of ['殺手', '警察', '平民']) {
+    const holders = holderIds(sim).filter((id) => sim.state.roles.find((r) => r.id === seatOf(sim, id).roleId).name === name);
+    const line = res.lines.find((l) => l.includes(`${name}（${holders.length} 個）：`));
+    assert.ok(line, `grouped line for ${name}`);
+    for (const id of holders) assert.ok(line.includes(seatOf(sim, id).name));
+  }
+  // one-of-a-kind roles are not grouped (the seat lines already say it)
+  const king = mk(5, { seed: 1, patch: { preset: 'king' } });
+  changed(king, 'p1', { type: 'end' });
+  assert.ok(!king.result().lines.some((l) => /個）：/.test(l)));
+  for (const l of [...res.lines, ...king.result().lines]) assert.ok(!l.includes('\n'));
 });
 
 test('custom: the result names a moderator as 主持 and leaves winners empty', () => {
@@ -699,7 +931,7 @@ test('custom: garbage from the network never throws and never changes the state'
 
 test('custom: views are whitelist-built (no state field leaks through by name)', () => {
   const sim = mk(5, { seed: 3, patch: { hostPlays: false, modSees: true } });
-  const topKeys = ['all', 'can', 'controller', 'dealId', 'dice', 'log', 'me', 'phase', 'revealDice', 'revealRoles', 'roles', 'round', 'seats', 'selfRoll', 'subtitle', 'title'];
+  const topKeys = ['all', 'can', 'controller', 'dealId', 'dice', 'hint', 'log', 'me', 'phase', 'revealDice', 'revealRoles', 'roles', 'round', 'seats', 'selfRoll', 'subtitle', 'title'];
   assert.deepEqual(Object.keys(sim.view('p1')).sort(), topKeys);
   assert.deepEqual(Object.keys(sim.view('p2')).sort(), topKeys.filter((k) => k !== 'all'));
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topKeys.filter((k) => k !== 'all'));
@@ -758,7 +990,7 @@ test('custom: legalActions only offers actions that change something, for every 
 // ---------- fuzz ----------
 
 test('custom: fuzz — every head-count x 100 seeds plays to the end without leaking', () => {
-  const presets = ['cheese', 'cheeseGang', 'werewolf', 'undercover', 'custom'];
+  const presets = PRESETS;
   let games = 0;
   for (let n = 2; n <= 16; n++) {
     for (let seed = 1; seed <= 100; seed++) {
@@ -771,6 +1003,7 @@ test('custom: fuzz — every head-count x 100 seeds plays to the end without lea
         diceCount: 1 + (seed % 5),
         diceSides: [4, 6, 8, 10, 12, 20][seed % 6],
         selfRoll: seed % 4 !== 0,
+        antiStreak: seed % 7 === 0,
       });
       assert.ok(config.validate(cfg, n).ok, `n=${n} seed=${seed}: ${config.validate(cfg, n).message}`);
       const sim = new Sim(game, { n, seed, config: cfg });
@@ -807,4 +1040,298 @@ test('custom: fuzz — long games with many rounds stay consistent', () => {
     assert.equal(sim.state.round, rounds);
     assert.equal(sim.result(), null);
   }
+});
+
+// ---------- U1: the 💡 hint ----------
+
+test('custom: U1 — every view in every phase has a one-line hint that never depends on who holds which card', () => {
+  const swapRoles = (state) => {
+    const st = clone(state);
+    const hs = st.order.filter((id) => st.seats[id].playing);
+    const first = st.seats[hs[0]].roleId;
+    hs.forEach((id, i) => { st.seats[id].roleId = i + 1 < hs.length ? st.seats[hs[i + 1]].roleId : first; });
+    return st;
+  };
+  const phases = new Set();
+  for (const [n, patch] of [[4, {}], [6, { hostPlays: false, modSees: true }], [5, { preset: 'killer', selfRoll: false }], [3, { preset: 'king' }]]) {
+    for (let seed = 1; seed <= 5; seed++) {
+      const sim = mk(n, { seed, patch });
+      const check = (s) => {
+        const other = swapRoles(s.state);
+        for (const pid of [...s.players.map((p) => p.id), null]) {
+          const v = s.view(pid);
+          phases.add(v.phase);
+          assert.equal(typeof v.hint, 'string');
+          assert.ok(v.hint.length > 0 && v.hint.length <= 30 && !v.hint.includes('\n'), `hint: ${v.hint}`);
+          assert.equal(engine.view(other, pid).hint, v.hint, 'the hint changed when the cards moved');
+          for (const r of s.state.roles) if (r.name.length > 1) assert.ok(!v.hint.includes(r.name), `hint names a role: ${v.hint}`);
+        }
+      };
+      check(sim);
+      sim.runRandom({ onStep: check });
+    }
+  }
+  assert.deepEqual([...phases].sort(), ['ended', 'play']);
+  // the lines a first-timer needs
+  const sim = mk(4, { patch: { hostPlays: false } });
+  assert.match(sim.view('p2').hint, /㩒住張牌/);
+  assert.match(sim.view('p1').hint, /主持/);
+  assert.match(sim.view(null).hint, /睇緊/);
+  // 「你嘅角色」 in the 💡 sheet: the shell reads view.me.role, i.e. this seat's own card and its text
+  const k = mk(6, { seed: 4, patch: { preset: 'killer', hostPlays: false } });
+  for (const p of k.players) {
+    const v = k.view(p.id);
+    const shownRole = roleFor(v, rules);
+    if (!v.me.playing) { assert.equal(shownRole, null, 'the moderator has no card'); continue; }
+    const own = k.state.roles.find((r) => r.id === seatOf(k, p.id).roleId);
+    assert.equal(shownRole.name, own.name);
+    assert.equal(shownRole.text, own.desc);
+    assert.ok(roleParts(shownRole.text).win, 'the sheet can show 點贏');
+  }
+  assert.equal(roleFor(k.view(null), rules), null);
+  changed(sim, 'p1', { type: 'end' });
+  assert.match(sim.view('p2').hint, /結果/);
+});
+
+// ============================================================
+// phone UI (ui.js) — a fake DOM, stub components, driven only by "taps"
+// ============================================================
+
+class FNode {}
+class FText extends FNode {
+  constructor(t) { super(); this.data = String(t); this.parentNode = null; }
+  get textContent() { return this.data; }
+}
+class FEl extends FNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.parentNode = null; this.children = []; this.attrs = {}; this.listeners = {};
+    this.cls = new Set(); this.styleMap = {}; this.hidden = false; this.disabled = false;
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new FText(v)])); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof FNode ? k : new FText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+  click() { for (const fn of this.listeners.click ?? []) fn({ type: 'click' }); }
+}
+const fakeDocument = { createElement: (t) => new FEl(t), createTextNode: (t) => new FText(t) };
+const walkEl = (n, fn) => { fn(n); if (n.children) for (const c of n.children) walkEl(c, fn); };
+const findEls = (root, pred) => { const out = []; walkEl(root, (n) => { if (n instanceof FEl && pred(n)) out.push(n); }); return out; };
+const serializeEl = (n) => (n instanceof FText ? n.data
+  : JSON.stringify([n.tag, [...n.cls].sort(), n.attrs, n.hidden, n.disabled, n.styleMap, n.children.map(serializeEl)]));
+const shown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+const button = (root, label) => findEls(root, (x) => x.tag === 'button' && x.textContent.startsWith(label))[0];
+
+/** Stub RoleCard / DiceCup / dieFace that remember their last props, so a test can "press" them. */
+function stubComponents() {
+  const made = { cards: [], cups: [] };
+  const E = (tag, cls) => { const n = new FEl(tag); n.className = cls; return n; };
+  const RoleCard = (p0) => {
+    const root = E('div', 'c-rolecard');
+    const api = {
+      el: root, props: p0,
+      update(p) { api.props = p; root.textContent = p.role ? `${p.role.emoji}${p.role.name}|${p.locked ? 'L' : ''}` : '—'; },
+      destroy() { api.dead = true; root.remove(); },
+    };
+    api.update(p0);
+    made.cards.push(api);
+    return api;
+  };
+  const DiceCup = (p0) => {
+    const root = E('div', 'c-dicecup');
+    const api = {
+      el: root, props: p0,
+      update(p) { api.props = p; root.textContent = `${p.rollSeq}|${p.canRoll ? 'R' : ''}|${p.lockedRoll ? 'L' : ''}`; },
+      destroy() { api.dead = true; root.remove(); },
+    };
+    api.update(p0);
+    made.cups.push(api);
+    return api;
+  };
+  const dieFace = (v) => { const d = E('span', 'die'); d.textContent = String(v); return d; };
+  return { made, components: { RoleCard, DiceCup, dieFace } };
+}
+
+async function withCustomUi(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, confirm: globalThis.confirm };
+  globalThis.document = fakeDocument;
+  globalThis.Node = FNode;
+  globalThis.confirm = () => true;
+  try {
+    return await fn(await import('../js/games/custom/ui.js'));
+  } finally {
+    for (const k of ['document', 'Node', 'confirm']) {
+      if (saved[k] === undefined) delete globalThis[k]; else globalThis[k] = saved[k];
+    }
+  }
+}
+
+function mountFor(ui, sim, pid, extra = {}) {
+  const root = new FEl('div');
+  const sent = [];
+  const sounds = [];
+  const stub = stubComponents();
+  const api = {
+    me: pid, players: sim.players, isHost: pid === sim.state.hostPid, meta, config: sim.config,
+    send: (a) => { sent.push(a); return true; }, ink() {}, now: () => sim.now, sfx: (s) => sounds.push(s), toast() {},
+    components: stub.components, ...extra,
+  };
+  return { pid, root, sent, sounds, stub, handle: ui.mount(root, api) };
+}
+
+test('custom ui: every seat and the table render through random games, idempotently, never showing the 💡 hint', async () => {
+  await withCustomUi(async (ui) => {
+    const cases = [[4, {}], [6, { hostPlays: false, modSees: true }], [5, { preset: 'king', diceCount: 3, diceSides: 20 }], [3, { selfRoll: false, diceCount: 2 }]];
+    for (const [n, patch] of cases) {
+      for (let seed = 1; seed <= 3; seed++) {
+        const sim = mk(n, { seed: seed * 7 + n, patch });
+        const phones = [...ids(n), null].map((pid) => mountFor(ui, sim, pid));
+        const render = (s) => {
+          for (const ph of phones) {
+            const v = s.view(ph.pid);
+            ph.handle.update(v, { focus: s.focus(), paused: false });
+            const a = serializeEl(ph.root);
+            ph.handle.update(clone(v), { focus: s.focus(), paused: false });
+            assert.equal(serializeEl(ph.root), a, `update() not idempotent for ${ph.pid ?? 'table'}`);
+            const text = ph.root.textContent;
+            assert.ok(!text.includes(v.hint), `the hint is for the 💡 sheet only: ${v.hint}`);
+            const mustTurn = v.phase === 'play' && !v.revealRoles && v.me?.playing && !v.me.seenRole;
+            assert.equal(text.includes('輪到你睇牌'), !!mustTurn, `${ph.pid}: turn banner`);
+            const hostCtl = button(ph.root, '🎲 全體搖骰');
+            assert.equal(shown(hostCtl), v.controller && v.phase === 'play', `${ph.pid}: host controls only on the host seat`);
+          }
+        };
+        render(sim);
+        sim.runRandom({ onStep: render });
+        for (const ph of phones) ph.handle.destroy();
+      }
+    }
+  });
+});
+
+test('custom ui: a view that is not ours is ignored instead of crashing statusLine (stale views from the last game)', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 2 });
+    const ph = mountFor(ui, sim, 'p2');
+    // what the shell can hand us between the `room` and `views` messages, or a broken one
+    for (const odd of [undefined, null, 0, 'x', [], {}, { phase: 'night', players: [] }, { phase: 'play', seats: 'p1' }, { seats: null }]) {
+      assert.doesNotThrow(() => ph.handle.update(odd, { focus: null }), `update(${JSON.stringify(odd)})`);
+    }
+    assert.match(ph.root.textContent, /載入緊/);
+    assert.equal(ph.stub.made.cards.length, 0, 'nothing drawn from a foreign view');
+    ph.handle.update(sim.view('p2'), null);   // a null ctx is fine too
+    assert.match(ph.root.textContent, /輪到你睇牌/);
+    const before = serializeEl(ph.root);
+    ph.handle.update({ phase: 'vote', votes: {}, round: 3 }, {});   // the old game's view again, late
+    assert.equal(serializeEl(ph.root), before, 'a late foreign view changes nothing');
+    assert.deepEqual(ph.sounds, [], 'and makes no sound');
+    // a half-filled view of ours: defaults, no throw
+    assert.doesNotThrow(() => ph.handle.update({ phase: 'play', seats: [{ id: 'p1', name: 'A', playing: true }, null, 7] }, {}));
+    assert.doesNotThrow(() => ph.handle.update({ seats: [], me: { playing: true }, dice: 'x', roles: 'y', log: 5, can: null }, {}));
+    ph.handle.destroy();
+    // odd api: players not an array, no sfx, a send that throws
+    const odd = mountFor(ui, sim, 'p1', { players: { p1: 1 }, sfx: undefined, send: () => { throw new Error('offline'); } });
+    odd.handle.update(sim.view('p1'), {});
+    const quiet = console.error;
+    console.error = () => {};
+    try { assert.doesNotThrow(() => button(odd.root, '🎲 全體搖骰').click()); } finally { console.error = quiet; }
+    odd.handle.destroy();
+    const { normaliseView } = ui;
+    assert.equal(normaliseView({ phase: 'night' }), null);
+    const nv = normaliseView({ seats: [{ id: 'p1' }, 'x'] });
+    assert.deepEqual([nv.seats.length, nv.roles, nv.log, nv.can, nv.dice, nv.me], [1, [], [], {}, { count: 1, sides: 6 }, null]);
+  });
+});
+
+test('custom ui: taps send the actions the engine accepts — peek on release, latch, roll, host buttons', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 9 });
+    const host = mountFor(ui, sim, 'p1');
+    const p2 = mountFor(ui, sim, 'p2');
+    const sync = () => { host.handle.update(sim.view('p1'), {}); p2.handle.update(sim.view('p2'), {}); };
+    const play = (ph) => { while (ph.sent.length) changed(sim, ph.pid, ph.sent.shift()); sync(); };
+    sync();
+    const card = () => p2.stub.made.cards.at(-1);
+    // press = nothing yet; release = seen
+    card().props.onOpen(true);
+    assert.deepEqual(p2.sent, []);
+    card().props.onOpen(false);
+    assert.deepEqual(p2.sent, [{ type: 'seen' }]);
+    play(p2);
+    card().props.onOpen(false);   // a release without a press does nothing
+    assert.deepEqual(p2.sent, []);
+    // latch, roll, lock the cup
+    card().props.onLockToggle();
+    play(p2);
+    assert.equal(seatOf(sim, 'p2').roleLocked, true);
+    p2.stub.made.cups.at(-1).props.onRoll();
+    play(p2);
+    p2.stub.made.cups.at(-1).props.onLock();
+    play(p2);
+    assert.equal(seatOf(sim, 'p2').diceLocked, true);
+    // the host: per-seat unlock, then every button
+    const unlock = findEls(host.root, (x) => x.cls.has('cu-unlock') && !x.hidden);
+    assert.equal(unlock.length, 1);
+    unlock[0].click();
+    assert.deepEqual(host.sent, [{ type: 'unlock-dice', pid: 'p2' }]);
+    play(host);
+    for (const label of ['🎲 全體搖骰', '👁 開晒啲骰', '🃏 重新派牌', '🔓 開晒角色', '➡️ 下一回合']) {
+      button(host.root, label).click();
+      assert.equal(host.sent.length, 1, label);
+      play(host);
+    }
+    assert.ok(p2.stub.made.cards.length >= 3, 'a fresh card per deal (redeal + next round)');
+    assert.ok(host.sounds.includes('deal') && host.sounds.includes('reveal') && host.sounds.includes('lift'));
+    button(host.root, '🏁 結束遊戲').click();
+    play(host);
+    assert.equal(sim.state.phase, 'ended');
+    assert.ok(!shown(button(host.root, '🎲 全體搖骰')), 'no host controls once it is over');
+    assert.match(p2.root.textContent, /遊戲完咗/);
+  });
+});
+
+test('custom ui: U1 — long-pressing a role name on the roster explains it; a tap or a scroll does not', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(5, { seed: 6, patch: { preset: 'killer', hostPlays: false, modSees: true } });
+    const toasts = [];
+    const ph = mountFor(ui, sim, 'p1', { toast: (t) => toasts.push(t) });   // the moderator sees 👁 tags
+    ph.handle.update(sim.view('p1'), {});
+    const fire = (node, type, x = 0, y = 0) => { for (const fn of node.listeners[type] ?? []) fn({ type, clientX: x, clientY: y }); };
+    const tag = findEls(ph.root, (x) => x.cls.has('cu-tag') && x.cls.has('peek'))[0];
+    assert.ok(tag, 'a role tag on the moderator roster');
+    const role = sim.state.roles.find((r) => tag.textContent.includes(r.name));
+    assert.equal(tag.attrs.title, `${role.emoji} ${role.name}：${role.desc}`);
+    fire(tag, 'pointerdown'); fire(tag, 'pointerup');                         // a tap
+    fire(tag, 'pointerdown', 0, 0); fire(tag, 'pointermove', 0, 40);          // a scroll
+    fire(tag, 'pointerdown', 0, 0); fire(tag, 'pointermove', 2, 3);           // a resting finger jitters
+    await new Promise((r) => setTimeout(r, 520));
+    assert.deepEqual(toasts, [tag.attrs.title], 'only the held press explains');
+    ph.handle.destroy();
+  });
 });

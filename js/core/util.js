@@ -1,5 +1,9 @@
 // ============================================================
-// util.js — DOM helpers, crypto-grade randomness, local storage
+// util.js — crypto-grade randomness, room codes, local storage, wake lock.
+//
+// No DOM helpers here: the UI has exactly one set, in js/ui/dom.js (G14).
+// Everything in this file runs under Node too (tests), except keepAwake,
+// which is a no-op without navigator.wakeLock.
 // ============================================================
 
 /**
@@ -43,36 +47,6 @@ export function uid(prefix = 'p') {
   const b = new Uint8Array(9);
   crypto.getRandomValues(b);
   return prefix + '_' + Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
-}
-
-// ---------- DOM ----------
-export const $  = (sel, root = document) => root.querySelector(sel);
-export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-export function el(tag, attrs = {}, ...kids) {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k === 'class') n.className = v;
-    else if (k === 'text') n.textContent = v;
-    else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v === true ? '' : v);
-  }
-  for (const kid of kids.flat()) {
-    if (kid == null || kid === false) continue;
-    n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
-  }
-  return n;
-}
-
-let toastTimer = null;
-export function toast(msg, ms = 2000) {
-  const t = $('#toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 export function buzz(pattern = 18) {
@@ -120,7 +94,14 @@ export function makeStore(storage) {
         return raw == null ? fallback : JSON.parse(raw);
       } catch { return fallback; }
     },
-    set(key, value) { try { rawSet(key, JSON.stringify(value)); } catch { /* quota / private mode */ } },
+    /** Returns false if the write failed (quota exceeded, private mode). */
+    set(key, value) {
+      try { rawSet(key, JSON.stringify(value)); return true; } catch { return false; }
+    },
+    /** Write an already-serialised JSON string (saves a second stringify of a big snapshot). */
+    setRaw(key, json) {
+      try { rawSet(key, String(json)); return true; } catch { return false; }
+    },
     del(key) { try { rawDel(key); } catch { /* ignore */ } },
   };
 }

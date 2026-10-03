@@ -62,19 +62,26 @@ export function makeBag(banks = {}, rng = mulberry32(99)) {
 export class Sim {
   /**
    * @param game  pure game module { meta, config, engine }
-   * @param opts  { n, seed=1, config?, banks?, now? }
+   * @param opts  { n, seed=1, config?, banks?, now?, hostPid='p1', carry? }
+   *              hostPid is the seat on the host phone, as the Room passes it to setup (G1);
+   *              pass null to test an engine without one.
+   *              carry is the previous game's result().carry (the Room hands it over per game id).
    */
-  constructor(game, { n, seed = 1, config, banks = {}, now = 1_000_000 } = {}) {
+  constructor(game, { n, seed = 1, config, banks = {}, now = 1_000_000, hostPid = 'p1', carry } = {}) {
     this.game = game;
     this.engine = game.engine;
     this.rng = mulberry32(seed);
     this.now = now;
     this.players = makePlayers(n);
+    this.hostPid = hostPid;
     this.config = config ?? game.config.defaults(n);
     const v = game.config.validate(this.config, n);
     if (!v.ok) throw new Error(`invalid config for n=${n}: ${v.message}`);
     this.bag = makeBag(banks, mulberry32(seed + 7));
-    this.state = this.engine.setup({ players: clone(this.players), config: clone(this.config), ...this.ctx() });
+    this.state = this.engine.setup({
+      players: clone(this.players), config: clone(this.config), ...this.ctx(), hostPid: this.hostPid,
+      ...(carry !== undefined && carry !== null ? { carry: clone(carry) } : {}),
+    });
     this.steps = 0;
     this.trace = [];
   }

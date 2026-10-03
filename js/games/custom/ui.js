@@ -11,6 +11,14 @@
 // Uses only api.components (RoleCard, DiceCup, dieFace), api.send, api.sfx and
 // api.players. The role card and the cup own their own sounds (flip, lock,
 // roll chime keyed on rollSeq), so this file only adds game-level ones.
+//
+// Defensive on purpose: the shell can hand update() a view that is not ours
+// (on a P2P client the `room` message that switches the game can arrive before
+// the `views` message, so for a moment app.state.views still holds the last
+// game's views) — that used to throw "Cannot read properties of undefined
+// (reading 'filter')" in statusLine. A view without a `seats` array is ignored
+// (the right one is on its way), and every other field is defaulted.
+// view.hint is for the shell's 💡 sheet only; this UI never shows it.
 // ============================================================
 
 const NEED_CONFIRM = {
@@ -40,10 +48,44 @@ function confirmed(text) {
   return typeof globalThis.confirm === 'function' ? globalThis.confirm(text) : true;
 }
 
+const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+const objects = (xs) => (Array.isArray(xs) ? xs.filter(isObj) : []);
+
+/**
+ * Our view, with every field the renderer touches defaulted — or null when the
+ * view is not one of ours (no `seats` array), so update() can skip it.
+ */
+export function normaliseView(view) {
+  if (!isObj(view) || !Array.isArray(view.seats)) return null;
+  const sides = Number(view.dice?.sides);
+  const count = Number(view.dice?.count);
+  return {
+    ...view,
+    phase: typeof view.phase === 'string' ? view.phase : 'play',
+    seats: view.seats.filter((s) => isObj(s) && typeof s.id === 'string'),
+    roles: objects(view.roles),
+    log: objects(view.log),
+    can: isObj(view.can) ? view.can : {},
+    dice: { count: Number.isInteger(count) && count > 0 ? count : 1, sides: Number.isInteger(sides) && sides > 0 ? sides : 6 },
+    me: isObj(view.me) ? view.me : null,
+    all: isObj(view.all) ? view.all : undefined,
+    controller: view.controller === true,
+    revealRoles: view.revealRoles === true,
+    revealDice: view.revealDice === true,
+  };
+}
+
 export function mount(root, api) {
-  const C = api.components;
+  const C = api.components ?? {};
   const wrap = h('div', { class: 'cu' });
   root.append(wrap);
+
+  // api.send returns app.act's Promise, which rejects when the action did not get through (G4).
+  // The shell already toasts 冇送到; here we only make sure the rejection is never unhandled.
+  const send = (action) => {
+    try { Promise.resolve(api.send?.(action)).catch(() => {}); } catch (err) { console.error('[custom] send failed', err); }
+  };
+  const sfx = (name) => { try { api.sfx?.(name); } catch { /* sound is never worth a crash */ } };
 
   let last = null;          // last view
   let lastCtx = {};
@@ -54,7 +96,7 @@ export function mount(root, api) {
   let cardDealId = null;
 
   // ---------- banner ----------
-  const status = h('div', { class: 'cu-status' });
+  const status = h('div', { class: 'cu-status wait', text: '載入緊…' });
 
   // ---------- dice card ----------
   const diceHint = h('small', { class: 'cu-hint' });   // only says WHY the cup cannot roll; the cup has its own hint
@@ -86,11 +128,11 @@ export function mount(root, api) {
   // ---------- host controls ----------
   const btns = {
     rollAll: ctlButton('🎲 全體搖骰', () => rollAll()),
-    unlockDice: ctlButton('🔓 解鎖骰盅', () => api.send({ type: 'unlock-dice' })),
+    unlockDice: ctlButton('🔓 解鎖骰盅', () => send({ type: 'unlock-dice' })),
     revealDice: ctlButton('👁 開晒啲骰', () => sendHost('reveal-dice')),
     revealRoles: ctlButton('🔓 開晒角色', () => sendHost('reveal-roles'), 'danger'),
     redeal: ctlButton('🃏 重新派牌', () => sendHost('redeal')),
-    nextRound: ctlButton('➡️ 下一回合（重新派牌）', () => api.send({ type: 'next-round' }), 'primary'),
+    nextRound: ctlButton('➡️ 下一回合（重新派牌）', () => send({ type: 'next-round' }), 'primary'),
     end: ctlButton('🏁 結束遊戲', () => sendHost('end'), 'quiet'),
   };
   const ctlCard = h('section', { class: 'cu-card', hidden: true },
@@ -116,24 +158,24 @@ export function mount(root, api) {
   // ---------- actions ----------
   function sendHost(type) {
     if (NEED_CONFIRM[type] && !confirmed(NEED_CONFIRM[type])) return;
-    api.send({ type });
+    send({ type });
   }
 
   function rollAll() {
     if (last?.seats.some((s) => s.diceLocked) && !confirmed('有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？')) return;
-    if (!last?.me?.playing) api.sfx('roll');   // a moderator has no cup to rattle
-    api.send({ type: 'roll-all' });
+    if (!last?.me?.playing) sfx('roll');   // a moderator has no cup to rattle
+    send({ type: 'roll-all' });
   }
 
   function onLockRole() {
     const me = last?.me;
-    if (me?.playing) api.send({ type: 'lock-role', on: !me.roleLocked });
+    if (me?.playing) send({ type: 'lock-role', on: !me.roleLocked });
   }
 
   // DiceCup only calls these when the roll / lock is actually possible (it handles the
   // "locked cup" nudge itself); the engine re-checks everything anyway.
-  const onRoll = () => api.send({ type: 'roll' });
-  const onLockDice = () => api.send({ type: 'lock-dice' });
+  const onRoll = () => send({ type: 'roll' });
+  const onLockDice = () => send({ type: 'lock-dice' });
 
   /** RoleCard callback. "Seen" is sent on RELEASE so a shared phone moves on only after the peek ends. */
   function onOpen(open) {
@@ -141,7 +183,7 @@ export function mount(root, api) {
     if (!peeking) return;
     peeking = false;
     const v = last;
-    if (v?.me?.playing && v.me.role && !v.me.seenRole && !v.revealRoles) api.send({ type: 'seen' });
+    if (v?.me?.playing && v.me.role && !v.me.seenRole && !v.revealRoles) send({ type: 'seen' });
   }
 
   // ---------- components ----------
@@ -161,7 +203,7 @@ export function mount(root, api) {
 
   function ensureCards(v) {
     const holds = !!v.me?.playing;
-    if (holds && !cup) {
+    if (holds && !cup && typeof C.DiceCup === 'function') {
       cup = C.DiceCup(cupProps(v));
       diceSlot.append(cup.el);
     } else if (!holds && cup) {
@@ -171,7 +213,7 @@ export function mount(root, api) {
     if (card && (!holds || cardDealId !== v.dealId)) {
       card.destroy(); card = null; peeking = false;
     }
-    if (holds && !card) {
+    if (holds && !card && typeof C.RoleCard === 'function') {
       card = C.RoleCard(cardProps(v));
       roleSlot.append(card.el);
       cardDealId = v.dealId;
@@ -180,9 +222,11 @@ export function mount(root, api) {
 
   // ---------- rendering ----------
   const roleOf = (v, id) => v.roles.find((r) => r.id === id) ?? null;
+  const face = (value, sides) => (typeof C.dieFace === 'function' ? C.dieFace(value, sides) : h('span', { text: String(value) }));
 
   function playerFor(id) {
-    return (api.players || []).find((p) => p.id === id) ?? null;
+    const players = api.players;
+    return (Array.isArray(players) ? players : []).find((p) => p && p.id === id) ?? null;
   }
 
   function statusLine(v) {
@@ -199,12 +243,34 @@ export function mount(root, api) {
     if (!s.playing) tags.push(['host', '主持']);
     const shown = v.revealRoles ? s.roleId : v.all?.[s.id];
     const r = shown != null ? roleOf(v, shown) : null;
-    if (r) tags.push([v.revealRoles ? 'role' : 'peek', `${v.revealRoles ? '' : '👁 '}${r.emoji} ${r.name}`]);
+    if (r) tags.push([v.revealRoles ? 'role' : 'peek', `${v.revealRoles ? '' : '👁 '}${r.emoji} ${r.name}`, explain(r)]);
     if (s.playing && !v.revealRoles) tags.push(s.seenRole ? ['seen', '已睇牌'] : ['unseen', '未睇牌']);
     if (s.rolled && !v.revealDice) tags.push(['dice', '🎲 已搖']);
     if (s.diceLocked) tags.push(['lock', '🔒骰']);
     if (s.roleLocked) tags.push(['lock', '🔒牌']);
     return tags;
+  }
+
+  /** '🔪 殺手：做乜：… 點贏：…' — what a long-press on a role name shows (U1). */
+  const explain = (r) => (typeof r.desc === 'string' && r.desc ? `${r.emoji ?? ''} ${r.name ?? ''}：${r.desc}`.trim() : null);
+
+  /** Long-press (≈ ½ s) a role name → its one-line ability as a toast; a tap or a scroll does nothing. */
+  function holdToExplain(node, text) {
+    let timer = null;
+    let at = null;
+    const cancel = () => { if (timer) clearTimeout(timer); timer = null; };
+    node.setAttribute('title', text);
+    node.addEventListener('pointerdown', (e) => {
+      cancel();
+      at = [e?.clientX ?? 0, e?.clientY ?? 0];
+      timer = setTimeout(() => { timer = null; try { api.toast?.(text, 3200); } catch { /* never worth a crash */ } }, 450);
+    });
+    // a resting finger jitters; only a real move (a scroll) cancels
+    node.addEventListener('pointermove', (e) => {
+      if (timer && at && Math.hypot((e?.clientX ?? 0) - at[0], (e?.clientY ?? 0) - at[1]) > 10) cancel();
+    });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) node.addEventListener(ev, cancel);
+    node.addEventListener('contextmenu', (e) => e.preventDefault?.());   // no iOS / Android menu over the name
   }
 
   function makeRow(id) {
@@ -213,7 +279,7 @@ export function mount(root, api) {
     const tags = h('span', { class: 'cu-tags' });
     const unlock = h('button', {
       type: 'button', class: 'cu-unlock', hidden: true, 'aria-label': '解鎖佢嘅骰盅', title: '解鎖佢嘅骰盅',
-      onclick: () => api.send({ type: 'unlock-dice', pid: id }),
+      onclick: () => send({ type: 'unlock-dice', pid: id }),
     }, '🔓');
     const el = h('li', { class: 'cu-row' }, dot, name, tags, unlock);
     return { el, dot, name, tags, unlock, sig: '' };
@@ -234,7 +300,11 @@ export function mount(root, api) {
       const sig = JSON.stringify(tags);
       if (sig !== row.sig) {
         row.sig = sig;
-        row.tags.replaceChildren(...tags.map(([kind, text]) => h('span', { class: `cu-tag ${kind}`, text })));
+        row.tags.replaceChildren(...tags.map(([kind, text, more]) => {
+          const tag = h('span', { class: `cu-tag ${kind}`, text });
+          if (more) holdToExplain(tag, more);
+          return tag;
+        }));
       }
       row.unlock.hidden = !(v.controller && s.diceLocked);
       row.el.classList.toggle('me', s.id === api.me);
@@ -245,18 +315,18 @@ export function mount(root, api) {
   }
 
   function syncShowdown(v) {
-    const show = v.revealDice && v.seats.some((s) => s.dice);
+    const show = v.revealDice && v.seats.some((s) => Array.isArray(s.dice));
     showCard.hidden = !show;
     if (!show) { showSig = ''; return; }
     const sig = JSON.stringify([v.dice.sides, v.seats.map((s) => s.dice ?? null)]);
     if (sig === showSig) return;
     showSig = sig;
-    showList.replaceChildren(...v.seats.filter((s) => s.dice).map((s) => {
+    showList.replaceChildren(...v.seats.filter((s) => Array.isArray(s.dice)).map((s) => {
       const p = playerFor(s.id);
       const sum = s.dice.reduce((a, b) => a + b, 0);
       return h('li', { class: 'cu-show-row' },
         h('span', { class: 'cu-show-name', text: p?.name ?? s.name }),
-        h('span', { class: 'cu-show-dice' }, s.dice.map((d) => h('span', { class: 'cu-show-die' }, C.dieFace(d, v.dice.sides)))),
+        h('span', { class: 'cu-show-dice' }, s.dice.map((d) => h('span', { class: 'cu-show-die' }, face(d, v.dice.sides)))),
         s.dice.length > 1 ? h('span', { class: 'cu-show-sum', text: `= ${sum}` }) : null);
     }));
   }
@@ -292,13 +362,13 @@ export function mount(root, api) {
     }
 
     // dice
-    cup.update(cupProps(v));
+    cup?.update(cupProps(v));
     diceHint.textContent = v.revealDice ? '已經開盅，要主持再搖'
       : !me.mayRoll ? '今次淨係主持幫大家搖'
       : '';
 
     // role
-    card.update(cardProps(v));
+    card?.update(cardProps(v));
   }
 
   function syncControls(v) {
@@ -316,18 +386,19 @@ export function mount(root, api) {
 
   function sounds(v) {
     if (prev) {   // the first view a phone gets is history, not news
-      if (v.dealId !== prev.dealId) api.sfx('deal');
-      if (v.revealRoles && !prev.revealRoles) api.sfx('reveal');
-      if (v.revealDice && !prev.revealDice) api.sfx('lift');
+      if (v.dealId !== prev.dealId) sfx('deal');
+      if (v.revealRoles && !prev.revealRoles) sfx('reveal');
+      if (v.revealDice && !prev.revealDice) sfx('lift');
     }
     prev = v;
   }
 
   return {
-    update(view, ctx = {}) {
-      if (!view) return;
+    update(raw, ctx) {
+      const view = normaliseView(raw);
+      if (!view) return;   // not our view (another game's, or nothing yet): the right one is on its way
       last = view;
-      lastCtx = ctx;
+      lastCtx = isObj(ctx) ? ctx : {};
       sounds(view);
       ensureCards(view);
 

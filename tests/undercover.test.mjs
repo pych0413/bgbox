@@ -23,9 +23,18 @@ const banks = { undercover: BANK };
 const N_RANGE = [4, 5, 6, 7, 8, 9, 10, 11, 12];
 const ROLE = { C: 'civilian', U: 'undercover', B: 'blank' };
 
-function mk(n, { seed = 1, cfg = {}, bank = BANK } = {}) {
-  const config = { ...C.defaults(n), ...cfg };
-  return new Sim(game, { n, seed, config, banks: { undercover: bank } });
+/** Role counts in `cfg` without a preset mean 自訂 (a named preset would override them). */
+const withCounts = (cfg) => (('undercovers' in cfg || 'blanks' in cfg) && !('preset' in cfg) ? { ...cfg, preset: 'custom' } : cfg);
+
+function mk(n, { seed = 1, cfg = {}, bank = BANK, carry } = {}) {
+  const config = { ...C.defaults(n), ...withCounts(cfg) };
+  const sim = new Sim(game, { n, seed, config, banks: { undercover: bank } });
+  if (carry) {           // Sim has no `carry`: deal again with it (same seed, same rng start)
+    sim.rng = mulberry32(seed);
+    sim.bag = makeBag({ undercover: bank }, mulberry32(seed + 7));
+    sim.state = E.setup({ players: clone(sim.players), config: clone(config), ...sim.ctx(), carry });
+  }
+  return sim;
 }
 
 /** Fix the deal: `spec` is one letter per seat p1..pn (C civilian, U undercover, B blank). */
@@ -119,50 +128,126 @@ test('undercover: meta and rules are well-formed', () => {
   }
 });
 
+test('undercover: U1 — rules.quick is at most 6 short lines; every role says what you do and how you win', () => {
+  assert.ok(rules.quick.length <= 6, `${rules.quick.length} quick lines`);
+  for (const l of rules.quick) assert.ok([...l].length <= 32, `quick line too long: ${l}`);
+  for (const r of rules.roles) {
+    const [does, win] = r.text.split('點贏：');
+    assert.ok(does && does.length >= 10, `${r.id}: what you do`);
+    assert.ok(win && win.length >= 6, `${r.id}: how you win`);
+    assert.ok([...r.text].length <= 80, `${r.id}: role text too long`);
+  }
+  // nobody is told their role, so the role texts say so
+  assert.match(rules.roles[0].text, /唔知自己係平民/);
+  assert.match(rules.roles[1].text, /一開始唔知/);
+});
+
+test('undercover: clue rule — the only hard ban is saying your own word (or a character of it); the rest are house rules', () => {
+  const body = rules.sections.find((s) => s.title === '形容嘅規矩').body;
+  const [hard, house] = body.split('好多人仲會加');
+  assert.match(hard, /唯一硬規矩：唔可以講出自己個詞，或者入面任何一個字/);
+  assert.doesNotMatch(hard, /翻譯|幾多個字|抄/, 'translation / length / repeats are not universal bans');
+  assert.match(house, /翻譯/);
+  assert.match(house, /幾多個字/);
+  assert.match(house, /開波前講好/);
+  assert.match(body, /臥底唔可以為咗收埋自己而亂講無關嘅嘢/, 'CN classic: the clue must be about your own word');
+  assert.match(rules.quick.join(''), /唔可以講出個詞或者入面嘅字/);
+  assert.doesNotMatch(rules.quick.join(''), /翻譯|字數/);
+});
+
 test('undercover: defaults are valid for every head-count and follow the research table', () => {
   const expectU = { 4: 1, 5: 1, 6: 1, 7: 2, 8: 2, 9: 2, 10: 3, 11: 3, 12: 3 };
   for (const n of N_RANGE) {
     const cfg = C.defaults(n);
     const v = C.validate(cfg, n);
     assert.ok(v.ok, `n=${n}: ${v.message}`);
+    assert.equal(cfg.preset, 'std');
     assert.equal(cfg.undercovers, expectU[n], `n=${n}`);
     assert.equal(cfg.blanks, 0);
-    assert.equal(cfg._n, n);
+    assert.equal(cfg.win, 'parity');
+    assert.equal(cfg.pkVoters, 'all', 'research default ALL_ALIVE');
+    assert.equal(cfg.tie, 'pk');
+    assert.equal(cfg.majority, false, 'plurality is the norm');
+    assert.equal(cfg.guessWinner, 'team');
+    assert.equal(cfg.blankNeverFirst, false, 'BACKLOG #20: random over all seats by default');
+    assert.equal(cfg.antiStreak, false);
     assert.ok(Array.isArray(C.summary(cfg, n)) && C.summary(cfg, n).length >= 3);
   }
 });
 
-test('undercover: defaults(n, prev) keeps edited role counts and follows the head-count otherwise', () => {
+test('undercover: #8 — every preset at every head-count is a legal, undecided table with a reason', () => {
+  const blankTable = { 5: [3, 1, 1], 6: [4, 1, 1], 7: [5, 1, 1], 8: [6, 1, 1], 9: [6, 2, 1], 10: [7, 2, 1], 11: [8, 2, 1], 12: [8, 3, 1] };
+  for (const n of N_RANGE) {
+    const field = C.fields(C.defaults(n), n).find((f) => f.key === 'preset');
+    const ids = field.options.map((o) => o.value);
+    assert.deepEqual(ids, n === 4 ? ['std', 'custom'] : ['std', 'blank', 'custom'], `n=${n}`);
+    for (const o of field.options) {
+      if (o.value === 'custom') { assert.equal(o.label, '自訂人數'); continue; }
+      assert.match(o.label, new RegExp(`^${n} 人：\\d 臥底( \\+ \\d 白板)? — \\S+`), o.label);
+    }
+    for (const win of K.WIN_MODES) {
+      for (const preset of ids.filter((id) => id !== 'custom')) {
+        const cfg = { ...C.defaults(n), preset, win };
+        const v = C.validate(cfg, n);
+        assert.ok(v.ok, `n=${n} ${preset} ${win}: ${v.message}`);
+        const pc = K.presetCounts(preset, n);
+        assert.equal(K.infiltratorsWin(n - pc.undercovers - pc.blanks, pc.undercovers + pc.blanks, win, n), false);
+        const help = C.fields(cfg, n).find((f) => f.key === 'preset').help;
+        assert.match(help, /平民投錯/, `n=${n} ${preset}: the reason says how forgiving it is`);
+        // the deal really has those counts
+        const s = E.setup({ players: makePlayers(n), config: cfg, rng: mulberry32(n), now: 0, bag: makeBag(banks) });
+        const count = (r) => Object.values(s.roles).filter((x) => x === r).length;
+        assert.deepEqual([count('civilian'), count('undercover'), count('blank')], [n - pc.undercovers - pc.blanks, pc.undercovers, pc.blanks]);
+      }
+    }
+    if (n >= 5) assert.deepEqual([n - K.presetCounts('blank', n).undercovers - 1, K.presetCounts('blank', n).undercovers, 1], blankTable[n], `research blank-on column, n=${n}`);
+  }
+  assert.match(C.fields({ ...C.defaults(5), preset: 'blank' }, 5).find((f) => f.key === 'preset').help, /投錯一次就輸/);
+});
+
+test('undercover: #8 — a preset that does not exist for this head-count is blocked, not silently changed', () => {
+  const v = C.validate({ ...C.defaults(6), preset: 'blank' }, 4);
+  assert.equal(v.ok, false);
+  assert.match(v.message, /4 人唔可以加白板/);
+  const s = E.setup({ players: makePlayers(4), config: { preset: 'blank' }, rng: mulberry32(1), now: 0, bag: makeBag(banks) });
+  assert.equal(Object.values(s.roles).filter((r) => r !== 'civilian').length, 1, 'setup still deals a legal table');
+  assert.equal(C.defaults(4, { ...C.defaults(6), preset: 'blank' }).preset, 'std', 'defaults() falls back');
+});
+
+test('undercover: #8 — named presets follow the head-count, 自訂 keeps its counts while they fit', () => {
   const six = C.defaults(6);
-  assert.equal(C.defaults(7, six).undercovers, 2, 'untouched recommendation follows n');
-  const edited = { ...C.defaults(8), undercovers: 1, blanks: 1 };
-  const nine = C.defaults(9, edited);
-  assert.equal(nine.undercovers, 1);
-  assert.equal(nine.blanks, 1);
-  const tooBig = { ...C.defaults(12), undercovers: 3, blanks: 2 };
-  const four = C.defaults(4, tooBig);
-  assert.ok(C.validate(four, 4).ok, 'falls back to a valid table');
-  assert.equal(four.undercovers, 1);
-  const kept = C.defaults(6, { ...six, speakSec: 25, revealRole: false, tie: 'skip', words: { cats: ['食物'], levels: [1] } });
+  assert.equal(C.defaults(7, six).undercovers, 2, 'std follows n');
+  assert.equal(K.merge({ ...six, undercovers: 3 }, 6).undercovers, 1, 'a named preset ignores stale counts');
+  const blank = C.defaults(9, { ...six, preset: 'blank' });
+  assert.deepEqual([blank.preset, blank.undercovers, blank.blanks], ['blank', 2, 1]);
+  const custom = C.defaults(9, { ...C.defaults(8), preset: 'custom', undercovers: 1, blanks: 1 });
+  assert.deepEqual([custom.preset, custom.undercovers, custom.blanks], ['custom', 1, 1]);
+  const tooBig = C.defaults(4, { ...C.defaults(12), preset: 'custom', undercovers: 3, blanks: 2 });
+  assert.ok(C.validate(tooBig, 4).ok, 'falls back to a valid table');
+  assert.deepEqual([tooBig.preset, tooBig.undercovers], ['std', 1]);
+  const kept = C.defaults(6, { ...six, speakSec: 25, revealRole: false, tie: 'skip', pkVoters: 'others', words: { cats: ['食物'], levels: [1] } });
   assert.equal(kept.speakSec, 25);
   assert.equal(kept.revealRole, false);
   assert.equal(kept.tie, 'skip');
+  assert.equal(kept.pkVoters, 'others');
   assert.deepEqual(kept.words, { cats: ['食物'], levels: [1] });
+  // counts without a preset (old saved configs, API callers) mean 自訂
+  assert.equal(K.merge({ undercovers: 2, blanks: 1 }, 9).preset, 'custom');
 });
 
-test('undercover: validate accepts exactly the legal role splits', () => {
+test('undercover: validate accepts exactly the legal role splits, for every threshold', () => {
   for (const n of N_RANGE) {
     const maxInf = Math.floor((n - 1) / 2);
     const maxBlank = n >= 10 ? 2 : 1;
     for (let u = 0; u <= 6; u++) {
       for (let b = 0; b <= 3; b++) {
         const legal = u + b >= 1 && b <= maxBlank && u + b <= maxInf;
-        for (const win of ['parity', 'last3']) {
-          const v = C.validate({ ...C.defaults(n), undercovers: u, blanks: b, win }, n);
+        for (const win of K.WIN_MODES) {
+          const v = C.validate({ ...C.defaults(n), preset: 'custom', undercovers: u, blanks: b, win }, n);
           assert.equal(v.ok, legal, `n=${n} u=${u} b=${b} ${win}: ${v.message}`);
           if (legal) {
             // never already decided at the deal
-            assert.equal(K.infiltratorsWin(n - u - b, u + b, win), false, `n=${n} u=${u} b=${b} ${win}`);
+            assert.equal(K.infiltratorsWin(n - u - b, u + b, win, n), false, `n=${n} u=${u} b=${b} ${win}`);
           } else {
             assert.ok(v.message.length > 3);
           }
@@ -175,63 +260,114 @@ test('undercover: validate accepts exactly the legal role splits', () => {
 test('undercover: validate rejects head-counts outside 4..12 and coerces form strings', () => {
   assert.equal(C.validate(C.defaults(4), 3).ok, false);
   assert.equal(C.validate(C.defaults(12), 13).ok, false);
-  assert.equal(C.validate({ ...C.defaults(8), undercovers: '2', blanks: '1' }, 8).ok, true);
-  assert.equal(C.validate({ ...C.defaults(8), undercovers: 'abc' }, 8).ok, true, 'falls back to the recommendation');
+  assert.equal(C.validate({ ...C.defaults(8), preset: 'custom', undercovers: '2', blanks: '1' }, 8).ok, true);
+  assert.equal(K.merge({ preset: 'custom', undercovers: '2', blanks: '1' }, 8).undercovers, 2);
+  assert.equal(C.validate({ ...C.defaults(8), preset: 'custom', undercovers: 'abc' }, 8).ok, true, 'falls back to the recommendation');
   assert.equal(C.validate({ undercovers: -1 }, 8).ok, false);
   assert.equal(C.validate(null, 8).ok, true);
+  assert.equal(K.merge({ preset: 'nope', win: 'nope', pkVoters: 5, guessWinner: {} }, 8).preset, 'std');
 });
 
 test('undercover: validate warns about lopsided tables but still allows them', () => {
-  const w = (n, patch) => C.validate({ ...C.defaults(n), ...patch }, n).warnings.join('|');
-  assert.match(w(5, { blanks: 1 }), /投錯 1 個平民/);
+  const w = (n, patch) => {
+    const v = C.validate({ ...C.defaults(n), ...withCounts(patch) }, n);
+    assert.ok(v.ok, v.message);
+    return v.warnings.join('|');
+  };
+  assert.match(w(5, { preset: 'blank' }), /投錯 1 個平民/);
   assert.match(w(4, { win: 'last3' }), /投錯 1 個平民/);
+  assert.match(w(4, { win: 'civ_le_2' }), /投錯 1 個平民/);
   assert.match(w(10, { undercovers: 1 }), /臥底方好難贏/);
   assert.match(w(5, { blanks: 1 }), /白板/);
   assert.match(w(7, { undercovers: 0, blanks: 1 }), /冇臥底/);
+  assert.match(w(12, { win: 'last3' }), /剩 3 人或者人數追上/, '3 undercovers under pure last3');
+  assert.doesNotMatch(w(12, { win: 'last3OrParity' }), /剩 3 人或者人數追上/);
+  assert.match(w(8, { preset: 'blank', blankGuess: false }), /唔可以估詞/);
   assert.equal(w(8, {}), '');
 });
 
-test('undercover: infiltrators-win truth table (parity and last3, every split of 4..12)', () => {
-  const { infiltratorsWin: win, lossAfter } = K;
+test('undercover: thresholds — parity is equal-or-more; pure last3 fires later than parity with 2+ infiltrators; C == 0 always ends it', () => {
+  const { infiltratorsWin: win } = K;
   assert.equal(win(3, 0, 'parity'), false);
   assert.equal(win(3, 1, 'parity'), false);
   assert.equal(win(2, 1, 'parity'), false);
   assert.equal(win(1, 1, 'parity'), true);
-  assert.equal(win(2, 2, 'parity'), true);
+  assert.equal(win(2, 2, 'parity'), true, 'equal counts is enough');
   assert.equal(win(3, 1, 'last3'), false);           // 4 left
-  assert.equal(win(2, 1, 'last3'), true);            // 3 left
+  assert.equal(win(2, 1, 'last3'), true, 'one undercover: last3 is one mis-vote earlier than parity');
   assert.equal(win(1, 2, 'last3'), true);
-  assert.equal(win(3, 3, 'last3'), false, 'pure last3: parity alone is not enough');
+  assert.equal(win(2, 2, 'last3'), false, '2C v 2U: parity, but pure last3 plays on');
+  assert.equal(win(3, 3, 'last3'), false);
   assert.equal(win(3, 3, 'parity'), true);
-  assert.equal(win(0, 4, 'last3'), true, 'nobody left to vote them out');
-  assert.equal(win(0, 1, 'parity'), true);
-  assert.equal(win(5, 0, 'last3'), false, 'no infiltrators never wins for them');
+  assert.equal(win(1, 4, 'last3'), false, '4+ infiltrators: T <= 3 is unreachable');
+  assert.equal(win(0, 4, 'last3'), true, 'safety net: nobody left to vote them out');
+  for (const m of K.WIN_MODES) {
+    assert.equal(win(0, 1, m, 12), true, `${m}: C == 0`);
+    assert.equal(win(0, 5, m, 12), true, `${m}: C == 0`);
+    assert.equal(win(5, 0, m, 12), false, `${m}: no infiltrators never wins for them`);
+    assert.equal(win(1, 1, m, 12), true, `${m}: T = 2 always ends the game`);
+    assert.equal(win(0, 2, m, 12), true, `${m}: T = 2 always ends the game`);
+  }
+});
+
+test('undercover: thresholds — last3OrParity, civ_le_2, one_civ and size_based match the research table', () => {
+  const { infiltratorsWin: win } = K;
+  // last3OrParity: whichever first
+  assert.equal(win(2, 2, 'last3OrParity'), true);
+  assert.equal(win(2, 1, 'last3OrParity'), true);
+  assert.equal(win(3, 2, 'last3OrParity'), false);
+  // civ_le_2: same as last3 for 1 undercover, same as parity for 2, later than parity for 3+
+  assert.equal(win(2, 1, 'civ_le_2'), true);
+  assert.equal(win(3, 1, 'civ_le_2'), false);
+  assert.equal(win(2, 2, 'civ_le_2'), true);
+  assert.equal(win(3, 3, 'civ_le_2'), false, 'later than parity with 3');
+  // one_civ: same as parity for 1, harder than parity for 2+
+  assert.equal(win(1, 1, 'one_civ'), true);
+  assert.equal(win(2, 1, 'one_civ'), false);
+  assert.equal(win(2, 2, 'one_civ'), false);
+  assert.equal(win(1, 2, 'one_civ'), true);
+  // size_based (cutoff 7): small games last 2, large games last 3
+  assert.equal(win(2, 1, 'size_based', 6), false);
+  assert.equal(win(1, 1, 'size_based', 6), true);
+  assert.equal(win(2, 1, 'size_based', 7), true);
+  assert.equal(win(3, 1, 'size_based', 12), false);
+  // mis-votes for every valid split, every threshold: the fatal one is exactly where the threshold starts to hold
   for (const n of N_RANGE) {
     for (let inf = 1; inf <= Math.floor((n - 1) / 2); inf++) {
       const civ = n - inf;
-      assert.equal(lossAfter(civ, inf, 'parity'), civ - inf, `parity n=${n} inf=${inf}`);
-      const l3 = lossAfter(civ, inf, 'last3');
-      assert.ok(l3 >= 1 && l3 <= civ);
-      assert.equal(win(civ - l3, inf, 'last3'), true);
-      assert.equal(win(civ - l3 + 1, inf, 'last3'), false);
+      assert.equal(K.lossAfter(civ, inf, 'parity', n), civ - inf, `parity mis-votes n=${n} inf=${inf}`);
+      for (const m of K.WIN_MODES) {
+        const l = K.lossAfter(civ, inf, m, n);
+        assert.ok(l >= 1 && l <= civ, `${m} n=${n} inf=${inf}`);
+        assert.equal(win(civ - l, inf, m, n), true);
+        assert.equal(win(civ - l + 1, inf, m, n), false);
+      }
+      // research notation: pure last3 shifts the mis-votes by 2I - 3 while all infiltrators live (until unreachable)
+      if (inf <= 3) assert.equal(K.lossAfter(civ, inf, 'last3', n), Math.min(civ, civ - inf + (2 * inf - 3)), `last3 n=${n} inf=${inf}`);
+      else assert.equal(K.lossAfter(civ, inf, 'last3', n), civ, '4+ infiltrators: only the C == 0 net ends it');
     }
   }
 });
 
 test('undercover: fields describe the form and respect the head-count', () => {
   for (const n of N_RANGE) {
-    const cfg = C.defaults(n);
+    const std = C.fields(C.defaults(n), n).map((f) => f.key);
+    assert.ok(!std.includes('undercovers') && !std.includes('blanks'), 'a named preset hides the count steppers');
+    assert.ok(!std.includes('blankGuess') && !std.includes('blankNeverFirst'), 'no white card, no white-card settings');
+    const cfg = { ...C.defaults(n), preset: 'custom', blanks: n >= 5 ? 1 : 0 };
     const fields = C.fields(cfg, n);
     const keys = fields.map((f) => f.key);
-    for (const k of ['undercovers', 'blanks', 'blankGuess', 'win', 'tie', 'revealRole', 'abstain', 'speakSec', 'discussSec', 'voteSec', 'words']) {
+    for (const k of ['preset', 'undercovers', 'blanks', 'win', 'tie', 'pkVoters', 'majority', 'revealRole', 'abstain', 'antiStreak', 'speakSec', 'discussSec', 'voteSec', 'words']) {
       assert.ok(keys.includes(k), `${k} missing`);
     }
+    if (n >= 5) for (const k of ['blankGuess', 'guessWinner', 'blankNeverFirst']) assert.ok(keys.includes(k), `${k} missing`);
     assert.equal(new Set(keys).size, keys.length);
     for (const f of fields) {
       assert.ok(['int', 'bool', 'select', 'seconds', 'categories'].includes(f.type), f.type);
       assert.ok(f.label);
       if (f.type === 'select') assert.ok(f.options.length >= 2 && f.options.every((o) => 'value' in o && o.label));
     }
+    assert.deepEqual(fields.find((f) => f.key === 'win').options.map((o) => o.value), K.WIN_MODES);
     const u = fields.find((f) => f.key === 'undercovers');
     assert.equal(u.max, Math.floor((n - 1) / 2) - cfg.blanks);
     const b = fields.find((f) => f.key === 'blanks');
@@ -263,13 +399,21 @@ test('undercover: the words field carries 已用/總數 when the lobby hands ove
 
 test('undercover: summary lines mention what the host changed', () => {
   const cfg = {
-    ...C.defaults(8), blanks: 1, undercovers: 1, revealRole: false, abstain: true, win: 'last3', tie: 'skip',
+    ...C.defaults(8), preset: 'blank', revealRole: false, abstain: true, win: 'last3', tie: 'skip', pkVoters: 'others', majority: true,
+    guessWinner: 'blank', blankNeverFirst: true, antiStreak: true,
     speakSec: 30, discussSec: 90, voteSec: 20, words: { cats: ['食物', '飲品'], levels: [1, 2] },
   };
   const text = C.summary(cfg, 8).join('\n');
-  for (const frag of ['平民 6', '臥底 1', '白板 1', '剩 3 人', '平票即係冇人出局', '食物、飲品', '簡單、中等', '唔公開身份', '容許棄票', '發言限時 30', '討論限時 90', '投票限時 20', '白板出局可以猜詞']) {
+  for (const frag of [
+    '平民 6', '臥底 1', '白板 1', '多啲變化', '剩 3 個人', '平票即係冇人出局', '食物、飲品', '簡單、中等', '唔公開身份', '容許棄票',
+    '發言限時 30', '討論限時 90', '投票限時 20', '白板出局可以估詞', 'PK 淨係冇份 PK 嘅人投', '要過半數先出局', '淨係白板自己贏',
+    '白板唔會第一個講', '避免同一個人連續做臥底',
+  ]) {
     assert.ok(text.includes(frag), `summary lacks ${frag}\n${text}`);
   }
+  const plain = C.summary(C.defaults(8), 8).join('\n');
+  assert.match(plain, /平民 6 · 臥底 2（新手友善）/);
+  for (const frag of ['白板', 'PK 淨係', '過半數', '連續', '第一個講']) assert.ok(!plain.includes(frag), `default summary mentions ${frag}`);
 });
 
 test('undercover: word filter normalisation accepts forms and garbage', () => {
@@ -287,7 +431,7 @@ test('undercover: word filter normalisation accepts forms and garbage', () => {
 test('undercover: setup deals the configured table with one shared civilian word', () => {
   for (const n of N_RANGE) {
     for (const blanks of [0, 1]) {
-      const cfg = { ...C.defaults(n), blanks };
+      const cfg = { ...C.defaults(n), preset: 'custom', blanks };
       if (!C.validate(cfg, n).ok) continue;
       const sim = mk(n, { seed: n * 10 + blanks, cfg });
       const s = sim.state;
@@ -344,15 +488,52 @@ test('undercover: a filter that matches nothing is relaxed and flagged; an empty
   assert.equal(noBag.phase, 'deal');
 });
 
-test('undercover: the first speaker is never the white card unless allowed', () => {
-  let blankFirst = 0;
-  for (let seed = 1; seed <= 150; seed++) {
-    const a = mk(6, { seed, cfg: { blanks: 1 } });
-    assert.notEqual(a.state.roles[a.state.starter], 'blank');
-    const b = mk(6, { seed, cfg: { blanks: 1, blankNeverFirst: false } });
-    if (b.state.roles[b.state.starter] === 'blank') blankFirst++;
+test('undercover: #20 — the first speaker is random over ALL seats, undercover and white card included', () => {
+  const N = 600;
+  const byRole = { civilian: 0, undercover: 0, blank: 0 };
+  const seats = new Set();
+  for (let seed = 1; seed <= N; seed++) {
+    const sim = mk(6, { seed, cfg: { preset: 'blank' } });          // 4 civilians, 1 undercover, 1 white card
+    byRole[sim.state.roles[sim.state.starter]]++;
+    seats.add(sim.state.starter);
   }
-  assert.ok(blankFirst > 5, `blank started ${blankFirst}/150 times when allowed`);
+  assert.equal(seats.size, 6, 'every seat starts sometimes');
+  // each role starts about as often as it has seats: 4/6, 1/6, 1/6 (generous bounds)
+  assert.ok(byRole.undercover > N / 6 * 0.6 && byRole.undercover < N / 6 * 1.4, JSON.stringify(byRole));
+  assert.ok(byRole.blank > N / 6 * 0.6 && byRole.blank < N / 6 * 1.4, JSON.stringify(byRole));
+  assert.ok(byRole.civilian > N * 4 / 6 * 0.8, JSON.stringify(byRole));
+  // the house rule narrows it — and is announced in the summary
+  for (let seed = 1; seed <= 150; seed++) {
+    const a = mk(6, { seed, cfg: { preset: 'blank', blankNeverFirst: true } });
+    assert.notEqual(a.state.roles[a.state.starter], 'blank');
+  }
+  assert.ok(C.summary({ ...C.defaults(6), preset: 'blank', blankNeverFirst: true }, 6).includes('白板唔會第一個講'));
+});
+
+test('undercover: #20 — anti-streak keeps last game\'s undercover / white card civilian when the pool allows (off by default)', () => {
+  const special = (s) => s.seats.filter((p) => s.roles[p] !== 'civilian');
+  let repeatsOff = 0;
+  for (let seed = 1; seed <= 200; seed++) {
+    const first = mk(8, { seed, cfg: { preset: 'blank', antiStreak: true } });
+    const carry = { special: special(first.state) };              // 8 players, blank preset: 1 undercover + 1 white card
+    const on = mk(8, { seed: seed + 1000, cfg: { preset: 'blank', antiStreak: true }, carry });
+    for (const p of carry.special) assert.equal(on.state.roles[p], 'civilian', `seed ${seed}: ${p} special twice running`);
+    const off = mk(8, { seed: seed + 1000, cfg: { preset: 'blank' }, carry });
+    if (special(off.state).some((p) => carry.special.includes(p))) repeatsOff++;
+  }
+  assert.ok(repeatsOff > 20, `off by default: repeats happen naturally (${repeatsOff}/200)`);
+  // the pool does not allow it: 4 of 5 seats were special last time, 2 are needed now
+  const carry = { special: ['p1', 'p2', 'p3', 'p4'] };
+  const tight = mk(5, { seed: 3, cfg: { preset: 'custom', undercovers: 2, blanks: 0, antiStreak: true }, carry });
+  assert.equal(special(tight.state).filter((p) => p === 'p5').length, 1, 'the one fresh seat is special first');
+  assert.equal(special(tight.state).length, 2, 'the counts still hold');
+  // carry from the result, garbage carry is ignored
+  const done = mk(6, { seed: 4, cfg: { antiStreak: true } });
+  done.runRandom();
+  assert.deepEqual(done.result().carry, { special: special(done.state) });
+  for (const junk of [null, 5, { special: 'p1' }, { special: [7, 'ghost'] }]) {
+    assert.doesNotThrow(() => E.setup({ players: makePlayers(6), config: { ...C.defaults(6), antiStreak: true }, rng: mulberry32(1), now: 0, bag: makeBag(banks), carry: junk }));
+  }
 });
 
 test('undercover: setup survives nonsense config by clamping it', () => {
@@ -636,6 +817,96 @@ test('undercover: a tie goes to PK — the tied speak again, then everybody re-v
   assert.equal(sim.state.alive.length, 7);
 });
 
+test('undercover: PK voters — NON_TIED lets only the others vote; with a 2-way tie both settings agree', () => {
+  const sim = mk(8, { seed: 15, cfg: { pkVoters: 'others' } });
+  rig(sim, 'CCCCCCUU');
+  toVote(sim);
+  tieMain(sim, 'p7', 'p8');
+  assert.match(sim.cue().text, /其他人再投一次/);
+  sim.act('p1', { type: 'continue' });
+  speakAll(sim);
+  assert.equal(sim.state.voteKind, 'pk');
+  assert.deepEqual(sim.state.voters, ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], 'the tied do not vote');
+  unchanged(sim, 'p7', { type: 'vote', target: 'p8' });
+  assert.equal(view(sim, 'p7').me.canVote, false);
+  assert.equal(view(sim, 'p7').hint, '你喺 PK 入面，今次由其他人投。');
+  assert.deepEqual(sim.focus().pids, ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
+  castVotes(sim, { p1: 'p7', p2: 'p7', p3: 'p7', p4: 'p7', p5: 'p8', p6: 'p8' });
+  assert.equal(sim.state.elim.out, 'p7');
+
+  // 2-way tie, no abstain: under ALL_ALIVE the two tied must vote for each other, so their ballots cancel
+  for (let seed = 1; seed <= 40; seed++) {
+    const outs = {};
+    for (const pkVoters of ['all', 'others']) {
+      const r = mk(8, { seed, cfg: { pkVoters } });
+      rig(r, 'CCCCCCUU');
+      toVote(r);
+      tieMain(r, 'p7', 'p8');
+      r.act('p1', { type: 'continue' });
+      speakAll(r);
+      const rng = mulberry32(seed);
+      const map = {};
+      for (const v of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']) map[v] = rng() < 0.5 ? 'p7' : 'p8';
+      map.p7 = 'p8';
+      map.p8 = 'p7';
+      castVotes(r, map);
+      outs[pkVoters] = r.state.elim.out ?? 'none';
+    }
+    assert.equal(outs.all, outs.others, `seed ${seed}`);
+  }
+});
+
+test('undercover: PK in a 3-way tie — everybody alive votes, the tied only for the other tied', () => {
+  const sim = mk(9, { seed: 44 });
+  rig(sim, 'CCCCCCCUU');
+  toVote(sim);
+  // p1, p2, p3 get 3 votes each
+  castVotes(sim, { p1: 'p2', p2: 'p3', p3: 'p1', p4: 'p1', p5: 'p1', p6: 'p2', p7: 'p2', p8: 'p3', p9: 'p3' });
+  assert.equal(sim.state.elim.kind, 'pk');
+  assert.deepEqual(sim.state.elim.cands.slice().sort(), ['p1', 'p2', 'p3']);
+  sim.act('p1', { type: 'continue' });
+  speakAll(sim);
+  assert.equal(sim.state.voters.length, 9);
+  assert.deepEqual(view(sim, 'p1').me.targets, ['p2', 'p3']);
+  assert.deepEqual(view(sim, 'p9').me.targets, ['p1', 'p2', 'p3']);
+});
+
+test('undercover: no-majority rule (optional) — without more than half the votes nobody is out, and it counts toward the streak', () => {
+  const sim = mk(6, { seed: 45, cfg: { majority: true } });
+  rig(sim, 'CCCCCU');
+  toVote(sim);
+  // p6 gets 3 of 6 — exactly half is not more than half
+  castVotes(sim, { p1: 'p6', p2: 'p6', p3: 'p6', p4: 'p1', p5: 'p1', p6: 'p2' });
+  assert.equal(sim.state.elim.kind, 'none');
+  assert.equal(sim.state.elim.reason, 'nomajority');
+  assert.equal(sim.state.noElimStreak, 1);
+  assert.match(sim.cue().text, /冇人過半數，今輪冇人出局/);
+  assert.match(view(sim, 'p1').hint, /今輪冇人出局/);
+  sim.act('p1', { type: 'continue' });
+  toVote(sim);
+  castVotes(sim, { p1: 'p6', p2: 'p6', p3: 'p6', p4: 'p6', p5: 'p1', p6: 'p2' });
+  assert.equal(sim.state.elim.out, 'p6', '4 of 6 is a majority');
+  // a tie never reaches a PK when a majority is required
+  const tie = mk(8, { seed: 46, cfg: { majority: true } });
+  rig(tie, 'CCCCCCUU');
+  toVote(tie);
+  tieMain(tie, 'p7', 'p8');
+  assert.equal(tie.state.elim.kind, 'none');
+  assert.equal(tie.state.elim.reason, 'nomajority');
+  // abstentions do not count: 2 of 3 cast ballots is a majority
+  const abst = mk(5, { seed: 47, cfg: { majority: true, abstain: true } });
+  rig(abst, 'CCCCU');
+  toVote(abst);
+  castVotes(abst, { p1: 'p5', p2: 'p5', p3: 'p1', p4: null, p5: null });
+  assert.equal(abst.state.elim.out, 'p5');
+  // plurality (the default) puts the top player out
+  const plain = mk(6, { seed: 45 });
+  rig(plain, 'CCCCCU');
+  toVote(plain);
+  castVotes(plain, { p1: 'p6', p2: 'p6', p3: 'p6', p4: 'p1', p5: 'p1', p6: 'p2' });
+  assert.equal(plain.state.elim.out, 'p6');
+});
+
 test('undercover: a second tie ends the round with nobody out (pk), or picks at random (pk-random)', () => {
   const tieTwice = (cfg, seed) => {
     const sim = mk(8, { seed, cfg });
@@ -651,7 +922,8 @@ test('undercover: a second tie ends the round with nobody out (pk), or picks at 
   assert.equal(pk.state.elim.kind, 'none');
   assert.equal(pk.state.alive.length, 8);
   assert.equal(pk.state.noElimStreak, 1);
-  assert.match(pk.cue().text, /再次平票/);
+  assert.equal(pk.state.elim.reason, 'pktie');
+  assert.match(pk.cue().text, /PK 再平票，今輪冇人出局/);
   pk.act('p1', { type: 'continue' });
   assert.equal(pk.state.round, 2);
 
@@ -686,8 +958,11 @@ test('undercover: a vote where everybody ties (a cycle) is not worth a PK', () =
   toVote(sim);
   castVotes(sim, { p1: 'p2', p2: 'p3', p3: 'p4', p4: 'p5', p5: 'p1' });
   assert.equal(sim.state.elim.kind, 'none');
+  assert.equal(sim.state.elim.reason, 'alltied');
   assert.equal(sim.state.elim.top.length, 5);
   assert.equal(sim.state.alive.length, 5);
+  assert.match(sim.cue().text, /全部人同票，今輪冇人出局/);
+  assert.equal(sim.state.noElimStreak, 1, 'counts toward the streak');
 });
 
 test('undercover: after two rounds without an elimination the third must eliminate somebody', () => {
@@ -795,7 +1070,7 @@ test('undercover: an eliminated white card must guess — everybody else waits',
   assert.equal(view(sim, 'p1').me.mustGuess, undefined);
   assert.equal(view(sim, 'p1').elim.guess.pending, true);
   assert.equal(sim.state.deadline, sim.now + 90_000);
-  assert.equal(view(sim, 'p1').timerLabel, '猜詞');
+  assert.equal(view(sim, 'p1').timerLabel, '估詞');
   assert.match(sim.cue().text, /白板 玩家6.*打出/);
   unchanged(sim, 'p1', { type: 'continue' });
   unchanged(sim, 'p1', { type: 'guess', word: '蘋果' });
@@ -810,15 +1085,42 @@ test('undercover: a correct guess wins for the infiltrators at once, even with c
   assert.ok(sim.act('p6', { type: 'guess', word: '蘋果' }));
   assert.deepEqual(view(sim, 'p1').elim.guess, { pending: false, word: '蘋果', correct: true, timeout: false });
   assert.equal(sim.state.elim.next, 'over');
-  assert.match(sim.cue().text, /猜「蘋果」，猜中喇/);
+  assert.match(sim.cue().text, /估「蘋果」，估中喇/);
   assert.equal(sim.result(), null, 'the table sees the guess before the result');
   sim.act('p1', { type: 'continue' });
   assert.equal(phase(sim), 'over');
   const r = sim.result();
   assert.deepEqual(r.winners.sort(), ['p5', 'p6']);
-  assert.match(r.lines[0], /猜中平民嘅詞語「蘋果」/);
+  assert.match(r.lines[0], /白板 玩家6 出局之後估中平民嘅詞語「蘋果」，臥底方即刻贏/);
   assert.equal(sim.state.win.why, 'guess');
   assert.equal(sim.state.alive.length, 5, 'four civilians and an undercover were still alive');
+});
+
+test('undercover: Mr. White guess — the whole infiltrator side wins by default, the white card alone with guessWinner = blank', () => {
+  const team = blankOut({}, { spec: 'CCCCUUB', seed: 48 });
+  team.act('p7', { type: 'guess', word: '蘋果' });
+  team.act('p1', { type: 'continue' });
+  assert.deepEqual(team.result().winners.sort(), ['p5', 'p6', 'p7'], 'all impostors win (mrwhiteonline, louisvrd)');
+  assert.deepEqual(team.result().points, { p5: 4, p6: 4, p7: 3 }, 'undercovers round(2 * 4 / 2) each, white card 3');
+
+  const solo = blankOut({ guessWinner: 'blank' }, { spec: 'CCCCUUB', seed: 48 });
+  assert.equal(view(solo, 'p7').flags.guessWinner, 'blank', 'the guess screen can say who wins');
+  solo.act('p7', { type: 'guess', word: '蘋果' });
+  assert.equal(solo.state.elim.next, 'over');
+  solo.act('p1', { type: 'continue' });
+  const r = solo.result();
+  assert.deepEqual(r.winners, ['p7'], 'Mr. White alone wins (Yanstar, bestpartygames, MASJV)');
+  assert.deepEqual(r.points, { p7: 3 });
+  assert.equal(solo.state.win.side, 'blank');
+  assert.match(r.summary, /^白板贏！/);
+  assert.match(r.lines[0], /白板 玩家7 出局之後估中平民嘅詞語「蘋果」，白板自己贏/);
+  assert.match(solo.cue().text, /遊戲完結，白板贏/);
+  assert.equal(view(solo, 'p1').over.side, 'blank');
+
+  // a wrong guess under either setting changes nothing
+  const wrong = blankOut({ guessWinner: 'blank' }, { spec: 'CCCCUUB', seed: 48 });
+  wrong.act('p7', { type: 'guess', word: '雪梨' });
+  assert.equal(wrong.state.elim.next, 'round');
 });
 
 test('undercover: a wrong guess changes nothing else — and may hand the civilians the win', () => {
@@ -835,7 +1137,7 @@ test('undercover: a wrong guess changes nothing else — and may hand the civili
   const on = blankOut();
   on.act('p6', { type: 'guess', word: '西瓜' });
   assert.equal(on.state.elim.next, 'round');
-  assert.match(on.cue().text, /猜「西瓜」，唔啱/);
+  assert.match(on.cue().text, /估「西瓜」，唔啱/);
   on.act('p2', { type: 'continue' });
   assert.equal(phase(on), 'speak');
   assert.equal(on.state.round, 2);
@@ -970,6 +1272,57 @@ test('undercover: last3 — infiltrators win as soon as 3 are left, parity is no
   assert.equal(l3.state.elim.next, 'over');
 });
 
+test('undercover: C == 0 safety net — pure last3 with 4 infiltrators alive ends only when no civilian is left', () => {
+  const sim = mk(12, { seed: 49, cfg: { preset: 'custom', undercovers: 3, blanks: 1, win: 'last3', blankGuess: false } });
+  rig(sim, 'CCCCCCCCUUUB');
+  for (const p of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) {
+    roundOut(sim, p);
+    assert.equal(phase(sim), 'speak', `${p} out: 4 infiltrators v ${8 - Number(p.slice(1))} civilians plays on`);
+  }
+  roundOut(sim, 'p8', { proceed: false });
+  assert.equal(sim.state.elim.next, 'over');
+  sim.act('p9', { type: 'continue' });
+  assert.equal(sim.state.win.why, 'wipe');
+  assert.match(sim.result().lines[0], /平民全部出局，臥底方贏/);
+});
+
+test('undercover: last3OrParity ends a multi-undercover game at parity, a 1-undercover game at 3 left', () => {
+  const multi = mk(8, { seed: 50, cfg: { win: 'last3OrParity' } });          // 6 civilians v 2 undercovers
+  rig(multi, 'CCCCCCUU');
+  for (const p of ['p1', 'p2', 'p3']) roundOut(multi, p);
+  roundOut(multi, 'p4', { proceed: false });                                   // 2 v 2
+  assert.equal(multi.state.elim.next, 'over');
+  multi.act('p5', { type: 'continue' });
+  assert.equal(multi.state.win.why, 'parity');
+  const pure = mk(8, { seed: 50, cfg: { win: 'last3' } });
+  rig(pure, 'CCCCCCUU');
+  for (const p of ['p1', 'p2', 'p3', 'p4']) roundOut(pure, p);
+  assert.equal(phase(pure), 'speak', 'pure last3: 2 v 2 plays on');
+  const one = mk(5, { seed: 51, cfg: { win: 'last3OrParity' } });
+  rig(one, 'CCCCU');
+  roundOut(one, 'p1');
+  roundOut(one, 'p2', { proceed: false });                                      // 2 v 1, 3 left
+  assert.equal(one.state.elim.next, 'over');
+  one.act('p3', { type: 'continue' });
+  assert.match(one.result().lines[0], /場上淨係剩 3 個人/);
+});
+
+test('undercover: civ_le_2, one_civ and size_based end the game where the research says', () => {
+  const play = (n, spec, win, outs) => {
+    const sim = mk(n, { seed: 52, cfg: { win } });
+    rig(sim, spec);
+    for (const p of outs.slice(0, -1)) { roundOut(sim, p); assert.equal(phase(sim), 'speak', `${win}: ${p}`); }
+    roundOut(sim, outs[outs.length - 1], { proceed: false });
+    assert.equal(sim.state.elim.next, 'over', win);
+    sim.act('p1', { type: 'continue' });
+    return sim;
+  };
+  assert.match(play(7, 'CCCCCUU', 'civ_le_2', ['p1', 'p2', 'p3']).result().lines[0], /平民淨係剩 2 個/);
+  assert.match(play(7, 'CCCCCUU', 'one_civ', ['p1', 'p2', 'p3', 'p4']).result().lines[0], /平民淨係剩 1 個/);
+  assert.match(play(6, 'CCCCCU', 'size_based', ['p1', 'p2', 'p3', 'p4']).result().lines[0], /場上淨係剩 2 個人/);
+  assert.match(play(7, 'CCCCCCU', 'size_based', ['p1', 'p2', 'p3', 'p4']).result().lines[0], /場上淨係剩 3 個人/);
+});
+
 test('undercover: a game with only a white card (no undercover) works', () => {
   const sim = mk(6, { seed: 29, cfg: { undercovers: 0, blanks: 1 } });
   rig(sim, 'CCCCCB');
@@ -1000,12 +1353,12 @@ test('undercover: the result explains both words, who held what and what happene
   const r = sim.result();
   const text = r.lines.join('\n');
   assert.match(r.summary, /臥底方贏！平民詞「壽司」，臥底詞「刺身」/);
-  assert.ok(text.includes('平民詞語「壽司」，臥底詞語「刺身」（日本旅行）'));
+  assert.ok(text.includes('詞語：平民「壽司」，臥底「刺身」（日本旅行）'));
   assert.ok(text.includes('平民：玩家1、玩家2、玩家3、玩家4、玩家5'));
   assert.ok(text.includes('臥底：玩家6'));
   assert.ok(text.includes('白板：玩家7'));
-  assert.ok(text.includes('第 1 輪：玩家1 出局（平民）'));
-  assert.ok(text.includes('第 2 輪：玩家7 出局（白板）；白板猜「壽司」，猜中'));
+  assert.ok(text.includes('第 1 輪：玩家1 出局（平民，6 票）'));
+  assert.ok(text.includes('第 2 輪：玩家7 出局（白板，5 票）；白板估「壽司」，估中'));
   assert.deepEqual(r.winners, ['p6', 'p7']);
   const o = view(sim, 'p3').over;
   assert.equal(o.civ, '壽司');
@@ -1014,6 +1367,45 @@ test('undercover: the result explains both words, who held what and what happene
   assert.equal(o.rows.find((x) => x.id === 'p7').role, 'blank');
   assert.equal(o.rows.find((x) => x.id === 'p7').word, null);
   assert.equal(o.rows.find((x) => x.id === 'p6').word, '刺身');
+});
+
+test('undercover: #10 — result lines explain why: mis-votes, roles hidden during play, ties and empty rounds', () => {
+  const sim = mk(8, { seed: 53, cfg: { revealRole: false } });
+  rig(sim, 'CCCCCCUU');
+  roundOut(sim, 'p1');                                       // a civilian, nobody was told
+  toVote(sim);
+  castVotes(sim, { p2: 'p7', p3: 'p7', p4: 'p8', p5: 'p8', p6: 'p2', p7: 'p8', p8: 'p7' });   // 3 v 3 v 1
+  assert.equal(sim.state.elim.kind, 'pk');
+  sim.act('p1', { type: 'continue' });
+  speakAll(sim);
+  castVotes(sim, { p2: 'p7', p3: 'p7', p4: 'p7', p5: 'p8', p6: 'p8', p7: 'p8', p8: 'p7' });   // 4 v 3: p7 out
+  assert.equal(sim.state.elim.out, 'p7');
+  sim.act('p2', { type: 'continue' });
+  roundOut(sim, 'p2');
+  roundOut(sim, 'p3');
+  roundOut(sim, 'p8', { proceed: false });
+  sim.act('p4', { type: 'continue' });
+  const r = sim.result();
+  const text = r.lines.join('\n');
+  assert.match(r.lines[0], /所有臥底都被投出局，平民贏/);
+  assert.ok(text.includes('平民投走咗 3 個自己人：玩家1、玩家2、玩家3。'), text);
+  assert.ok(text.includes('今局出局嗰陣冇公開身份，下面係真身份。'), text);
+  assert.ok(text.includes('第 1 輪：玩家1 出局（平民，7 票）'), text);
+  assert.ok(text.includes('第 2 輪：玩家7、玩家8 同票，要 PK'), text);
+  assert.ok(text.includes('第 2 輪 PK：玩家7 出局（臥底，4 票）'), text);
+  assert.ok(text.includes('（佢哋一開始都唔知自己係臥底）'));
+
+  const clean = mk(6, { seed: 54 });
+  rig(clean, 'CCCCCU');
+  toVote(clean);
+  castVotes(clean, { p1: 'p2', p2: 'p3', p3: 'p4', p4: 'p5', p5: 'p6', p6: 'p1' });   // everybody tied
+  clean.act('p1', { type: 'continue' });
+  roundOut(clean, 'p6', { proceed: false });
+  clean.act('p1', { type: 'continue' });
+  const lines = clean.result().lines.join('\n');
+  assert.ok(lines.includes('平民一個自己人都冇投錯！'), lines);
+  assert.ok(lines.includes('第 1 輪：全部人同票，冇人出局'), lines);
+  assert.ok(!lines.includes('冇公開身份'));
 });
 
 test('undercover: points — civilians 2 each, undercovers share the table, a white card gets 3', () => {
@@ -1193,7 +1585,16 @@ test('undercover: autoAct gives a stalled seat a sensible move in every phase', 
 const ME_KEYS = ['id', 'alive', 'word', 'ready', 'blank', 'canVote', 'targets', 'myVote', 'mustGuess'];
 const ROLE_WORDS = ['civilian', 'undercover', 'blank'];
 
-function stripMe(v) { const c = clone(v); delete c.me; return c; }
+/** The public part: everything but `me` and the per-seat hint. */
+function stripMe(v) { const c = clone(v); delete c.me; delete c.hint; return c; }
+
+/** The public facts a hint may depend on. Two seats with the same facts must get the same hint, whatever their roles. */
+function hintFacts(s, pid) {
+  return JSON.stringify([
+    s.phase, s.alive.includes(pid), !!s.ready[pid], s.order?.[s.turn] === pid, s.speakKind,
+    s.voters.includes(pid), pid in (s.ballots ?? {}), s.voteKind, s.elim?.out === pid, s.elim?.kind, !!s.elim?.guess?.pending,
+  ]);
+}
 
 /** Throws if any seat's view carries more than its own secret. */
 function checkViews(sim) {
@@ -1222,9 +1623,18 @@ function checkViews(sim) {
       assert.equal(o.role, s.cfg.revealRole || (out.role === 'blank' && s.cfg.blankGuess) ? out.role : null);
     }
   }
+  assert.ok(typeof table.hint === 'string' && table.hint.length > 4, `table hint in ${s.phase}`);
+  const hintByFacts = new Map();
   for (const p of sim.players) {
     const v = sim.view(p.id);
     assert.deepEqual(stripMe(v), stripMe(table), `${p.id}: the public part must be identical for every seat`);
+    // U1: one line, never a word, never a role-dependent difference
+    assert.ok(typeof v.hint === 'string' && v.hint.length > 4 && !v.hint.includes('\n'), `${p.id} hint in ${s.phase}`);
+    assert.ok([...v.hint].length <= 48, `hint too long: ${v.hint}`);
+    assert.equal(v.hint.includes(s.pair.civ) || v.hint.includes(s.pair.und), false, v.hint);
+    const facts = hintFacts(s, p.id);
+    if (hintByFacts.has(facts)) assert.equal(v.hint, hintByFacts.get(facts), `hint depends on more than public facts in ${s.phase}`);
+    hintByFacts.set(facts, v.hint);
     assert.equal(v.me.id, p.id);
     assert.equal(v.me.word, s.words[p.id] ?? null, 'own word only');
     assert.equal(!!v.me.blank, s.roles[p.id] === 'blank');
@@ -1242,7 +1652,7 @@ function checkViews(sim) {
 
 test('undercover: no view carries anything but its own seat\'s private facts, at every step', () => {
   for (const [n, blanks, seed] of [[5, 0, 1], [6, 1, 2], [8, 0, 3], [8, 1, 4], [10, 2, 5], [12, 1, 6]]) {
-    const cfg = { blanks, revealRole: seed % 2 === 0 };
+    const cfg = { preset: 'custom', blanks, revealRole: seed % 2 === 0, pkVoters: seed % 3 === 0 ? 'others' : 'all' };
     if (!C.validate({ ...C.defaults(n), ...cfg }, n).ok) continue;
     for (let s = 0; s < 4; s++) {
       const sim = mk(n, { seed: seed * 100 + s, cfg });
@@ -1251,6 +1661,38 @@ test('undercover: no view carries anything but its own seat\'s private facts, at
       checkViews(sim);
     }
   }
+});
+
+test('undercover: U1 — every phase has a one-line 「而家要做咩」 hint for a first-timer, the same for every role', () => {
+  const sim = mk(6, { seed: 55, cfg: { preset: 'blank' } });
+  rig(sim, 'CCCCUB');
+  const hint = (pid) => sim.view(pid).hint;
+  assert.equal(hint('p1'), '㩒住張卡睇你個詞，記住咗就㩒「記住喇」。');
+  assert.equal(hint('p6'), hint('p1'), 'the white card is told the same thing');
+  assert.equal(hint(null), '大家逐個睇緊自己個詞。');
+  sim.act('p1', { type: 'ready' });
+  assert.match(hint('p1'), /等其他人睇完/);
+  ready(sim);
+  assert.match(hint('p1'), /^輪到你：講一句形容你個詞，唔可以講出個詞或者入面嘅字/);
+  assert.match(hint('p2'), /聽佢點講/);
+  assert.equal(hint('p5'), hint('p2'), 'undercover and civilian listeners see the same hint');
+  assert.equal(hint('p6'), hint('p2'));
+  speakAll(sim);
+  assert.match(hint('p3'), /自由傾/);
+  sim.act('p1', { type: 'start-vote' });
+  assert.match(hint('p3'), /揀一個你覺得係臥底嘅人/);
+  sim.act('p3', { type: 'vote', target: 'p6' });
+  assert.match(hint('p3'), /投咗喇，等其他人/);
+  castVotes(sim, { p1: 'p6', p2: 'p6', p4: 'p6', p5: 'p6', p6: 'p1' });
+  assert.equal(sim.state.elim.out, 'p6');
+  assert.match(hint('p6'), /你係白板！打出你估嘅平民詞語/, 'announced white card');
+  assert.equal(hint('p1'), '等白板估平民個詞。');
+  sim.act('p6', { type: 'guess', word: '西瓜' });
+  assert.match(hint('p6'), /你出局喇/);
+  assert.match(hint('p2'), /㩒「繼續」/);
+  sim.act('p1', { type: 'continue' });
+  assert.match(hint('p6'), /你出咗局，靜靜聽/);
+  assert.ok(sim.view('p1').hint, 'the hint is in the view, the game UI never shows it by itself');
 });
 
 test('undercover: your own word shows up only in your own view', () => {
@@ -1275,14 +1717,19 @@ test('undercover: your own word shows up only in your own view', () => {
 
 const VARIANTS = [
   {},
-  { blanks: 1 },
+  { preset: 'blank' },
   { tie: 'pk-random', abstain: true },
   { tie: 'skip', revealRole: false },
   { win: 'last3' },
   { speakSec: 20, discussSec: 60, voteSec: 30 },
-  { blanks: 1, blankGuess: false, revealRole: false, blankNeverFirst: false },
-  { blanks: 1, win: 'last3', abstain: true, tie: 'pk-random' },
-  { undercovers: 1, blanks: 1, voteSec: 15, speakSec: 10 },
+  { preset: 'blank', blankGuess: false, revealRole: false, blankNeverFirst: true },
+  { preset: 'blank', win: 'last3', abstain: true, tie: 'pk-random' },
+  { preset: 'custom', undercovers: 1, blanks: 1, voteSec: 15, speakSec: 10 },
+  { win: 'last3OrParity', pkVoters: 'others' },
+  { win: 'civ_le_2', majority: true },
+  { preset: 'blank', win: 'one_civ', guessWinner: 'blank', pkVoters: 'others', abstain: true },
+  { win: 'size_based', antiStreak: true },
+  { preset: 'custom', undercovers: 3, blanks: 2, win: 'last3' },
 ];
 
 function fuzzConfig(n, seed) {
@@ -1291,29 +1738,46 @@ function fuzzConfig(n, seed) {
   return C.validate(cfg, n).ok ? cfg : C.defaults(n);
 }
 
-test('undercover: random legal play ends for every head-count (9 counts x 120 seeds)', () => {
-  const stats = { civilians: 0, infiltrators: 0, guess: 0, forced: 0, pk: 0, none: 0, rounds: 0, games: 0 };
+/** Research: a PK never has zero voters, and no vote ever happens with 2 players left (every threshold ends it at T = 2). */
+function voteInvariants(sim) {
+  const s = sim.state;
+  if (s.phase !== 'vote') return;
+  assert.ok(s.alive.length >= 3, `a vote with ${s.alive.length} alive`);
+  assert.ok(s.voters.length >= 1, 'a vote without voters');
+  if (s.voteKind === 'pk') assert.ok(s.candidates.length < s.alive.length, 'a PK with everybody tied');
+}
+
+test('undercover: random legal play ends for every head-count (9 counts x 140 seeds)', () => {
+  const stats = { civilians: 0, infiltrators: 0, blank: 0, guess: 0, forced: 0, pk: 0, none: 0, nomajority: 0, wipe: 0, rounds: 0, games: 0 };
   for (const n of N_RANGE) {
-    for (let seed = 1; seed <= 120; seed++) {
+    for (let seed = 1; seed <= 140; seed++) {
       const config = fuzzConfig(n, seed);
       const sim = new Sim(game, { n, seed: n * 1000 + seed, config, banks });
-      const { result } = sim.runRandom({ maxSteps: 40000 });
+      const { result } = sim.runRandom({ maxSteps: 40000, onStep: voteInvariants });
       stats.games++;
       stats.rounds += sim.state.round;
       assert.equal(sim.state.phase, 'over');
       const side = sim.state.win.side;
-      stats[side === 'civilians' ? 'civilians' : 'infiltrators']++;
+      stats[side]++;
       if (sim.state.win.why === 'guess') stats.guess++;
+      if (sim.state.win.why === 'wipe') stats.wipe++;
       for (const h of sim.state.history) {
         if (h.forced) stats.forced++;
         if (h.outcome === 'pk') stats.pk++;
         if (h.outcome === 'none') stats.none++;
+        if (h.reason === 'nomajority') stats.nomajority++;
       }
       // invariants of a finished game
       assert.ok(result.winners.length >= 1);
       const roles = result.winners.map((w) => sim.state.roles[w]);
       if (side === 'civilians') assert.ok(roles.every((r) => r === 'civilian'));
+      else if (side === 'blank') assert.deepEqual(roles, ['blank']);
       else assert.ok(roles.every((r) => r !== 'civilian'));
+      // role counts dealt = role counts configured (#8 invariant)
+      const fitted = K.fit(config, n);
+      const dealt = (r) => Object.values(sim.state.roles).filter((x) => x === r).length;
+      assert.deepEqual([dealt('undercover'), dealt('blank')], [fitted.undercovers, fitted.blanks]);
+      assert.ok(dealt('civilian') > dealt('undercover') + dealt('blank'), 'civilians are a strict majority');
       const total = Object.values(result.points).reduce((a, b) => a + b, 0);
       assert.ok(total > 0);
       assert.deepEqual(Object.keys(result.points).sort(), result.winners.slice().sort());
@@ -1327,18 +1791,19 @@ test('undercover: random legal play ends for every head-count (9 counts x 120 se
       const c = alive.filter((r) => r === 'civilian').length;
       const i = alive.length - c;
       if (side === 'civilians') assert.equal(i, 0);
-      else if (sim.state.win.why !== 'guess') assert.equal(K.infiltratorsWin(c, i, config.win), true, `n=${n} seed=${seed} c=${c} i=${i}`);
+      else if (sim.state.win.why !== 'guess') assert.equal(K.infiltratorsWin(c, i, K.fit(config, n).win, n), true, `n=${n} seed=${seed} c=${c} i=${i}`);
       else assert.ok(sim.state.history.some((h) => h.guess?.correct));
     }
   }
-  assert.equal(stats.games, 9 * 120);
+  assert.equal(stats.games, 9 * 140);
   assert.ok(stats.civilians > 100 && stats.infiltrators > 100, JSON.stringify(stats));
-  assert.ok(stats.guess > 5 && stats.pk > 20 && stats.none > 20, `the fuzzer should reach the rare branches: ${JSON.stringify(stats)}`);
+  assert.ok(stats.guess > 5 && stats.pk > 20 && stats.none > 20 && stats.blank >= 1 && stats.nomajority > 5 && stats.wipe > 0,
+    `the fuzzer should reach the rare branches: ${JSON.stringify(stats)}`);
 });
 
 test('undercover: every action the engine lists is accepted, and nothing else is needed to finish', () => {
   for (const n of [4, 7, 12]) {
-    for (let seed = 1; seed <= 9; seed++) {
+    for (let seed = 1; seed <= VARIANTS.length; seed++) {
       const sim = new Sim(game, { n, seed, config: fuzzConfig(n, seed), banks });
       sim.runRandom({
         maxSteps: 40000,

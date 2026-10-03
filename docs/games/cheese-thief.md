@@ -1,6 +1,6 @@
 # 芝士大盜 (`cheese-thief`) — play-flow spec
 
-> Rules source: `docs/research/cheese-thief.md` (official rulebook + designer rulings, tags [O] [D] [C] [I] there).
+> Rules source: `docs/research/cheese-thief.md` (official rulebook + designer rulings, tags [O] [D] [C] [I] there). Its **"## Verification"** section overrides the draft text above it; §9 below is the rule-by-rule audit against it (2026-10-03 UTC).
 > Code: `js/games/cheese-thief/{game,script,ui,index}.js`, `style.css`. Tests: `tests/cheese-thief.test.mjs`.
 > All user-facing text is Hong Kong Cantonese. Times are UTC.
 
@@ -10,7 +10,7 @@
 |---|---|
 | Players | 4–8 (best 6–8). 9+ is not supported by the publisher, so the picker greys it out. |
 | Length | 10–15 min: ≈ 1 min dealing, ≈ 2.5–3 min night, 5 min talk (default), ≈ 1 min vote + reveal. |
-| Narration | `required` — the night is read aloud hour by hour. Works in all three modes: 語音 (phone speaks), 讀稿 (host or a friend reads the text), 靜音 (no sound; every phone lights up on its own hour). |
+| Narration | `required` — the night is read aloud hour by hour. Works in all three modes: 語音 (phone speaks), 讀稿 (a friend who is not playing reads the text; see §3.2), 靜音 (no sound; every phone lights up on its own hour). |
 | Single device | `full` — phone in the middle, picked up by whoever is called (see §4). |
 | Paper mode | none. |
 
@@ -26,18 +26,28 @@ Round shape: `roll → night → day → vote → reveal → over`. One night, o
 
 | key | type | default | applies to | meaning |
 |---|---|---|---|---|
-| `fallMouse` | bool | off | 6–8 | one sleepyhead card becomes 背鍋鼠 |
-| `peek4` | bool | off | 4 | lone sleepyhead may peek in the 4-player variant (rulebook is unclear — research Q1) |
-| `reroll` | bool | off | all | may roll again until pressing 鎖定; official = one roll stands |
+| `fallMouse` | bool | off | 6–8 | one sleepyhead card becomes 背鍋鼠 (official option; "玩熟先加") |
+| `peek4` | bool | off | 4 | **house rule**, labelled 「家規：4 人局都可以偷睇骰」. Official (French rulebook, 4p point 3): a lone sleepyhead in 4p may NOT peek and must do nothing. |
+| `reroll` | bool | off | all | **house rule**, labelled 「家規：擲骰可以重擲」: may roll again until pressing 鎖定. Official: one roll stands. |
 | `hourSec` | seconds 5–30 | 10 | all | length of every hour window (official: 10 s) |
 | `discussSec` | seconds 0–1800 | 300 | all | day timer; 0 = no timer, start the vote when everyone taps 夠鐘投票 |
 | `recap` | bool | on | all | show the private 📓 夜晚記錄 in the day |
 
 `config.defaults(n, prev)` keeps what the host used last time (`hourSec`, `discussSec`, `recap`, `reroll`, `peek4`, and `fallMouse` only if `n` is 6–8). It is valid for every n in 4–8.
 
-`config.validate`: n outside 4–8 → 「芝士大盜要 4–8 個人」; `fallMouse` outside 6–8 → 「背鍋鼠只限 6–8 人」; bad `hourSec` / `discussSec` ranges. Warnings: 4p 「4 人局係官方變體：每人兩粒骰，大盜醒兩次，冇共犯。」, 5p 「…有貪瞓鼠一齊醒，嗰位先會變共犯」, fall mouse 「背鍋鼠想畀人投中 — 討論會更亂。」
+`config.validate`: n outside 4–8 → 「芝士大盜要 4–8 個人」; `fallMouse` outside 6–8 → 「背鍋鼠只限 6–8 人」 (blocked, never silently dropped); bad `hourSec` / `discussSec` ranges. Warnings: 4p 「4 人局係官方變體：每人兩粒骰，大盜醒兩次，冇共犯，唔可以偷睇。」, 5p 「…有貪瞓鼠一齊醒，嗰位先會變共犯」, fall mouse 「背鍋鼠想畀人投中 — 討論會更亂，建議玩熟先加。」, and one 「家規：…（官方…）」 line per house rule that is on.
 
-`config.summary` (lobby lines), e.g. 7 players: `🧀 1 大盜 · 🐭 6 貪瞓鼠` / `🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（唔識大盜）` / `⏱ 每個點鐘 10 秒 · 討論 5 分鐘`.
+`config.summary` (lobby lines), e.g. 7 players: `🧀 1 大盜 · 🐭 6 貪瞓鼠` / `🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（唔識大盜）` / `💬 7 人：推理最多 — 2 位共犯互相認得，但唔知大盜係邊個。` / `⏱ 每個點鐘 10 秒 · 討論 5 分鐘` (+ `👁 家規：…` / `🔓 家規：…` when on).
+
+**Head-count notes (BACKLOG #8 — the 💬 line, `script.js headCountNote`).** The composition is fixed by the rules, so the "preset" is the head-count itself and the line says why it plays the way it does:
+
+| n | line |
+|---|---|
+| 4 | 4 人：官方兩粒骰變體 — 大盜醒兩次、冇共犯、唔可以偷睇，平票算大盜贏。 |
+| 5 | 5 人：共犯靠撞 — 大盜偷芝士嗰陣有人一齊醒先有，大盜一個醒就冇。 |
+| 6 | 6 人：最啱新手 — 夜尾大盜揀 1 位共犯，兩個互相認得。 |
+| 7 | 7 人：推理最多 — 2 位共犯互相認得，但唔知大盜係邊個。 |
+| 8 | 8 人：最熱鬧 — 2 位共犯同大盜三個互相認得。 |
 
 ### 2.2 Deal
 
@@ -90,9 +100,9 @@ Each step has two stages: **cue** (the narration is playing; no deadline; ends o
 | `begin` | 3 s | nobody |
 | `open h` | `hourSec` | every seat whose wake hour is h (4p: sleepyheads' chosen die; the thief wakes at both of its numbers) |
 | `close h` | 2 s | nobody |
-| `rec-pick` | `hourSec` | the thief |
+| `rec-pick` | `hourSec` | the thief (official touch countdown is 5 s; the app gives the hour length because the thief also taps the phone — a pick the phone never got is made at random, which would not match the hand that was touched) |
 | `rec-tclose` (7p) | 2 s | nobody |
-| `rec-meet` | max(5 s, `hourSec`/2) | 6p thief + follower · 7p the two followers · 8p thief + both followers |
+| `rec-meet` | max(5 s, `hourSec`/2) — 5 s at the official 10 s hour | 6p thief + follower · 7p the two followers · 8p thief + both followers |
 | `rec-close` | 2 s | nobody |
 | `dawn` | 1.5 s | nobody (then → day) |
 
@@ -100,20 +110,29 @@ Each step has two stages: **cue** (the narration is playing; no deadline; ends o
 
 | cue | line |
 |---|---|
-| `begin` | 天黑請閉眼。大家將部手機放低，閉埋眼，唔好偷望。 |
-| `open h` | 而家係**{一/兩/三/四/五/六}**點鐘。擲到「**{一…六}**」嘅老鼠，請睜開眼。 |
+| `begin` | 天黑喇，請大家閉眼。手機放喺面前，唔好偷望。 |
+| `open h` 5–8p | 而家**{一/兩/三/四/五/六}**點鐘。擲到**{一…六}**點嘅老鼠，請睜開眼。 |
+| `open h` 4p | 而家**{一…六}**點鐘。醒鐘係**{一…六}**點嘅老鼠，請睜開眼。 (4p sleepyheads wake by the die they *chose*, so "擲到" would be wrong) |
 | `close h` | 請閉返眼。 |
-| `rec-pick` 6p | 所有人伸一隻手出嚟，放喺枱面。大盜請睜眼，揀一位共犯，輕輕摸佢隻手。 |
-| `rec-pick` 7p/8p | 所有人伸一隻手出嚟，放喺枱面。大盜請睜眼，揀兩位共犯，輕輕摸佢哋隻手。 |
+| `rec-pick` 6p | 所有人伸一隻手出嚟。大盜請睜眼，喺手機揀一位共犯，再輕輕摸佢隻手。 |
+| `rec-pick` 7p/8p | 所有人伸一隻手出嚟。大盜請睜眼，喺手機揀兩位共犯，再輕輕摸佢哋隻手。 |
 | `rec-tclose` 7p | 大盜請閉返眼。 |
 | `rec-meet` 6p | 被摸到手嘅共犯，請睜眼，同大盜對望認人。 |
-| `rec-meet` 7p | 兩位共犯，請睜眼，互相認人。 |
-| `rec-meet` 8p | 兩位共犯，請睜眼，同大盜三個人互相認人。 |
-| `rec-close` 6p / 7p / 8p | 大盜同共犯，請閉返眼。 / 兩位共犯，請閉返眼。 / 大盜同兩位共犯，請閉返眼。 |
+| `rec-meet` 7p | 被摸到手嘅兩位共犯，請睜眼，互相認人。 |
+| `rec-meet` 8p | 被摸到手嘅兩位共犯，請睜眼，同大盜三個互相認人。 |
+| `rec-close` 6p | 大盜同共犯，請閉返眼。大家收返隻手。 |
+| `rec-close` 7p | 兩位共犯，請閉返眼。大家收返隻手。 |
+| `rec-close` 8p | 大盜同兩位共犯，請閉返眼。大家收返隻手。 |
 | `dawn` | 天光喇，請大家睜開眼。芝士唔見咗！ |
-| `vote:call` | 邊個係芝士大盜？打開手機，揀你懷疑嘅人，大家一齊投！ |
+| `vote:call` | 夠鐘投票！邊個係芝士大盜？喺手機揀一個人，投晒先一齊公開。 |
 
-The lines never say who is awake. Cue ids are `ct<gid>:night:<ix>:<kind>[:h]` and `ct<gid>:vote:call` (`gid` is random per game, so a replay never repeats an id). `minMs` = clamp(1.8 s, 0.16 s × characters, 7 s) — the on-screen time in 靜音 mode.
+Rules for the script (pinned by a test that compares the full night, line by line, for every head-count): the lines never say who is awake and never contain a name; every hour has the same frame and length (only the numeral changes); numbers are words so the zh-HK voice reads them right (「兩點鐘」, 「兩點」); every line is ≤ 36 characters so it reads in one breath. Cue ids are `ct<gid>:night:<ix>:<kind>[:h]` and `ct<gid>:vote:call` (`gid` is random per game, so a replay never repeats an id). `minMs` = clamp(1.8 s, 0.16 s × characters, 7 s) — the on-screen time in 靜音 mode.
+
+**The three narration modes**
+
+* **語音** — the host phone speaks each line; everybody really closes their eyes; the shell completes the cue when speech ends.
+* **讀稿** — someone reads the line on the host phone and presses 下一步; the window then runs on its own timer (下一步 during a window skips the rest of it). The reader must have their eyes open, so the reader **must not be a player**: a seated host should use 語音 or 靜音 (said in the rules sheet 「旁白三個模式」). The whole night can be driven by 下一步 alone (tested).
+* **靜音** — nobody speaks; each line stays on the host bar for `minMs`; everyone keeps eyes open and looks only at their own phone, which lights up on its own hour. The night help line says 「唔使閉眼、唔好抬頭、唔使摸手」 and the thief's pick text drops the hand touch (the followers learn it from their phone; a reaching hand would be seen).
 
 #### What every phone shows (one layout, so a sleeper's decoy and an awake player's screen are the same shape)
 
@@ -123,9 +142,10 @@ The lines never say who is awake. Cue ids are `ct<gid>:night:<ix>:<kind>[:h]` an
   ┌ info card (fixed min-height) ───┐
   │ awake: live lines │ asleep: 💤  │
   └─────────────────────────────────┘
-  [阿明] [阿欣] [阿珍] …            ← the other seats: live only when a pick is owed
+  [阿明] [阿欣] [阿珍] …            ← the other seats: tappable on EVERY phone
   ┌ one big button ─────────────────┐
-  │ 👆 㩒一下 — decoy / ack / action │
+  │ 👆 㩒一下 (same label for all)  │
+  │ small line: what this tap does  │
   └─────────────────────────────────┘
   help line
 ```
@@ -141,7 +161,7 @@ The lines never say who is awake. Cue ids are `ct<gid>:night:<ix>:<kind>[:h]` an
 | `rec-*` | 🤝 共犯環節 · 唔關你事，繼續閉眼。 |
 | `dawn` | 🌅 天光喇 · 可以睜眼喇。 |
 
-The big button is always 「👆 㩒一下 · 每個點鐘都㩒，咁就冇人聽得出邊個醒」. Tapping sends `ack`; the engine just counts it (public `acks`), never lets it change a timer.
+The big button is always 「👆 㩒一下 · 每一步都㩒，咁就冇人聽得出邊個醒」. Tapping a name lights it (a pure decoy — the same gesture a peeker makes); tapping the big button sends `ack` and clears the name. The engine just counts acks (public `acks`), never lets them change a timer.
 
 **Awake in an `open` window** (appears when the window opens, i.e. after the narration):
 
@@ -149,17 +169,17 @@ The big button is always 「👆 㩒一下 · 每個點鐘都㩒，咁就冇人�
 2. 「同你一齊醒：阿明、阿強」 / 「淨係得你醒，其他人都瞓緊。」
 3. The cheese: 「🧀 芝士仲喺枱上。」 · 「🧀 芝士已經唔見咗，但你唔知係邊個偷。」 (a later waker) · 「🧀 阿明 偷走咗芝士 — 你睇到晒喇！」 (witness of the theft **in this very hour**) · to the thief 「🧀 你偷走咗芝士！收好佢，唔好露出破綻。」
 4. Role lines:
-   * lone sleepyhead (or fall mouse): 「👁 淨係得你醒，可以偷睇一個人粒骰（只得一次）。喺下面揀人，再㩒大掣。唔想睇就唔使理。」 — the grid becomes live (tap a name), the big button becomes 「👁 睇 阿明 粒骰」. The result appears under a hold-to-peek cover 「㩒住睇 阿明 粒骰」 (neighbours with open eyes in 靜音 mode cannot read it); it stays on screen for the rest of the window.
+   * lone sleepyhead (or fall mouse): 「👁 淨係得你醒：可以偷睇一個人粒骰（得一次）。㩒個名，再㩒大掣；唔想睇就直接㩒大掣。」 — tap a name (it lights up exactly like a sleeper's decoy tap), then the big button; its label stays 「👆 㩒一下」, only the small line says 「㩒落去就睇 阿明 粒骰（得一次）」. The result appears under a silent hold-to-peek cover 「㩒住睇 阿明 粒骰」 (neighbours with open eyes in 靜音 mode cannot read it); it stays for the rest of the window.
    * sleepyhead with company: 「有人同你一齊醒，今次唔可以偷睇。」
-   * 4p sleepyhead without `peek4`: 「4 人局唔可以偷睇。」
-   * 4p thief at its first of two wakes: 「而家偷，定係等你下一次醒（五點鐘）先偷？下面大掣＝而家偷；唔㩒就係等。」 — big button 「🧀 而家偷芝士」. At its last wake the theft is automatic.
-   * 5p thief with two or more witnesses: 「🤝 你一定要揀 1 位同你一齊醒嘅人做共犯（喺下面揀，再㩒大掣）。唔揀嘅話，時間到會幫你隨機揀。」 — grid live over the witnesses only.
+   * 4p sleepyhead without `peek4`: 「4 人局唔可以偷睇（官方規則）。」
+   * 4p thief at its first of two wakes: 「而家偷，定係等五點鐘先偷？㩒大掣＝而家偷；想等就唔好㩒。」 — the big button keeps its label; the small line says 「㩒落去＝而家偷芝士；想等就唔好㩒」. At its last wake the theft is automatic.
+   * 5p thief with two or more witnesses: 「🤝 你一定要揀 1 位同你一齊醒嘅人做共犯：㩒名，再㩒大掣。唔揀，時間到會幫你隨機揀。」 — taps on non-witnesses are ignored.
    * 5p witnesses after the pick: 「🤝 大盜揀咗 阿珍 做共犯。」; the picked one: 「🤝 你畀大盜揀咗做共犯！你同大盜一隊，唔好講畀人知。」
 5. After the window the screen goes to the `close` card for everyone.
 
-**`rec-pick` (6–8p)** — thief: 「🤝 你係大盜」 + 「揀 N 位共犯（喺下面㩒名，再㩒大掣），同時用手輕輕摸佢哋隻手。唔揀嘅話，時間到會幫你隨機揀。」, the grid is live over all other seats (taps accumulate up to N; a further tap drops the oldest), big button 「🤝 揀 阿明、阿玲 做共犯」. Everyone else: the decoy.
+**`rec-pick` (6–8p)** — thief: 「🤝 你係大盜」 + (語音/讀稿) 「揀 N 位共犯：㩒名，再㩒大掣，同時輕輕摸佢哋隻手 — 佢哋靠呢下先知要睜眼。」 / (靜音) 「…（靜音模式唔使摸手）…」. Taps accumulate up to N (a further tap drops the oldest); the small line reads 「㩒落去就揀 阿明、阿玲 做共犯」. Everyone else: the decoy (same gesture, same look).
 
-**`rec-meet`** — thief (6, 8p): 「你嘅共犯：阿明、阿玲」. Follower: 「🤝 你係共犯！」 · 6p/8p 「大盜係 阿珍。」 · 7p 「你唔知大盜係邊個。」 · 「另一位共犯：阿明」 (7p/8p). The fall mouse who was recruited sees 「你同時係背鍋鼠：想贏就要畀人投中。」. The 7p thief's eyes are closed at this step (its phone shows the decoy).
+**`rec-meet`** — thief (6, 8p): 「你嘅共犯：阿明、阿玲」. Follower: 「🤝 你係共犯！」 · 6p/8p 「大盜係 阿珍。」 · 7p 「你唔知大盜係邊個。」 — **unless that follower watched the theft at its own hour**, then 「大盜係 阿珍（你夜晚親眼見到佢偷）。」 (research, "who knows what at dawn") · 「另一位共犯：阿明」 (7p/8p). The fall mouse who was recruited sees 「你同時係背鍋鼠：想贏就要畀人投中。」. The 7p thief's eyes are closed at this step (its phone shows the decoy).
 
 **Table view** during the night: 「🌙 {step}」, the countdown bar, 「已㩒掣 4 / 6」. It never shows how many seats are awake.
 
@@ -168,8 +188,9 @@ The big button is always 「👆 㩒一下 · 每個點鐘都㩒，咁就冇人�
 * Every `open h` exists every game; its window is `hourSec` whether 0 or 6 seats are awake. The narration text has the same frame for every hour. A test pins both.
 * Windows never end early because someone finished; peeks, acks, steals and picks do not touch `deadline`.
 * The thief's theft is **automatic as its window opens** (5–8p; 4p only at the last wake). Nobody can dodge being seen by stealing in the last second, and the thief has nothing extra to tap. Witnesses are always told who.
-* Every phone has the same boxes and one big button to tap each step; sleepers are asked to tap it every hour (blind-tappable, bottom half of the screen).
-* No sound at night from this UI: the seat grid is plain buttons (not `PlayerPicker`, which clicks), no `Timer` (it ticks and beeps), the peek cover uses `openSound: 'none'`, no `api.sfx`. The shell additionally mutes and dims phones that are not in `focus`.
+* Every phone has the same boxes and one big button to tap each step; every seat has a legal `ack` at the start of every step, cue and window (tested for 4–8p).
+* **A glance cannot tell a peek, a steal or a follower pick from a decoy** (tested on the DOM for 4p, 5p and 6p): every phone's night root, panel, chips and big button carry the same classes, all names are tappable on every phone, the big label is always 「👆 㩒一下」, and nothing changes colour because a seat is awake or acting (no yellow "action" button, no lit panel border, no "live" chips; the panel has a fixed height). Only the panel text and the small line under the button differ. Everyone can make the same gesture: tap a name, tap the big button.
+* No sound at night from this UI: the seat grid is plain buttons (not `PlayerPicker`, which clicks), no `Timer` (it ticks and beeps), the peek cover uses `openSound: 'none'`, no `api.sfx` (tested). The shell additionally mutes and dims phones that are not in `focus`.
 * The public part of a step (`view.step`) is only `{ ix, total, k, h, stage }`; the table view has no per-hour awake count; `acks` counts everybody who tapped anything.
 * Peek results sit under a cover; the recap too.
 
@@ -191,7 +212,7 @@ Public, 9 s (`@next` skips): VotePanel in reveal mode with the bars **and who po
 
 ### 3.6 `over` — result
 
-Seat screen: 「🎉 你贏咗！」 / 「😿 你輸咗」, the summary, 「芝士喺四點鐘畀 阿明 偷走。」, and a debrief row per seat (card, follower tag, die/dice, 贏). The shell's results screen shows `result.lines` and `points` and runs 再玩一局 / 換遊戲.
+Seat screen: 「🎉 你贏咗！」 / 「😿 你輸咗」, the summary, 「芝士喺四點鐘畀 阿明 偷走。」, a debrief row per seat (card, follower tag, die/dice, 贏), and 🌙 夜晚重溫 (`view.recap`, the same lines on every phone). The shell's results screen shows `result.lines` and `points` and runs 再玩一局 / 換遊戲.
 
 **Verdict** (`judge`, exported and tested):
 
@@ -203,12 +224,20 @@ thief ∈ top                   → 4p and |top| > 1 → thief wins
 else                          → thief + followers win                   (a follower fall mouse never shares it)
 ```
 
-**Result lines** (`result.lines`, Cantonese) — each game: `最高票：阿明（3 票）` · `票數：阿明 3 · 阿強 2 …` · the reason, one of
+**Result lines** (`result.lines`, Cantonese, BACKLOG #10) — each game: `最高票：阿明（3 票）` · `票數：阿明 3 · 阿強 2 …` · the reason, one of
 * 「背鍋鼠 X 喺最高票入面，所以佢獨贏，其他人（包括大盜隊同貪瞓鼠）全部輸。」 (+ 「就算大盜 Y 都畀人揪出，背鍋鼠優先。」)
-* 「4 人局：大盜 X 同 Y 平票，所以大盜贏。」
-* 「大盜 X 喺最高票入面（平票都一齊開牌），所以貪瞓鼠贏。」 + 「共犯 … 跟大盜一齊輸。」 + 「背鍋鼠 … 冇畀人投中，所以都輸。」
-* 「大盜 X 冇喺最高票入面，所以大盜同共犯贏。」 + 「共犯 … 畀人投中都唔緊要。」
-then 「芝士喺兩點鐘畀 X 偷走。」, 「共犯：A、B」 / 「今局冇共犯。」, and a debrief line per seat 「阿明：🧀 大盜 · 骰 3 · 三點鐘醒」.
+* 「4 人局：大盜 X 同 Y 平票，所以大盜贏（2023 年官方修訂）。」
+* 「大盜 X 喺最高票入面（平票都一齊開牌，大盜照計畀人揪出），所以貪瞓鼠贏。」 + 「共犯 … 跟大盜一齊輸。」 (a recruited fall mouse is not listed there) + 「背鍋鼠 X 唔喺最高票，所以都輸（佢做咗共犯都一樣）。」
+* 「大盜 X 唔喺最高票，所以大盜同共犯贏。」 (「所以大盜贏」 when there is no team follower) + 「共犯 … 畀人投中都唔緊要，照贏。」 + for the fall mouse 「背鍋鼠 X 雖然做咗共犯，但佢淨係靠畀人投中先贏，所以輸。」 / 「背鍋鼠 X 唔喺最高票，所以輸。」
+
+then 「共犯：A、B」 / 「今局冇共犯。」, **🌙 夜晚重溫** — one line per hour plus the follower step, the night as nobody saw it live:
+* 「一點鐘：阿欣 醒咗 — 阿欣 偷睇咗 阿明 粒骰（3）」
+* 「兩點鐘：冇人醒」
+* 「三點鐘：阿明、阿強、阿珍 醒咗 — 大盜 阿明 偷走芝士（阿強、阿珍 睇到）；大盜揀咗 阿珍 做共犯」 (5p)
+* 4p: 「兩點鐘：… — 大盜 阿明 醒咗，但揀咗遲啲先偷」 / 「五點鐘：… — 大盜 阿明 再醒，芝士早就冇咗」
+* 6–8p: 「夜尾：大盜揀咗 阿珍、阿玲 做共犯（兩個互相認得 / 兩位共犯互相認得，大盜冇同佢哋對望 / 三個互相認得）」
+
+and a debrief line per seat 「阿明：🧀 大盜 · 骰 3 · 三點鐘醒」. `result.recap` carries the recap lines on their own; the `over` view publishes them as `recap`.
 
 `summary`: 「貪瞓鼠贏 — 大盜 X 畀人揪出」 / 「大盜隊贏 — X 逃過一劫」 / 「背鍋鼠 X 成功畀人投中 — 一個人贏」 / 「大盜 X 贏 — 4 人局平票算大盜贏」.
 
@@ -219,7 +248,7 @@ then 「芝士喺兩點鐘畀 X 偷走。」, 「共犯：A、B」 / 「今局�
 Single device is `full`. The phone sits in the middle; every seat lives on it, so the shell walks seats through PassGates.
 
 * **roll:** `focus.pids` = seats not yet ready, so each player takes the phone in seat order, peeks their card, rolls, taps 準備好 and passes it on.
-* **night:** the phone narrates. At every `open` window `focus` = `{ pids: awake seats, anonymous: '擲到「三」嘅請拎起部手機' }`, so the gate says what the narrator said and never a name. The awake players physically open their eyes, one of them takes the phone and sees the awake screen (who is with them — they can see each other too —, the cheese, the peek). A lone sleepyhead picks the target on the phone and hands it back. The thief's theft is automatic, so there is nothing for it to do; at 6–8p `rec-pick` has `anonymous: '大盜請拎起部手機'` and the thief picks followers on the phone **and** touches their hands; `rec-meet` has `anonymous: '大盜同共犯請拎起部手機'` (7p: `共犯請拎起部手機`). Nobody taps decoys on a shared phone (there is only one screen); the big button simply acks.
+* **night:** the phone narrates. At every `open` window `focus` = `{ pids: awake seats, anonymous: '擲到三點嘅請拎起部手機' }` (4p: `'醒鐘係三點嘅請拎起部手機'`), so the gate says what the narrator said and never a name. The awake players physically open their eyes, one of them takes the phone and sees the awake screen (who is with them — they can see each other too —, the cheese, the peek). A lone sleepyhead picks the target on the phone and hands it back. The thief's theft is automatic, so there is nothing for it to do; at 6–8p `rec-pick` has `anonymous: '大盜請拎起部手機'` and the thief picks followers on the phone **and** touches their hands; `rec-meet` has `anonymous: '大盜同共犯請拎起部手機'` (7p: `共犯請拎起部手機`). Nobody taps decoys on a shared phone (there is only one screen); the big button simply acks.
 * **empty hours:** `focus` still returns `{ pids: [], anonymous }`, but the room layer drops it for a device that owns none of the pids, so a shared phone shows a gate only when somebody is awake. That only matters if a sleeper cheats by peeking at the phone — see §8.
 * **day:** one phone cannot show each seat its recap at once; the recap is behind a cover on each seat's own screen, reached through the seat switcher. Players may skip the recap and rely on memory (the physical game does).
 * **vote:** `focus.pids` = seats that have not voted, so each player takes the phone in turn and taps their vote.
@@ -277,7 +306,9 @@ Single device is `full`. The phone sits in the middle; every seat lives on it, s
 
 ### 5.4 `view(state, pid)`
 
-Whitelist-built. Public keys: `phase, seat, n, opts{reroll,recap,peek4}, title, subtitle, deadline?, timerLabel?`, `night: true` while it is night (the shell dims/mutes on it), `step{ix,total,k,h,stage}`, counters (`ready`, `acks`, `dayReady`, `progress`), and after the vote `reveal{counts,top,votes}`, `revealed[{pid,role}]`; at `over` also `summary, winners, mode, cheese, debrief[]`.
+Whitelist-built. Public keys: `phase, seat, n, opts{reroll,recap,peek4}, title, subtitle, hint, deadline?, timerLabel?`, `night: true` while it is night (the shell dims/mutes on it), `step{ix,total,k,h,stage}`, counters (`ready`, `acks`, `dayReady`, `progress`), and after the vote `reveal{counts,top,votes}`, `revealed[{pid,role}]`; at `over` also `summary, winners, mode, cheese, debrief[], recap[]`.
+
+`hint` (BACKLOG U1) is one line for the shell's 💡 sheet, built only from what this view already shows, never drawn by the game UI (tested). Seat hints: roll — look / choose a die (4p) / ready / wait; night — asleep 「未到你：閉住眼，每一步都照㩒一下大掣。」 (identical every step, so it tells a sleeper nothing), awake, lone peeker, thief, 4p steal choice, follower pick, meeting; day — per role (thief / follower / fall mouse / sleepyhead); vote / voted; reveal; over. Table hints per phase. Texts in `script.js HINT`.
 
 Seat keys: `my{role, follower, dice, rollSeq, locked, wake?, needsChoice?, chosen?, ready?}` (own only; `follower` true only once told), `acked`, `nightSeat` (see §3.2: `{awake:false}` or `{awake:true, with, cheese, thief, picked, peek{mode,targets,done}, steal{can,twoWakes}, recruit{count,among}, recruited, meet{thief,mates}}`), `notes[]`, `dayReady.mine`, `candidates`, `myVote`.
 
@@ -288,48 +319,95 @@ Seat keys: `my{role, follower, dice, rollSeq, locked, wake?, needsChoice?, chose
 * `autoAct`: roll → `ready`; owed pick → a random valid `recruit`; day → `day-ready`; vote → a random other seat; otherwise null.
 * `legalActions`: everything the seat may send now (ack until acked, every valid peek target, steal, every valid recruit combination, one vote per other seat except the current pick, …).
 
-### 5.6 Rules decisions (the research doc's open questions)
+### 5.6 Rules decisions (the research doc's open questions, after its "## Verification")
 
-| # | question | decision |
-|---|---|---|
-| 1 | 4p lone-sleepyhead peek | off; `peek4` switches it on and then shows both dice under the cup |
-| 2 | fall mouse recruited | designer's ruling: it knows it is a follower but wins only by being top-voted |
-| 3 | fall mouse wins with a caught thief? | no |
-| 4 | Cat / Dog promos | not implemented |
-| 5 | window length | 10 s default, 5–30 s configurable |
+| # | question | status in research | decision |
+|---|---|---|---|
+| 1 | 4p lone-sleepyhead peek | **resolved: not allowed** (official French rulebook; the fan JP text mistranslates it) | no peek in 4p. `peek4` is an off-by-default **house rule** labelled 「家規」 in the form, the lobby summary and a validate warning; when on, the peek shows both of the target's dice |
+| 2 | fall mouse recruited | resolved | it is told it is a follower but wins only by being top-voted; never shares the thief team's win |
+| 3 | fall mouse shares a sleepyhead win? | resolved: no | no — FM ∉ top set → FM loses, whatever else happens |
+| 4 | Cat / Dog promos | unruled timing | not implemented |
+| 5 | window length | resolved: 10 s (EN/FR) | `hourSec` 10 s default, 5–30 s configurable; follower meeting 5 s at the default |
+| 6 | 4p thief's non-stealing wake | **open** | documented default: the thief is woken at **both** of its hours. At the first it may steal (one tap) or wait; at its last wake an unstolen cheese is taken automatically. After stealing, its other wake still happens: co-wakers see it awake, the cheese already gone, and are not told who took it. No "thief may sleep through a wake" option (research suggests one; not built — see §9 open items) |
+| — | 4p tie | resolved (2023-10-09 amendment) | a tie that includes the thief is a thief win in 4p; the rules sheet and the result line name the amendment because older / French printings say the opposite |
 
-Other choices: the thief must take the cheese, so the theft is automatic at its window; 6–8p followers are picked on the phone **and** by touch (the follower has no other way to know to open their eyes — the phone cannot vibrate on iOS); 5p unpicked witnesses see who was picked (the thief points); votes can be changed until the last vote lands.
+Other choices: the thief must take the cheese, so the theft is automatic at its window (5–8p); 6–8p followers are picked on the phone **and** by touch in 語音/讀稿 mode (the follower has no other way to know to open their eyes — the phone cannot vibrate on iOS), phone only in 靜音 mode; 5p unpicked witnesses see who was picked (the thief points) [I]; votes can be changed until the last vote lands; no re-roll unless the 家規 is on.
 
 ## 6. Edge cases → tests (`node tests/run.mjs cheese-thief`)
 
-* **Deal & dice:** deck size / one thief / fall mouse replaces and is refused outside 6–8 · seeded deal, thief seat varies · one roll stands; reroll mode; 4p two dice; roll counter per seat · 4p choose-hour rules, equal dice, thief never chooses · `ready` fills in blanks · night starts only when all ready.
-* **Night structure:** exact step lists for 4/5/6/7/8 · every window exactly `hourSec`, empty or not · same cue frame, same focus prompt for crowded and empty hours · sleepers' view identical every hour · acking/peeking/recruiting never touch the deadline · `@next` / `@cue-done` semantics · cue ids unique per game and across games · narration scripts for 6/7/8, none for 4/5.
+* **Deal & dice:** deck size / one thief / fall mouse replaces and is refused outside 6–8 · seeded deal, thief seat varies · one roll stands; reroll (家規) mode; 4p two dice; roll counter per seat · 4p choose-hour rules, equal dice, thief never chooses · `ready` fills in blanks · night starts only when all ready.
+* **Config (U1 / #8):** house rules off by default for every n and labelled 家規 in field, summary and warning · a 💬 reason line per head-count · 400 fuzzed `defaults(n, prev)` are valid and their lobby counts equal the dealt roles; an invalid fall mouse is refused · `rules.quick` ≤ 6 lines ≤ 40 chars · every role text has 做乜 then 點贏 · the 4p no-peek rule appears in quick, the sleepyhead role and the 4p section.
+* **Night structure:** exact step lists for 4/5/6/7/8 · every window exactly `hourSec`, empty or not · same cue frame, same focus prompt for crowded and empty hours · sleepers' view (and 💡 hint) identical every hour · acking/peeking/recruiting never touch the deadline · `@next` / `@cue-done` semantics · cue ids unique per game and across games · narration scripts for 6/7/8, none for 4/5.
+* **Anti-tell timeline (4–8p, hourSec 10 and 7):** the full list of lines, silent-mode times and window lengths is identical between "everyone on one hour, nobody acts" and "spread out, thief elsewhere, everybody peeks / steals / picks"; every seat has an `ack` at every step and stage; 4p one-wake vs two-wake thief also identical.
+* **Narration:** the exact script, line by line, for every head-count; ≤ 36 chars, no digits, no names; the vote call once · 讀稿: the night runs on 下一步 alone (theft and a skipped pick still happen) · 靜音: on cue timers alone, under 4 minutes.
 * **Theft & peek:** theft at window open, witnesses told, later wakers not · lone sleepyhead sees cheese on the table · peek: not self, not twice, skip is doing nothing, target never notified and nobody's view changes · no peek with company / for the thief · fall mouse peeks · all-same-number games for 5–8.
-* **Recruitment:** 5p none / one automatic / pick among ≥2 (invalid picks refused, auto-pick at window end) · 6/7/8p no automatic followers; counts 1/2/2; distinct, never the thief; knowledge per head-count; fall mouse can be recruited; missed pick made at window end.
-* **4p:** wakes at both numbers, choice of theft hour, nothing to steal at the second, equal dice, chosen die decides the wake, peek option.
+* **Recruitment:** 5p none / one automatic / pick among ≥2 (invalid picks refused, auto-pick at window end) · 6/7/8p no automatic followers; counts 1/2/2; distinct, never the thief; knowledge per head-count; **7p follower who watched the theft knows the thief, the other does not**; fall mouse can be recruited; missed pick made at window end.
+* **4p:** wakes at both numbers, choice of theft hour, nothing to steal at the second, equal dice, chosen die decides the wake, no peek by default (house option).
 * **Day & vote:** ends on timer / all ready / host; self and junk votes refused; changing a vote; reveal contents; result withheld until the reveal lands.
-* **Truth table** for 5–8p, fall mouse, 4p, plus a 4 000-case brute-force sweep against an independent derivation · result lines and points.
-* **Information boundary:** `leakCheck` after every scripted step and sampled every step of ≥ 550 fuzzed games: no foreign role ids or dice keys, peek data only for the peeker, thief identity / follower knowledge only where the knowledge table allows, `with` = exactly the others awake, no secret in the table view.
+* **Truth table** for 5–8p, fall mouse, 4p, plus a 4 000-case brute-force sweep against an independent derivation · result lines and points · odd cases worded right (FM follower, no follower, thief tie, 4p amendment) · **night recap** lines exact for a 5p night with peek + theft + pick, 4p wait-then-steal and steal-then-wake, 6/7/8p follower step; same recap on every phone at `over`.
+* **💡 hints:** every phase × every seat and the table, ≤ 32 chars, one line; tracks what the seat can do (peek / thief / pick / sleep).
+* **Information boundary:** `leakCheck` after every scripted step and sampled every step of ≥ 550 fuzzed games: no foreign role ids or dice keys, peek data only for the peeker, thief identity / follower knowledge only where the knowledge table allows, `with` = exactly the others awake, no secret in the table view, `recap` only at `over`.
 * **Robustness:** junk actions never throw nor change state · wrong-phase refusals · JSON round-trip at every step · fuzz over every head-count × seeds × option variants · `autoAct` alone finishes any game.
-* **UI (fake DOM, stub components):** every phase renders for every seat and the table, `update()` twice is identical, all night screens have the same shape, whole games finish through taps alone (UI only sends actions the engine accepts), the peek result and recap are the owner's only.
+* **UI (fake DOM, stub components):** every phase renders for every seat and the table, `update()` twice is identical, the 💡 hint is never drawn, all night screens have the same shape, whole games finish through taps alone (UI only sends actions the engine accepts), the peek result and recap are the owner's only · **glance test:** at every night step of a 6p game and at a 5p pick and a 4p first-wake steal, every phone's night root / panel / chips / big button carry identical classes and the same big label before and after a peek, a steal, a follower pick and a sleeper's identical decoy gesture; the peek cover is silent; `api.sfx` is never called at night.
 
 ## 7. 貼心 touches
 
-* One roll, shown as a locked cup — nobody can fish for a number by shaking again; `reroll` for casual tables.
-* The recap 📓 so nobody has to remember what they saw at 3 o'clock (toggle `recap`).
-* The 5p/6p/7p/8p scripts are separate and tested — the official app once played the 6p script at 7p.
-* 讀稿 mode works for a non-playing friend; 靜音 mode works on a plane or in a quiet bar: phones light up on their own hour.
+* One roll, shown as a locked cup — nobody can fish for a number by shaking again; the 家規 `reroll` for casual tables.
+* The recap 📓 so nobody has to remember what they saw at 3 o'clock (toggle `recap`), and 🌙 夜晚重溫 at the end: who woke when, who peeked at whom, when the cheese went and who watched, who was recruited.
+* The 5p/6p/7p/8p scripts are separate and pinned line by line in a test — the official app once played the 6p script at 7p.
+* 讀稿 mode works for a non-playing friend; 靜音 mode works on a plane or in a quiet bar: phones light up on their own hour and nobody has to touch hands.
 * Clear "who is awake with me / is the cheese still there" on every awake screen cures the classic "cheese blindness".
 * Peek results and the recap sit under hold-to-peek covers; the role card has its own 🔒.
 * 4p: the die choice buttons never print the numbers.
-* The reveal shows who pointed at whom, like real finger-pointing, and the result lines say *why* (including the odd rules: tie with the thief, follower caught, fall mouse).
+* Every phone looks the same at night, and everyone can make the same tap-a-name-then-the-button gesture, so neither a glance nor finger movement gives a peeker or a thief away.
+* The reveal shows who pointed at whom, like real finger-pointing, and the result lines say *why* (including the odd rules: tie with the thief, follower caught, fall mouse, the 4p amendment).
+* 💡 has a one-line hint for every screen and the role card says what you do and how you win — nothing pops up by itself.
 * `ready` auto-completes, so one dead phone costs one tap, not the game.
 * The host can change narration mode mid-night from the shell menu.
 
 ## 8. Framework requests
 
-1. **Empty-hour decoy on a shared phone.** `room.js filterFocus` returns `null` when a device owns none of `focus.pids`, and `play.js` only opens a gate for owned seats, so a single shared phone shows its 「擲到「三」嘅請拎起部手機」 gate only when someone really is awake. Request: for a device that owns every seat, keep `{ pids: [], anonymous }` and show the anonymous prompt as a plain card (no seat to open) so an empty hour looks the same. Low priority (only matters if a sleeper peeks).
-2. **DiceCup lock label.** With the `reroll` option the locked cup's button reads 「🔒 已鎖，主持解鎖」, but this game has no host unlock. Request an optional `lockedLabel` prop.
-3. **Silent covers.** `Cover` plays `props.openSound ?? 'flip'`; the game passes the unknown name `'none'` as "no sound" at night. Request: honour `openSound: null` / `false`.
-4. **Night hint in the shell.** The shell dims phones that are not in `focus`; the game's own screen is a normal screen under the dim layer and keeps its big decoy button tappable. No change needed, but the shell must keep `.night-dim { pointer-events: none }`.
-5. **`@next` while no cue is showing.** In 讀稿 mode the host's 下一步 during a window skips the rest of the window (the game treats `@next` as "advance"). If the NarratorBar hides 下一步 when `cue` is null, hosts lose that skip — acceptable, but keep the button available in 讀稿 mode.
+1. **Empty-hour decoy on a shared phone.** `room.js filterFocus` returns `null` when a device owns none of `focus.pids`, and `play.js` only opens a gate for owned seats, so a single shared phone shows its 「擲到三點嘅請拎起部手機」 gate only when someone really is awake. Request: for a device that owns every seat, keep `{ pids: [], anonymous }` and show the anonymous prompt as a plain card (no seat to open) so an empty hour looks the same. Low priority (only matters if a sleeper peeks).
+2. **DiceCup lock label (still needed).** With the 家規 `reroll` option the locked cup's button reads 「🔒 已鎖，主持解鎖」 (`DiceCup.js`), but this game has no host unlock. Request an optional `lockedLabel` prop (this game would pass 「🔒 已鎖定」).
+3. **Silent covers (still needed).** `Cover` plays `sfx(props.openSound ?? 'flip')`; the game passes `'none'`, which is silent today only because `sfx()` ignores unknown names. Request: document and honour `openSound: null` / `false` (or `'none'`) as "no sound", so a future sound named `none` or a stricter `sfx()` cannot make the night peek audible.
+4. **Night dim stays click-through.** The shell dims phones that are not in `focus`; the game's own screen sits under the dim layer and keeps its decoy grid and big button tappable. No change needed, but keep `.night-dim { pointer-events: none }`.
+5. **`@next` while no cue is showing.** In 讀稿 mode the host's 下一步 during a window skips the rest of the window (the game treats `@next` as "advance"). Keep the button available in 讀稿 mode even when `cue` is null.
+6. **💡 sheet (U1).** The game now returns `view.hint` for every phase and seat (and the table). The shell's 💡 must show it only on tap, never by itself. At night (`view.night`), opening the sheet should stay as dark as the dimmed screen — a bright modal on one phone would mark it out.
+7. **讀稿 with a seated host.** 讀稿 needs a reader with open eyes, which breaks the night if the reader is also a player. Request: when the narration mode is `read`, the game's `meta.narration` is `'required'` and the host device has a seat, the lobby / narrator bar warns 「讀稿要搵個唔玩嘅人讀；主持有玩就用語音或者靜音」.
+8. **靜音 brightness tell.** The game's night screens are now identical at a glance, but the shell un-dims only the `focus` seats, so in 靜音 mode (everyone's eyes open) a lit phone across the table shows who is awake. Request: in 靜音 mode use one dim level for every seat at night (readable by its owner up close), or at least note the trade-off in the shell's help.
+
+## 9. Rules audit (2026-10-03 UTC)
+
+Checked one by one against `docs/research/cheese-thief.md` "## Verification" (which overrides its draft). "Doc" = this file before the pass; "code" = `game.js` / `ui.js` / `script.js` before the pass.
+
+| # | verified rule | doc before | code before | verdict | what changed |
+|---|---|---|---|---|---|
+| R1 | 4p: a lone sleepyhead may NOT peek (French rulebook, 4p point 3) | "rulebook is unclear — research Q1" | no peek by default ✓, but the option read 「4 人局都可以偷睇骰」 / 「官方未講清楚」 | **FIX** | field 「家規：4 人局都可以偷睇骰」 + help 「官方規則係唔可以」; summary 👁 家規; validate warning; rules text (quick, sleepyhead role, 4p section, night section); role card; doc §2.1 / §5.6 |
+| R2 | a 4p peek may exist only as an off-by-default, clearly labelled house option | default off | default off ✓, not labelled | **FIX** | as R1; test: off for every n, 家規 in field / summary / warning |
+| R3 | win: FM ∈ top → FM alone; thief ∈ top → sleepyheads (non-follower, non-FM); else thief ∪ (followers − FM) | ✓ | `judge` ✓ (truth table + 4 000-case sweep) | OK | — |
+| R4 | the FM never shares the thief team's or the sleepyheads' win | ✓ | ✓ | OK (logic) / **FIX** (wording) | result lines no longer say a recruited FM "loses with the thief", nor 「大盜同共犯贏」 when the only follower is the FM; the FM gets its own reason line |
+| R5 | 4p tie amendment (2023-10-09): thief in a tied top set → thief wins | ✓ | ✓ | OK | rules sheet + result line name the amendment (older / French printings say the opposite) |
+| R6 | 5p: thief alone → no follower; 1 witness → follower; ≥ 2 → thief points at one; unpicked witnesses know the thief | ✓ | ✓ | OK | — |
+| R7 | 6p: 1 follower, picked from anyone after hour 6, mutual recognition | ✓ | ✓ | OK | — |
+| R8 | 7p: 2 followers know each other, not the thief; the thief knows both | ✓ | ✓ | OK | — |
+| R9 | 7p witness rule: a 7p follower learns the thief **if it watched the theft** at its own hour | 「7p 你唔知大盜係邊個」 | meet / notes always `thief: null` at 7p, so a follower who saw the theft was told 「你唔知大盜係邊個」 (contradicting its own recap) | **FIX** | `followerKnowsThief`: 7p → the thief iff it saw the theft; UI 「大盜係 X（你夜晚親眼見到佢偷）」; test |
+| R10 | 8p: 2 followers + thief all know each other | ✓ | ✓ | OK | — |
+| R11 | follower pick: distinct, never the thief, may be the FM or a non-witness | ✓ | ✓ | OK | — |
+| R12 | hour window 10 s (EN/FR), configurable | ✓ | `hourSec` 10, 5–30 ✓ | OK | — |
+| R13 | follower steps: 5 s countdowns | meet ✓ | meet 5 s ✓; pick = `hourSec` | OK (deliberate) | documented: the thief taps the phone and touches hands; a missed phone pick would not match the touch |
+| R14 | everyone votes once, for another player; no abstaining, no self-vote | ✓ | ✓ | OK | rules text now says 唔可以棄權 |
+| R15 | no re-roll (official) | ✓ default off | ✓ default off, label not marked as house rule | **FIX** | 「家規：擲骰可以重擲」 + 「官方規則：擲一次就定案」; summary / warning |
+| R16 | 4p: two dice; sleepyhead wakes once at a chosen die; thief wakes at both (once if equal), chooses its theft hour, forced at the last | ✓ | ✓ | OK | — |
+| R17 | 4p thief's non-stealing wake (open Q6) — keep a documented default | not covered | wakes at both | **FIX** (doc) | §5.6 row 6 and the 4p rules section state the default and what co-wakers see |
+| R18 | narration: the recruit close also tells everyone to take the hand back (research cue `night:recruit:close`) | missing | missing | **FIX** | 「…請閉返眼。大家收返隻手。」 for 6/7/8 |
+| R19 | 4p sleepyheads wake by their *chosen* die | — | cue said 「擲到「二」嘅老鼠」 | **FIX** | 4p cue 「醒鐘係兩點嘅老鼠，請睜開眼。」 + matching shared-phone prompt |
+| R20 | the thief's phone pick must match the touched hands [I] | — | cue said only 「揀一位共犯，輕輕摸佢隻手」 | **FIX** | 「喺手機揀一位共犯，再輕輕摸佢隻手」; the thief screen explains why the touch matters |
+| A1 | every hour (and every step) lasts its fixed length whoever is awake | ✓ | ✓ | OK | tested now for 4–8p, two `hourSec` values, idle vs acting nights, 4p one vs two thief wakes |
+| A2 | every seat has a legal action every night step (decoy of identical shape) | ✓ | ✓ engine; UI chips disabled for sleepers | **FIX** (UI) | every name tappable on every phone, so a sleeper can make the peeker's exact gesture |
+| A3 | the steal and the peek look and sound identical to the decoy at a glance | partly | yellow "action" big button, big label 「👁 睇 X 粒骰」 / 「🧀 而家偷芝士」, yellow awake panel border, lit "live" chips, green role block | **FIX** | one big label for all, same classes and colours; the action only in the small line; fixed-height panel; DOM glance test + no-sound test |
+| A4 | 靜音 mode: nothing visible from across the table | — | thief told to touch hands even in 靜音 | **FIX** | 靜音 help line 「唔使閉眼、唔好抬頭、唔使摸手」; pick text without the touch |
+| U1 | `view.hint` every phase; roles say what you do AND how you win; `rules.quick` ≤ 6 | — | no `hint`; thief / sleepyhead texts lacked an explicit win; quick lacked the 4p rule | **FIX** | `hintFor` + `script.js HINT`; roles 「做乜：… 點贏：…」; quick rewritten (6 lines); tests |
+| B8 | presets / head-count notes with a reason | — | none | **FIX** | 💬 line per n; fuzzed role-count invariants |
+| B10 | result lines explain why, incl. a night recap | partial | no recap | **FIX** | 🌙 夜晚重溫 in `result.lines`, `result.recap`, `view.recap` at `over`, over screen |
+
+**Still open (not built):** a "thief may sleep through one of its 4p wakes" option (research open Q6 suggests exposing it; the documented default stands); a toggle for the pre-2023 4p tie rule for tables using an old French / English rulebook; promo Cat / Dog.

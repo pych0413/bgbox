@@ -12,6 +12,8 @@ export const ACT = Object.freeze({
   CUE_DONE: '@cue-done',   // { type, id } narration for cue `id` finished (or was skipped)
   NEXT: '@next',           // { type } host pressed 下一步 / skip
   AUTO: '@auto',           // { type, pid } host asked to auto-act a stalled seat
+  VOID_ROUND: '@void-round', // { type } host discards the current round (a phone died mid-round). Optional:
+                             // an engine that does not support it returns the state unchanged.
 });
 
 // ---------- randomness ----------

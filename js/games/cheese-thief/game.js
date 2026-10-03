@@ -18,8 +18,8 @@
 // leaves this file through view(), which is built field by field.
 // ============================================================
 
-import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=20261003075613';
-import { narrate, stepTitle, anonymousPrompt, cueMinMs, VOTE_CALL, CLOCK } from './script.js?v=20261003075613';
+import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=1';
+import { narrate, stepTitle, anonymousPrompt, cueMinMs, headCountNote, VOTE_CALL, CLOCK, HINT } from './script.js?v=1';
 
 // ---------- meta / rules ----------
 
@@ -40,28 +40,30 @@ export const meta = {
 
 export const rules = {
   quick: [
-    '每人一張牌同一粒骰（4 人局兩粒）：1 個芝士大盜，其餘係貪瞓鼠。',
-    '天黑後手機逐個點鐘報：擲到幾點，就喺嗰個點鐘睜眼。',
-    '大盜喺自己嗰點鐘偷走芝士，同佢一齊醒嘅人會見到邊個偷；共犯幫大盜。',
-    '貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰（得一次）。',
-    '天光後自由討論，可以講大話；然後同時投票。大盜畀人投中（平票都算）→ 貪瞓鼠贏，否則大盜隊贏。',
+    '1 個芝士大盜，其餘係貪瞓鼠；每人暗擲一粒骰（4 人局兩粒）。',
+    '天黑後手機由一點報到六點：擲到幾點，就喺嗰個點鐘睜眼。',
+    '大盜喺自己個鐘偷走芝士 — 同佢一齊醒嘅人會見到係邊個。',
+    '貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰（4 人局唔得）。',
+    '5–8 人：大盜會拉人做共犯，共犯幫大盜。',
+    '天光討論完一齊投票：大盜喺最高票 → 貪瞓鼠贏，否則大盜隊贏。',
   ],
+  // Every role: what you do (做乜) and how you win (點贏), in that order.
   roles: [
     {
       id: 'thief', name: '芝士大盜', emoji: '🧀', team: 'thief',
-      text: '全場淨係一個。喺你嗰個點鐘偷走芝士，唔好畀人投中。你冇得偷睇骰。',
+      text: '做乜：全場得你一個。喺你嗰個點鐘一定要偷走芝士，冇得偷睇骰。點贏：投票嗰陣你唔喺最高票。',
     },
     {
       id: 'sleepyhead', name: '貪瞓鼠', emoji: '🐭', team: 'sleepyhead',
-      text: '冇特別能力，目標係投中大盜。喺自己嗰個點鐘如果淨係得你醒，可以偷睇一個人粒骰。',
+      text: '做乜：喺你嗰個點鐘睜眼；如果淨係得你醒，可以偷睇一個人粒骰（4 人局唔得）。點贏：大盜喺最高票（平票都算）。',
     },
     {
       id: 'follower', name: '共犯', emoji: '🤝', team: 'thief',
-      text: '本身係貪瞓鼠，夜晚畀大盜拉咗上船。同大盜同贏同輸，畀人投中都唔緊要。你唔可以投自己。',
+      text: '做乜：本身係貪瞓鼠，夜晚畀大盜拉咗上船，天光幫大盜講大話。點贏：同大盜同贏同輸，自己畀人投中都唔緊要。',
     },
     {
       id: 'fall-mouse', name: '背鍋鼠', emoji: '🎭', team: 'solo',
-      text: '（6–8 人可加入）夜晚當貪瞓鼠。你嘅目標係畀人投中：成功就你一個人贏，其他人全部輸。',
+      text: '做乜：（6–8 人可加入）夜晚同貪瞓鼠一樣，天光扮可疑。點贏：你喺最高票（平票都算）就你一個人贏，其他人全部輸。',
     },
   ],
   sections: [
@@ -71,31 +73,35 @@ export const rules = {
     },
     {
       title: '夜晚',
-      body: '手機由 1 點報到 6 點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長。擲到嗰個點鐘嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜每次醒都一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰，睇完要冚返，之後唔可以再睇。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
+      body: '手機由一點報到六點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長（官方每個鐘 10 秒）。擲到嗰個點嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜醒嗰陣一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰，睇完要冚返，之後唔可以再睇（4 人局唔得）。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
     },
     {
       title: '共犯點產生',
-      body: '4 人：冇共犯。\n5 人：大盜偷芝士嗰陣，如果有貪瞓鼠一齊醒，嗰位就成為共犯；有幾位一齊醒，大盜揀一位。\n6 人：夜晚尾，大盜揀 1 位共犯，兩個人互相認得。\n7 人：夜晚尾，大盜揀 2 位共犯，佢哋互相認得，但唔識大盜。\n8 人：夜晚尾，大盜揀 2 位共犯，三個人互相認得。\n共犯夜晚唔可以傳遞任何骰仔資料。',
+      body: '4 人：冇共犯。\n5 人：大盜偷芝士嗰陣，如果有貪瞓鼠一齊醒，嗰位就成為共犯；有幾位一齊醒，大盜指一位；大盜自己一個醒就冇共犯。\n6 人：夜晚尾，大盜揀 1 位共犯（邊個都得），兩個人互相認得。\n7 人：夜晚尾，大盜揀 2 位共犯，佢哋互相認得，但唔知大盜係邊個（除非佢夜晚親眼見到大盜偷芝士）。\n8 人：夜晚尾，大盜揀 2 位共犯，三個人互相認得。\n共犯夜晚唔可以傳遞任何骰仔資料。',
     },
     {
       title: '日頭同投票',
-      body: '天光後自由討論，可以講真話或者大話，但唔可以畀人睇你張牌、唔可以亮骰。準備好就一齊投票：每人投一個「你覺得係大盜」嘅人，唔可以投自己，同時公開。得票最多嘅人開牌；平票就一齊開。',
+      body: '天光後自由討論，可以講真話或者大話，但唔可以畀人睇你張牌、唔可以亮骰。準備好就一齊投票：每人一定要投一個人，唔可以投自己，唔可以棄權，投晒先同時公開。得票最多嘅人開牌；平票就一齊開。',
     },
     {
       title: '勝負',
-      body: '得票最多嗰啲人入面有大盜 → 貪瞓鼠贏（共犯同背鍋鼠輸）。\n冇大盜 → 大盜同共犯贏，就算共犯畀人投中都一樣。\n背鍋鼠只要得票最多（平票都算）就一個人贏，優先過其他所有結果。\n4 人局：大盜同其他人平票，算大盜贏。',
+      body: '得票最多嗰啲人入面有大盜 → 貪瞓鼠贏（共犯跟大盜一齊輸）。\n冇大盜 → 大盜同共犯贏，就算共犯畀人投中都一樣。\n背鍋鼠只要喺最高票（平票都算）就一個人贏，優先過其他所有結果；唔喺最高票就一定輸。\n4 人局：大盜同其他人平票，算大盜贏（2023 年官方修訂；舊版說明書寫平票算貪瞓鼠贏）。',
     },
     {
       title: '4 人局（官方變體）',
-      body: '每人兩粒骰。貪瞓鼠揀其中一粒做自己嘅醒鐘；大盜兩個點數都會醒（兩粒一樣就只醒一次），可以揀喺邊次偷，偷咗之後另一次就冇嘢偷。冇共犯。預設唔可以偷睇骰，房主可以喺設定打開。',
+      body: '每人兩粒骰。貪瞓鼠揀其中一粒做自己嘅醒鐘；大盜兩個點數都會醒（兩粒一樣就只醒一次），可以揀喺邊次偷，第二次醒都未偷就一定要偷。偷咗之後另一次照醒，但冇嘢偷，淨係見到邊個醒。冇共犯。官方規則：就算淨係得你醒都唔可以偷睇骰；房主可以喺設定開「家規」畀人偷睇。',
     },
     {
       title: '背鍋鼠（6–8 人）',
-      body: '背鍋鼠當貪瞓鼠玩，連偷睇都得，但佢想畀人投中。就算佢被大盜揀咗做共犯，都係淨係靠被投中先贏，唔會跟大盜隊贏。',
+      body: '背鍋鼠當貪瞓鼠玩，連偷睇都得，但佢想畀人投中。就算佢被大盜揀咗做共犯，都係淨係靠被投中先贏，唔會跟大盜隊贏，亦唔會跟貪瞓鼠贏。建議大家玩熟先加。',
+    },
+    {
+      title: '旁白三個模式',
+      body: '語音：主持部機讀出嚟，全部人真係閉眼。\n讀稿：要搵一個唔玩嘅朋友睇住主持部機讀，再㩒「下一步」— 主持自己有玩就唔好用，因為佢要開眼睇稿。\n靜音：唔使閉眼，大家望住自己部機，到你個鐘部機會亮；唔好抬頭望人，亦唔使摸手。',
     },
     {
       title: '手機做啲乜，你做啲乜',
-      body: '手機負責：派牌、擲骰、逐點報時、記住芝士喺邊、顯示誰同你一齊醒、偷睇結果、投票計票。你負責：夜晚真係閉眼（或者用靜音模式睇住自己部機）、討論、扮嘢。每個點鐘都喺手機下半部㩒一下大掣，咁就冇人聽得出邊個醒。',
+      body: '手機負責：派牌、擲骰、逐點報時、記住芝士喺邊、顯示誰同你一齊醒、偷睇結果、投票計票。你負責：夜晚真係閉眼（或者用靜音模式睇住自己部機）、討論、扮嘢。每一步都喺手機下半部㩒一下大掣，咁就冇人聽得出邊個醒。',
     },
   ],
 };
@@ -142,23 +148,25 @@ export const config = {
     if (!Number.isFinite(hs) || hs < 5 || hs > 30) return { ok: false, message: '每個點鐘 5–30 秒', warnings };
     const ds = c.discussSec ?? DEFAULTS.discussSec;
     if (!Number.isFinite(ds) || ds < 0 || ds > 1800) return { ok: false, message: '討論時間 0–1800 秒（0 = 唔計時）', warnings };
-    if (n === 4) warnings.push('4 人局係官方變體：每人兩粒骰，大盜醒兩次，冇共犯。');
+    if (n === 4) warnings.push('4 人局係官方變體：每人兩粒骰，大盜醒兩次，冇共犯，唔可以偷睇。');
     if (n === 5) warnings.push('5 人局：大盜偷芝士時有貪瞓鼠一齊醒，嗰位先會變共犯。');
-    if (c.fallMouse) warnings.push('背鍋鼠想畀人投中 — 討論會更亂。');
+    if (c.fallMouse) warnings.push('背鍋鼠想畀人投中 — 討論會更亂，建議玩熟先加。');
+    if (n === 4 && c.peek4) warnings.push('家規：4 人局都可以偷睇骰（官方唔畀）。');
+    if (c.reroll) warnings.push('家規：可以重擲骰（官方擲一次就定案）。');
     return { ok: true, message: '', warnings };
   },
 
   fields(cfg, n) {
     const f = [];
     if (n >= 6) {
-      f.push({ key: 'fallMouse', label: '加入背鍋鼠', type: 'bool', help: '一隻貪瞓鼠換成背鍋鼠：佢要畀人投中先贏。' });
+      f.push({ key: 'fallMouse', label: '加入背鍋鼠', type: 'bool', help: '一隻貪瞓鼠換成背鍋鼠：佢要畀人投中先贏。官方 6–8 人可選，建議玩熟先加。' });
     }
     if (n === 4) {
-      f.push({ key: 'peek4', label: '4 人局都可以偷睇骰', type: 'bool', help: '官方未講清楚，預設唔畀。' });
+      f.push({ key: 'peek4', label: '家規：4 人局都可以偷睇骰', type: 'bool', help: '官方規則係唔可以：4 人局淨係得你醒都唔准睇。開咗就係家規。' });
     }
     f.push({ key: 'hourSec', label: '每個點鐘幾長', type: 'seconds', min: 5, max: 30, help: '官方係 10 秒。每個點鐘一樣長，冇人擲到都照行。' });
     f.push({ key: 'discussSec', label: '討論時間', type: 'seconds', min: 0, max: 1800, help: '0 = 唔計時，全部人㩒「夠鐘投票」就投。' });
-    f.push({ key: 'reroll', label: '擲骰可以重擲（鎖定先定案）', type: 'bool', help: '官方規則：擲一次就定案。' });
+    f.push({ key: 'reroll', label: '家規：擲骰可以重擲', type: 'bool', help: '官方規則：擲一次就定案。開咗就可以搖到㩒「鎖定」為止。' });
     f.push({ key: 'recap', label: '日頭顯示夜晚記錄', type: 'bool', help: '只有你自己睇到你夜晚見過嘅嘢，等你唔使靠記性。' });
     return f;
   },
@@ -173,9 +181,11 @@ export const config = {
       : n === 6 ? '🎲 每人 1 粒骰 · 夜尾大盜揀 1 位共犯'
       : n === 7 ? '🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（唔識大盜）'
       : '🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（三人互認）');
+    const note = headCountNote(n);
+    if (note) lines.push(`💬 ${note}`);
     lines.push(`⏱ 每個點鐘 ${c.hourSec} 秒 · 討論 ${c.discussSec ? Math.round(c.discussSec / 60 * 10) / 10 + ' 分鐘' : '唔計時'}`);
-    if (n === 4 && c.peek4) lines.push('👁 4 人局都可以偷睇骰');
-    if (c.reroll) lines.push('🔓 擲骰可重擲，鎖定先定案');
+    if (n === 4 && c.peek4) lines.push('👁 家規：4 人局都可以偷睇骰');
+    if (c.reroll) lines.push('🔓 家規：擲骰可重擲，鎖定先定案');
     return lines;
   },
 };
@@ -570,12 +580,26 @@ function applyRecruit(s, targets, h) {
   }
 }
 
+/** A seat that was awake at the theft hour saw who took the cheese. */
+function sawTheft(s, p) {
+  return s.cheese.gone && (p === s.cheese.by || s.wake[p].includes(s.cheese.hour));
+}
+
+/**
+ * Who the follower `f` knows the thief to be after the meeting: 6p and 8p meet
+ * the thief face to face; 7p followers only know the thief if they happened to
+ * watch the theft at their own hour (research: "who knows what at dawn").
+ */
+function followerKnowsThief(s, f) {
+  if (s.n !== 7) return thiefOf(s);
+  return sawTheft(s, f) ? thiefOf(s) : null;
+}
+
 function meetWindow(s) {
-  const thief = thiefOf(s);
   for (const f of s.followers) {
     if (!s.informed.includes(f)) s.informed.push(f);
     addNote(s, f, {
-      k: 'follower', h: null, thief: s.n === 7 ? null : thief,
+      k: 'follower', h: null, thief: followerKnowsThief(s, f),
       mates: s.followers.filter((x) => x !== f),
     });
   }
@@ -728,6 +752,9 @@ function explain(s) {
   lines.push(`最高票：${names(top)}（${max} 票）`);
   lines.push('票數：' + s.order.map((p) => `${nm(s, p)} ${counts[p] || 0}`).join(' · '));
 
+  const teamFollowers = s.followers.filter((f) => f !== fm);   // a recruited fall mouse never joins the thief team
+  const fmFollower = !!fm && s.followers.includes(fm);
+
   let summary;
   if (v.mode === 'solo') {
     summary = `背鍋鼠 ${nm(s, fm)} 成功畀人投中 — 一個人贏`;
@@ -735,28 +762,27 @@ function explain(s) {
     if (top.includes(thief)) lines.push(`就算大盜 ${nm(s, thief)} 都畀人揪出，背鍋鼠優先。`);
   } else if (v.mode === 'thief-tie') {
     summary = `大盜 ${nm(s, thief)} 贏 — 4 人局平票算大盜贏`;
-    lines.push(`4 人局：大盜 ${nm(s, thief)} 同 ${names(top.filter((p) => p !== thief))} 平票，所以大盜贏。`);
+    lines.push(`4 人局：大盜 ${nm(s, thief)} 同 ${names(top.filter((p) => p !== thief))} 平票，所以大盜贏（2023 年官方修訂）。`);
   } else if (v.mode === 'caught') {
     summary = `貪瞓鼠贏 — 大盜 ${nm(s, thief)} 畀人揪出`;
-    lines.push(`大盜 ${nm(s, thief)} 喺最高票入面${top.length > 1 ? '（平票都一齊開牌）' : ''}，所以貪瞓鼠贏。`);
-    if (s.followers.length) lines.push(`共犯 ${names(s.followers)} 跟大盜一齊輸。`);
-    if (fm) lines.push(`背鍋鼠 ${nm(s, fm)} 冇畀人投中，所以都輸。`);
+    lines.push(`大盜 ${nm(s, thief)} 喺最高票入面${top.length > 1 ? '（平票都一齊開牌，大盜照計畀人揪出）' : ''}，所以貪瞓鼠贏。`);
+    if (teamFollowers.length) lines.push(`共犯 ${names(teamFollowers)} 跟大盜一齊輸。`);
+    if (fm) lines.push(`背鍋鼠 ${nm(s, fm)} 唔喺最高票，所以都輸${fmFollower ? '（佢做咗共犯都一樣）' : ''}。`);
   } else {
     summary = `大盜隊贏 — ${nm(s, thief)} 逃過一劫`;
-    lines.push(`大盜 ${nm(s, thief)} 冇喺最高票入面，所以大盜同共犯贏。`);
-    const caughtFollowers = top.filter((p) => s.followers.includes(p));
-    if (caughtFollowers.length) lines.push(`共犯 ${names(caughtFollowers)} 畀人投中都唔緊要。`);
-    if (fm) lines.push(`背鍋鼠 ${nm(s, fm)} 冇畀人投中，所以輸。`);
+    lines.push(`大盜 ${nm(s, thief)} 唔喺最高票，所以${teamFollowers.length ? '大盜同共犯' : '大盜'}贏。`);
+    const caughtFollowers = top.filter((p) => teamFollowers.includes(p));
+    if (caughtFollowers.length) lines.push(`共犯 ${names(caughtFollowers)} 畀人投中都唔緊要，照贏。`);
+    if (fm) {
+      lines.push(fmFollower
+        ? `背鍋鼠 ${nm(s, fm)} 雖然做咗共犯，但佢淨係靠畀人投中先贏，所以輸。`
+        : `背鍋鼠 ${nm(s, fm)} 唔喺最高票，所以輸。`);
+    }
   }
 
-  lines.push(s.cheese.gone
-    ? `芝士喺${CLOCK[s.cheese.hour]}點鐘畀 ${nm(s, s.cheese.by)} 偷走。`
-    : '芝士冇人偷到（唔應該發生）。');
-  if (s.followers.length) {
-    lines.push(`共犯：${names(s.followers)}${fm && s.followers.includes(fm) ? `（${nm(s, fm)} 係背鍋鼠，淨係靠畀人投中先贏）` : ''}`);
-  } else {
-    lines.push('今局冇共犯。');
-  }
+  lines.push(s.followers.length ? `共犯：${names(s.followers)}` : '今局冇共犯。');
+  const recap = nightRecap(s);
+  lines.push('🌙 夜晚重溫：', ...recap);
   for (const p of s.order) {
     const tag = s.followers.includes(p) ? '（共犯）' : '';
     lines.push(`${nm(s, p)}：${ROLE_NAME[s.role[p]]}${tag} · 骰 ${s.dice[p].join(' ')} · ${s.wake[p].map((h) => CLOCK[h]).join('、')}點鐘醒`);
@@ -766,7 +792,42 @@ function explain(s) {
   for (const w of v.winners) {
     points[w] = v.mode === 'solo' ? 3 : (w === thief ? 2 : 1);
   }
-  return { winners: v.winners, summary, lines, points, mode: v.mode };
+  return { winners: v.winners, summary, lines, points, mode: v.mode, recap };
+}
+
+/**
+ * The night as nobody saw it live: one line per hour (who woke, the theft and
+ * who watched it, a peek and its result, a 5p pick, a 4p thief that waited),
+ * then the follower step for 6-8 players.
+ */
+function nightRecap(s) {
+  const thief = thiefOf(s);
+  const names = (ids) => ids.map((p) => nm(s, p)).join('、');
+  const out = [];
+  for (let h = 1; h <= 6; h++) {
+    const awake = s.order.filter((p) => s.wake[p].includes(h));
+    const bits = [];
+    if (s.cheese.gone && s.cheese.hour === h) {
+      const watched = awake.filter((p) => p !== thief);
+      bits.push(`大盜 ${nm(s, thief)} 偷走芝士${watched.length ? `（${names(watched)} 睇到）` : '（冇人睇到）'}`);
+    } else if (awake.includes(thief)) {
+      bits.push(s.cheese.gone && s.cheese.hour < h
+        ? `大盜 ${nm(s, thief)} 再醒，芝士早就冇咗`
+        : `大盜 ${nm(s, thief)} 醒咗，但揀咗遲啲先偷`);
+    }
+    if (s.n === 5 && s.recruitHour === h && s.followers.length) bits.push(`大盜揀咗 ${names(s.followers)} 做共犯`);
+    for (const p of s.order) {
+      const pk = s.peeked[p];
+      if (pk && pk.h === h) bits.push(`${nm(s, p)} 偷睇咗 ${nm(s, pk.target)} 粒骰（${pk.dice.join(' ')}）`);
+    }
+    const who = awake.length ? `${names(awake)} 醒咗` : '冇人醒';
+    out.push(`${CLOCK[h]}點鐘：${who}${bits.length ? ' — ' + bits.join('；') : ''}`);
+  }
+  if (s.n >= 6) {
+    const how = s.n === 6 ? '兩個互相認得' : s.n === 7 ? '兩位共犯互相認得，大盜冇同佢哋對望' : '三個互相認得';
+    out.push(`夜尾：大盜揀咗 ${names(s.followers)} 做共犯（${how}）`);
+  }
+  return out;
 }
 
 // ---------- views (whitelist) ----------
@@ -816,10 +877,52 @@ function buildView(s, pid) {
       pid: p, role: s.role[p], follower: s.followers.includes(p),
       dice: s.dice[p].slice(), wake: s.wake[p].slice(), thief: p === s.cheese.by,
     }));
+    v.recap = (s.outcome.recap ?? []).slice();
   }
 
   if (seat) seatView(s, seat, v);
+  v.hint = hintFor(s, seat, v);
   return v;
+}
+
+/**
+ * One line for the 💡 sheet (BACKLOG U1): what to do right now, for a
+ * first-timer. Built from the seat's own view only, so it can never say more
+ * than the screen already does. Never shown unless the player taps 💡.
+ */
+function hintFor(s, pid, v) {
+  if (!pid) {
+    if (s.phase === 'reveal') return HINT.reveal;
+    if (s.phase === 'over') return HINT.over;
+    return HINT.table[s.phase] ?? '';
+  }
+  const my = v.my;
+  switch (s.phase) {
+    case 'roll':
+      if (my.ready) return HINT.roll.wait;
+      if (!my.dice) return HINT.roll.look;
+      if (my.needsChoice && my.chosen == null) return HINT.roll.choose;
+      return HINT.roll.ready;
+    case 'night': {
+      const ns = v.nightSeat;
+      if (!ns?.awake) return HINT.night.sleep;
+      if (ns.meet) return HINT.night.meet;
+      if (ns.recruit) return HINT.night.recruit;
+      if (ns.steal?.can) return HINT.night.steal;
+      if (ns.peek?.mode === 'can') return HINT.night.peek;
+      if (my.role === THIEF) return HINT.night.thief;
+      return HINT.night.awake;
+    }
+    case 'day':
+      if (my.role === THIEF) return HINT.day.thief;
+      if (my.role === FMOUSE) return HINT.day.fallMouse;
+      if (my.follower) return HINT.day.follower;
+      return HINT.day.sleepyhead;
+    case 'vote': return v.myVote !== undefined ? HINT.voted : HINT.vote;
+    case 'reveal': return HINT.reveal;
+    case 'over': return HINT.over;
+    default: return '';
+  }
 }
 
 function publicReveal(s, v) {
@@ -897,7 +1000,7 @@ function nightFor(s, pid) {
   } else if (st.k === 'rec-meet') {
     out.meet = pid === thief
       ? { thief: null, mates: s.followers.slice() }
-      : { thief: s.n === 7 ? null : thief, mates: s.followers.filter((f) => f !== pid) };
+      : { thief: followerKnowsThief(s, pid), mates: s.followers.filter((f) => f !== pid) };
   }
   return out;
 }

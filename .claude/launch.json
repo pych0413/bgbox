@@ -20,6 +20,56 @@
         "5199"
       ],
       "port": 5199
+    },
+    {
+      "name": "polish-ui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5247"
+      ],
+      "port": 5247
+    },
+    {
+      "name": "draw-guess-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5251"
+      ],
+      "port": 5251
+    },
+    {
+      "name": "ui-shell-polish",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5274"
+      ],
+      "port": 5274
+    },
+    {
+      "name": "fake-artist-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5263"
+      ],
+      "port": 5263
+    },
+    {
+      "name": "core-polish",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5288"
+      ],
+      "port": 5288
     }
   ]
 }

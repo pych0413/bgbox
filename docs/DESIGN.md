@@ -473,7 +473,7 @@ full props again. All styles live in css/base.css under `.c-<name>`.
 | `SeatEditor` | `{ players, me, isHost, onMove(pid, index), onColor(pid, color), onKick(pid) }` |
 | `Scoreboard` | `{ players, scoreboard, history }` |
 | `ConfigForm` | `{ fields, value, onChange(cfg) }` — renders §3 Field[] (int, bool, select, seconds, roles, categories) |
-| `Canvas` | batch 2 — `{ mode: 'draw' \| 'view', ink, color, canDraw, oneStroke, onInk(payload) }` |
+| `Canvas` | `{ ink, canDraw, tools: 'none' \| 'full', color, width, oneStroke, minStrokeLen, colorOf(pid), onInk(payload), onStrokeEnd({ strokeId, length }), onShort() }` — see 15.10 |
 
 Helpers in `js/ui/dom.js`: `el(tag, attrs, ...kids)`, `$`, `$$`, `toast(text)`, `dieFace(value, sides)`.
 
@@ -492,6 +492,32 @@ api = {
 }
 ```
 `update(view, ctx)` — `ctx = { focus, paused, narrationMode, ink }`.
+
+### 15.10 Shared drawing (binding for Canvas, fake-artist, draw-guess)
+
+Wire format (already implemented in `js/core/session.js` `normalizeInk` / `applyInkBatch`):
+
+- A game UI sends strokes with `api.ink(payload)`:
+  `{ stroke: '<id>', pts: [[x, y], ...], end?: true, color?, width?, eraser? }` — x, y are
+  integers 0–1000 on a **square** canvas (uniform scale on every phone); ≤ 400 points per
+  batch; style keys only on the first batch of a stroke. Or `{ op: 'undo' }` (removes this
+  seat's last stroke) / `{ op: 'clear' }`.
+- Stroke ids are unique per device: `` `${seatId}-${counter}` ``.
+- Every phone receives the drawing as `ctx.ink = { epoch, strokes: [{ id, pid, pts, end, color?, width?, eraser? }] }`
+  in `update(view, ctx)`; strokes with `end: false` are still being drawn (render progressively).
+- The engine decides who may draw with `engine.canInk(state, pid)` and starts a fresh picture by
+  bumping `state.inkEpoch`. Ink never enters engine state, so an engine that needs to know a
+  stroke happened (fake artist turn order) receives a normal action from the UI
+  (`{ type: 'stroke', length }`) after `onStrokeEnd`.
+- Limits: 12,000 points per picture, 6,000 per stroke.
+
+`Canvas` behaviour: square, DPR-aware backing store, `touch-action: none`, no callout /
+magnifier / selection, pointer capture in try/catch, `pointercancel` ends the stroke,
+quadratic-midpoint smoothing, batches flushed every ~50 ms, keeps a margin from the left
+screen edge (iOS back-swipe). `tools: 'none'` = one colour, no toolbar; `'full'` = palette,
+3 widths, eraser, undo, clear. `oneStroke` stops input after one accepted stroke until props
+change. A completed stroke shorter than `minStrokeLen` (0–1000 units) is auto-undone and
+`onShort()` fires so the player may retry.
 
 ### 15.9 `docs/games/<id>.md` template
 

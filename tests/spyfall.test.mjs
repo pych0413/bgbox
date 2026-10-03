@@ -1483,3 +1483,441 @@ test('spyfall: fuzz — a bank that refills mid-list still never repeats a locat
     again.runRandom();
   }
 });
+
+// ============================================================
+// verified rules (docs/research/spyfall.md § Verification) — one test per corrected rule
+// ============================================================
+
+test('spyfall: rule — the uncaught second spy scores as a non-spy, first-accuser bonus included', () => {
+  const sim = playing(6, { seed: 56, config: { spies: 2 } });
+  const [s1, s2] = R(sim).spies;
+  const ns = nonSpies(sim);
+  sim.act(s2, { type: 'accuse', target: s1 });         // the other spy names s1 first; it fails
+  voteAll(sim, false);
+  settle(sim);
+  assert.equal(phase(sim), 'play');
+  sim.act(ns[0], { type: 'accuse', target: s1 });      // later mid-round vote succeeds
+  voteAll(sim, true);
+  settle(sim);
+  const e = sim.view('p1').end;
+  assert.equal(e.code, 'accused-spy');
+  assert.equal(e.caught, s1);
+  assert.equal(e.bonusTo, s2, 'the rulebook: the uncaught spy scores "as if he were a non-spy player"');
+  assert.equal(e.deltas[s2], 2, '+1 as a non-spy, +1 first accuser');
+  assert.equal(e.deltas[s1], 0);
+  for (const id of ns) assert.equal(e.deltas[id], 1);
+});
+
+test('spyfall: rule — two spies, one caught at the final vote: the other gets +1 as a non-spy and nobody a bonus', () => {
+  const sim = playing(6, { seed: 57, config: { spies: 2 } });
+  const [s1, s2] = R(sim).spies;
+  const ns = nonSpies(sim);
+  sim.act(ns[0], { type: 'accuse', target: s1 });      // names s1 mid-round, fails
+  voteAll(sim, false);
+  settle(sim);
+  timeUp(sim);
+  while (sim.view('p1').vote.suspect !== s1) { voteAll(sim, false); settle(sim); }
+  voteAll(sim, true);
+  settle(sim);
+  const e = sim.view('p1').end;
+  assert.equal(e.code, 'final-spy');
+  assert.equal(e.bonusTo, null);
+  assert.equal(e.deltas[s2], 1);
+  assert.equal(e.deltas[s1], 0);
+  for (const id of ns) assert.equal(e.deltas[id], 1, 'no bonus for the earlier accuser');
+});
+
+test('spyfall: rule — the spy may stop the clock again once a failed accusation resumes play', () => {
+  const sim = playing(5, { seed: 63 });
+  const spy = spyOf(sim);
+  const [x, y] = nonSpies(sim);
+  sim.act(x, { type: 'accuse', target: y });
+  assert.equal(sim.act(spy, { type: 'spy-stop' }), false, 'not while the vote is open');
+  voteAll(sim, false);
+  assert.equal(phase(sim), 'tally');
+  assert.equal(sim.act(spy, { type: 'spy-stop' }), false, 'not while the result is on screen');
+  settle(sim);
+  assert.equal(phase(sim), 'play');
+  assert.equal(sim.act(spy, { type: 'spy-stop' }), true, 'Russian v1.1: the spy regains the right to reveal');
+  assert.equal(phase(sim), 'guess');
+});
+
+test('spyfall: rule — at time-up the spy can no longer guess and the table is told not to name the location', () => {
+  const sim = playing(5, { seed: 64 });
+  timeUp(sim);
+  assert.equal(phase(sim), 'vote');
+  assert.equal(sim.act(spyOf(sim), { type: 'spy-stop' }), false);
+  const c = sim.cue().text;
+  assert.ok(c.includes('唔可以再估') && c.includes('唔好講出地點'), c);
+  const suspect = sim.view('p1').vote.suspect;
+  const voter = ids(sim).find((id) => id !== suspect);
+  assert.ok(sim.view(voter).hint.includes('唔好講出地點'));
+  assert.ok(sim.view(suspect).hint.includes('唔好講出地點'));
+});
+
+test('spyfall: rule — final vote: suspects in seat order from the dealer, each once, first conviction ends it (two spies too)', () => {
+  const sim = playing(7, { seed: 65, config: { spies: 2 } });
+  const order = ids(sim);
+  const d = R(sim).dealer;
+  timeUp(sim);
+  const seen = [];
+  // the third suspect is convicted with exactly one dissenter (allowed with two spies); the round ends there
+  for (let i = 0; i < 3; i++) {
+    const v = sim.view('p1').vote;
+    seen.push(v.suspect);
+    if (i < 2) voteAll(sim, false);
+    else v.voters.forEach((id, k) => sim.act(id, { type: 'vote', yes: k !== 0 }));
+    settle(sim);
+  }
+  assert.deepEqual(seen, [0, 1, 2].map((i) => order[(order.indexOf(d) + i) % 7]));
+  assert.equal(phase(sim), 'roundEnd');
+  assert.equal(sim.view('p1').end.suspect, seen[2]);
+});
+
+test('spyfall: option twoSpyThreshold=n-3 — two dissenters still convict, three do not', () => {
+  const run = (noes, seed) => {
+    const sim = playing(7, { seed, config: { spies: 2, twoSpyThreshold: 'n-3' } });
+    const [s1] = R(sim).spies;
+    const x = nonSpies(sim)[0];
+    sim.act(x, { type: 'accuse', target: s1 });
+    const v = sim.view('p1').vote;
+    assert.equal(v.maxNo, 2);
+    assert.equal(v.need, 4);
+    const voters = v.voters.filter((id) => id !== x);
+    voters.forEach((id, k) => sim.act(id, { type: 'vote', yes: k >= noes }));
+    return sim.view('p1').tally.convicted;
+  };
+  assert.equal(run(2, 66), true);
+  assert.equal(run(3, 67), false);
+  // hands mode: autoAct reports one "no" too many to convict
+  const h = playing(7, { seed: 68, config: { spies: 2, twoSpyThreshold: 'n-3', voteMode: 'hands' } });
+  const x = nonSpies(h)[0];
+  h.act(x, { type: 'accuse', target: R(h).spies[0] });
+  assert.deepEqual(engine.autoAct(h.state, x, h.ctx()), { type: 'verdict', no: 3 });
+  assert.equal(h.view('p1').rules.maxNo, 2);
+  h.act(x, { type: 'verdict', no: 2 });
+  assert.equal(h.view('p1').tally.convicted, true);
+});
+
+// ============================================================
+// backlog #8 — head-count presets with a reason, invalid compositions blocked
+// ============================================================
+
+test('spyfall: #8 presets — every head-count has presets with a readable reason, and every preset is valid', () => {
+  for (let n = 3; n <= 12; n++) {
+    const ps = game.config.presets(n);
+    assert.ok(ps.length >= 3, `n=${n}`);
+    assert.equal(ps[0].id, 'standard');
+    assert.equal(new Set(ps.map((p) => p.id)).size, ps.length, 'ids unique');
+    assert.ok(ps[0].reason.startsWith(`${n} 人：`), ps[0].reason);
+    const d = game.config.defaults(n);
+    assert.equal(ps[0].cfg.spies, d.spies, 'the standard preset is what defaults() gives');
+    assert.equal(ps[0].cfg.minutes, d.minutes);
+    for (const p of ps) {
+      assert.ok(p.label && Array.from(p.label).length <= 6, `short label: ${p.label}`);
+      assert.ok(p.reason && Array.from(p.reason).length <= 45, `short reason: ${p.reason}`);
+      const cfg = { ...d, ...p.cfg };
+      const v = game.config.validate(cfg, n);
+      assert.ok(v.ok, `n=${n} preset ${p.id}: ${v.message}`);
+      new Sim(game, { n, seed: n, config: cfg, banks }).runRandom();
+    }
+    assert.equal(ps.some((p) => p.id === 'two-spies'), n >= 6 && n <= 8, 'two-spy preset only where it is an alternative');
+  }
+  assert.match(game.config.presets(6)[0].reason, /6 人：1 個間諜 · 每局 7 分鐘 — 官方建議/);
+  assert.match(game.config.presets(9)[0].reason, /9 人：2 個間諜/);
+});
+
+test('spyfall: #8 validate blocks invalid compositions and option values; old saved configs still load', () => {
+  const v = (cfg, n) => game.config.validate({ ...game.config.defaults(n), ...cfg }, n);
+  for (const n of [3, 4, 5]) assert.equal(v({ spies: 2 }, n).ok, false, `2 spies at ${n}`);
+  assert.equal(v({ spies: 0 }, 6).ok, false);
+  assert.equal(v({ spies: 3 }, 12).ok, false);
+  assert.equal(v({ accuserBonus: 'everyone' }, 6).ok, false);
+  assert.equal(v({ twoSpyThreshold: 'n-4' }, 9).ok, false);
+  assert.equal(v({ antiStreak: 'yes' }, 6).ok, false);
+  assert.ok(v({ spies: 1 }, 12).warnings.some((w) => /2 個間諜/.test(w)), '12 with one spy is non-standard');
+  const old = { rounds: 3, minutes: 7, spies: 1, listSize: 24, voteMode: 'phone', categories: { cats: [] } };
+  assert.equal(game.config.validate(old, 6).ok, true, 'a config saved before the new keys existed');
+  const sim = new Sim(game, { n: 6, seed: 1, config: old, banks });
+  assert.equal(sim.state.cfg.accuserBonus, 'first-midround');
+  assert.equal(sim.state.cfg.twoSpyThreshold, 'n-2');
+  assert.equal(sim.state.cfg.antiStreak, false);
+  // tastes carry over from the last game
+  const prev = { ...game.config.defaults(6), accuserBonus: 'successful', twoSpyThreshold: 'n-3', antiStreak: true };
+  const next = game.config.defaults(9, prev);
+  assert.deepEqual([next.accuserBonus, next.twoSpyThreshold, next.antiStreak], ['successful', 'n-3', true]);
+});
+
+// ============================================================
+// backlog #20 — fair randomness
+// ============================================================
+
+test('spyfall: #20 — the first asker (round-1 dealer) is random over ALL seats, spy included, independent of the spy', () => {
+  const n = 5;
+  const asSeat = Object.fromEntries(ids(mk(n)).map((id) => [id, 0]));
+  let dealerIsSpy = 0;
+  const N = 1000;
+  for (let seed = 1; seed <= N; seed++) {
+    const sim = mk(n, { seed });
+    asSeat[R(sim).dealer]++;
+    if (R(sim).spies.includes(R(sim).dealer)) dealerIsSpy++;
+    if (seed === 1) { readyAll(sim); assert.equal(sim.view('p1').floor.holder, R(sim).dealer, 'the dealer asks first'); }
+  }
+  for (const [id, c] of Object.entries(asSeat)) assert.ok(c > 140 && c < 260, `${id} dealt ${c}/${N}`);
+  assert.ok(dealerIsSpy > 140 && dealerIsSpy < 260, `dealer is the spy ${dealerIsSpy}/${N} (expect about ${N / n})`);
+});
+
+test('spyfall: #20 option antiStreak — off by default; on, nobody is the spy two rounds running', () => {
+  assert.equal(game.config.defaults(5).antiStreak, false, 'the rules doc does not recommend it, so it is off');
+  const repeats = (antiStreak, n, spies) => {
+    let hits = 0;
+    for (let seed = 1; seed <= 15; seed++) {
+      const sim = mk(n, { seed, config: { rounds: 10, listSize: 16, antiStreak, spies } });
+      playRounds(sim);
+      const hs = sim.state.history;
+      for (let i = 1; i < hs.length; i++) if (hs[i].spies.some((id) => hs[i - 1].spies.includes(id))) hits++;
+    }
+    return hits;
+  };
+  assert.ok(repeats(false, 3, 1) > 0, 'without the option a spy can repeat (uniform draw)');
+  assert.equal(repeats(true, 3, 1), 0);
+  assert.equal(repeats(true, 6, 2), 0);
+});
+
+// ============================================================
+// backlog U1 — on-demand teaching text
+// ============================================================
+
+test('spyfall: U1 — rules.quick is at most 6 short lines; every role says what you do and how you win', () => {
+  const q = game.rules.quick;
+  assert.ok(q.length >= 3 && q.length <= 6);
+  for (const l of q) assert.ok(Array.from(l).length <= 40, `short quick line: ${l}`);
+  assert.deepEqual(game.rules.roles.map((r) => r.id).sort(), ['agent', 'spy']);
+  for (const r of game.rules.roles) {
+    assert.ok(r.name && r.emoji && r.team && r.text);
+    assert.ok(r.text.includes('點贏'), `${r.id} says how to win`);
+    assert.ok(r.text.split('點贏')[0].length >= 15, `${r.id} says what you do`);
+  }
+});
+
+test('spyfall: U1 — every phase has a hint for every seat and spectators, and hints never depend on who the spy is', () => {
+  const phases = new Set();
+  for (const [n, mode, spies] of [[3, 'phone', 1], [5, 'hands', 1], [7, 'phone', 2], [9, 'hands', 2]]) {
+    for (let seed = 1; seed <= 6; seed++) {
+      const sim = mk(n, { seed: seed * 31 + n, config: { rounds: 2, voteMode: mode, spies } });
+      const check = (s) => {
+        const st = s.state;
+        phases.add(st.phase);
+        // the same table with a different spy (every other secret left alone)
+        const alt = clone(st);
+        const order = ids(s);
+        alt.round.spies = st.round.spies.map((sp) => order[(order.indexOf(sp) + 1) % order.length]);
+        for (const pid of [...order, null, 'late-joiner']) {
+          const h = engine.view(st, pid).hint;
+          assert.ok(typeof h === 'string' && h.length > 0 && Array.from(h).length <= 50, `${st.phase}: ${h}`);
+          assert.equal(engine.view(alt, pid).hint, h, `hint for ${pid} in ${st.phase} depends on the spy`);
+        }
+      };
+      check(sim);
+      sim.runRandom({ onStep: check });
+    }
+  }
+  for (const ph of ['reveal', 'play', 'vote', 'tally', 'guess', 'roundEnd', 'over']) assert.ok(phases.has(ph), `no hint checked in ${ph}`);
+  // a few concrete lines
+  const sim = playing(4, { seed: 9 });
+  const d = R(sim).dealer;
+  assert.match(sim.view(d).hint, /輪到你/);
+  assert.match(sim.view(ids(sim).find((x) => x !== d)).hint, /指控/);
+});
+
+// ============================================================
+// backlog #10 — results that explain why
+// ============================================================
+
+test('spyfall: #10 — result lines list every round (location, spies, who scored) and explain the last round', () => {
+  const sim = mk(5, { seed: 84, config: { rounds: 2 } });
+  readyAll(sim);
+  const spy1 = spyOf(sim);
+  const [x, y] = nonSpies(sim);
+  const roleY = R(sim).roles[y];
+  sim.act(x, { type: 'accuse', target: y });           // an innocent convicted mid-round
+  voteAll(sim, true);
+  settle(sim);
+  const e1 = sim.view('p1').end;
+  assert.equal(e1.code, 'accused-innocent');
+  assert.ok(e1.lines.some((l) => l.includes(`「${roleY}」`)), 'the innocent’s hidden role is explained');
+  sim.act('p1', { type: 'next-round' });
+  readyAll(sim);
+  const spy2 = spyOf(sim);
+  const [a] = nonSpies(sim);
+  sim.act(a, { type: 'accuse', target: spy2 });        // names the spy, fails…
+  voteAll(sim, false);
+  settle(sim);
+  wrongGuess(sim);                                     // …then the spy guesses wrong
+  const e2 = sim.view('p1').end;
+  assert.ok(e2.lines.some((l) => l.includes('指控過佢嘅人冇額外分')), 'explains why the accuser got nothing extra');
+  sim.act('p1', { type: 'next-round' });
+  const res = sim.result();
+  const [l1, l2] = res.lines;
+  const name = (id) => sim.players.find((p) => p.id === id).name;
+  assert.ok(l1.includes('第 1 局') && l1.includes(sim.state.list[sim.state.history[0].loc].name), l1);
+  assert.ok(l1.includes(name(spy1)) && l1.includes(`${name(spy1)} +4`), l1);
+  assert.ok(l2.includes('第 2 局') && l2.includes('非間諜各 +1'), l2);
+  assert.ok(res.lines.includes('第 2 局點解咁計：'));
+  assert.ok(res.lines.some((l) => l.includes('指控過佢嘅人冇額外分')));
+});
+
+// ============================================================
+// ui.js smoke test — a minimal fake DOM, one mounted UI per seat + the table
+// ============================================================
+
+class FNode {}
+class FText extends FNode {
+  constructor(t) { super(); this.data = String(t); this.parentNode = null; }
+  get textContent() { return this.data; }
+}
+class FEl extends FNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.parentNode = null; this.children = []; this.attrs = {}; this.listeners = {};
+    this.cls = new Set(); this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {};
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new FText(v)])); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof FNode ? k : new FText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const fakeDocument = { createElement: (t) => new FEl(t), createTextNode: (t) => new FText(t) };
+const walkEl = (n, fn) => { fn(n); if (n.children) for (const c of n.children) walkEl(c, fn); };
+const findEls = (root, pred) => { const out = []; walkEl(root, (n) => { if (n instanceof FEl && pred(n)) out.push(n); }); return out; };
+const serializeEl = (n) => (n instanceof FText ? n.data
+  : JSON.stringify([n.tag, [...n.cls].sort(), n.attrs, n.hidden, n.disabled, n.styleMap, n.dataset, n.children.map(serializeEl)]));
+/** Visible = neither it nor an ancestor is hidden. */
+const shown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+
+function stubSpyfallComponents() {
+  const E = (tag, cls) => { const n = new FEl(tag); if (cls) n.className = cls; return n; };
+  const RoleCard = (p0) => {
+    const root = E('div', 'c-rolecard');
+    const api = { el: root, update(p) { root.textContent = p.role ? `${p.role.name}|${p.role.text}` : ''; }, close() {}, destroy() { root.remove(); } };
+    api.update(p0);
+    return api;
+  };
+  const Timer = (p0) => {
+    const root = E('div', 'c-timer');
+    const api = { el: root, update(p) { root.textContent = String(p.deadline); }, destroy() { root.remove(); } };
+    api.update(p0);
+    return api;
+  };
+  const PlayerPicker = (p0) => {
+    const root = E('div', 'c-playerpicker');
+    const api = { el: root, update(p) { root.textContent = (p.players ?? []).map((x) => x.id).join(','); }, destroy() { root.remove(); } };
+    api.update(p0);
+    return api;
+  };
+  return { RoleCard, Timer, PlayerPicker };
+}
+
+async function withSpyfallUi(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node };
+  globalThis.document = fakeDocument;
+  globalThis.Node = FNode;
+  try {
+    return await fn(await import('../js/games/spyfall/ui.js'));
+  } finally {
+    if (saved.document === undefined) delete globalThis.document; else globalThis.document = saved.document;
+    if (saved.Node === undefined) delete globalThis.Node; else globalThis.Node = saved.Node;
+  }
+}
+
+test('spyfall ui: every phase renders on every seat and the table, idempotently, with the verified vote texts', async () => {
+  await withSpyfallUi(async (ui) => {
+    const comps = stubSpyfallComponents();
+    const seen = new Set();
+    const cases = [
+      [5, { voteMode: 'phone' }], [5, { voteMode: 'hands' }],
+      [7, { voteMode: 'hands', spies: 2 }], [7, { voteMode: 'hands', spies: 2, twoSpyThreshold: 'n-3' }],
+      [9, { voteMode: 'phone', spies: 2 }],
+    ];
+    for (const [n, cfg] of cases) {
+      for (let seed = 1; seed <= 2; seed++) {
+        const sim = mk(n, { seed: seed * 17 + n, config: { rounds: 2, ...cfg } });
+        const seats = [...ids(sim), null].map((pid) => {
+          const root = new FEl('div');
+          const api = {
+            me: pid, players: sim.players, isHost: pid === 'p1', meta: game.meta, config: sim.state.cfg,
+            send: () => {}, ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+          };
+          return { pid, root, handle: ui.mount(root, api) };
+        });
+        const render = (s) => {
+          for (const seat of seats) {
+            const v = s.view(seat.pid);
+            seen.add(v.phase);
+            seat.handle.update(v, { focus: null, paused: false });
+            const a = serializeEl(seat.root);
+            seat.handle.update(clone(v), { focus: null, paused: false });
+            assert.equal(serializeEl(seat.root), a, `update() not idempotent for ${seat.pid ?? 'table'} in ${v.phase}`);
+            const text = seat.root.textContent;
+            if (v.phase === 'vote' && v.vote.kind === 'final') assert.ok(text.includes('唔好講出地點'), 'final-vote reminder');
+            if (v.phase === 'vote' && v.vote.kind === 'accuse') assert.ok(text.includes('唔好講理由'));
+            if (v.phase === 'vote' && v.vote.mode === 'hands' && seat.pid === v.vote.reporter) {
+              const box = findEls(seat.root, (x) => x.cls.has('sf-hands-btns') && shown(x))[0];
+              assert.ok(box, 'reporter sees the result buttons');
+              assert.equal(box.children.length, v.vote.maxNo + 2, 'one button per allowed "no" count, plus "too many"');
+            }
+            if (v.vote && v.vote.maxNo > 0) assert.ok(text.includes(`最多 ${v.vote.maxNo} 個人反對`), 'threshold text follows maxNo');
+          }
+        };
+        render(sim);
+        sim.runRandom({ onStep: render });
+        for (const seat of seats) seat.handle.destroy();
+      }
+    }
+    for (const ph of ['reveal', 'play', 'vote', 'tally', 'guess', 'roundEnd', 'over']) assert.ok(seen.has(ph), `ui never rendered ${ph}`);
+  });
+});
+
+test('spyfall ui: the hands-mode buttons send verdicts the engine accepts, including "too many"', async () => {
+  await withSpyfallUi(async (ui) => {
+    const comps = stubSpyfallComponents();
+    for (const cfg of [{ spies: 1 }, { spies: 2 }, { spies: 2, twoSpyThreshold: 'n-3' }]) {
+      const sim = playing(7, { seed: 77, config: { voteMode: 'hands', ...cfg } });
+      const x = nonSpies(sim)[0];
+      sim.act(x, { type: 'accuse', target: R(sim).spies[0] });
+      const sent = [];
+      const root = new FEl('div');
+      const handle = ui.mount(root, {
+        me: x, players: sim.players, isHost: false, meta: game.meta, config: sim.state.cfg,
+        send: (a) => sent.push(a), ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+      });
+      handle.update(sim.view(x), {});
+      const btns = findEls(root, (n) => n.cls.has('sf-hands-btns'))[0].children;
+      for (const b of btns) for (const f of b.listeners.click ?? []) f({});
+      const maxNo = sim.view(x).vote.maxNo;
+      assert.deepEqual(sent.map((a) => a.no), Array.from({ length: maxNo + 2 }, (_, i) => i));
+      for (const a of sent) assert.ok(sim.legal(x).some((l) => l.type === 'verdict' && l.no === a.no), `verdict ${a.no} is legal`);
+      assert.equal(sim.act(x, sent[sent.length - 1]), true);
+      assert.equal(sim.view(x).tally.convicted, false, '"too many" never convicts');
+      handle.destroy();
+    }
+  });
+});
