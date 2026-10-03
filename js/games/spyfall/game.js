@@ -26,7 +26,7 @@
 // state.list is the PUBLIC location list (name, emoji, category only).
 // ============================================================
 
-import { HOST, ACT, pick, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=20261003102525';
+import { HOST, ACT, pick, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=20261003164441';
 
 // ------------------------------------------------------------
 // constants

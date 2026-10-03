@@ -29,7 +29,7 @@
 // button opens it for this turn; the next time `compact` switches on it folds again.
 // ============================================================
 
-import { el } from '../dom.js?v=20261003102525';
+import { el } from '../dom.js?v=20261003164441';
 
 /** Why the line did not come out (app.state.narration.reason) → what the host is told. */
 const STALL_TEXT = {

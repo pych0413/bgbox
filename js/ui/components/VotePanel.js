@@ -22,8 +22,8 @@
 // shared table does not lock somebody in.
 // ============================================================
 
-import { el } from '../dom.js?v=20261003102525';
-import { sfx } from '../../core/sfx.js?v=20261003102525';
+import { el } from '../dom.js?v=20261003164441';
+import { sfx } from '../../core/sfx.js?v=20261003164441';
 
 const ABSTAIN = '@abstain';
 

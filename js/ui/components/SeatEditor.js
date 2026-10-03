@@ -20,8 +20,8 @@
 // the list still scrolls normally everywhere else.
 // ============================================================
 
-import { el, sig } from '../dom.js?v=20261003102525';
-import { sfx } from '../../core/sfx.js?v=20261003102525';
+import { el, sig } from '../dom.js?v=20261003164441';
+import { sfx } from '../../core/sfx.js?v=20261003164441';
 
 const DEFAULT_HINT = '跟返你哋真實坐位次序排，咁輪流嗰陣先唔會亂。';
 

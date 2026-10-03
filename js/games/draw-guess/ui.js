@@ -29,7 +29,7 @@
 // Only api.components (Cover, Timer, Canvas) and plain DOM are used.
 // ============================================================
 
-import * as S from './script.js?v=20261003102525';
+import * as S from './script.js?v=20261003164441';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);

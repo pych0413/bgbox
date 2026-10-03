@@ -34,8 +34,8 @@
 // potion, guardLast, notes, rec (recap), cur.sel / cur.votes before the reveal.
 // ============================================================
 
-import { ACT, HOST, seatOrder, shuffle, rint, pick as pickOne, tally } from '../../core/engine-kit.js?v=20261003102525';
-import * as S from './script.js?v=20261003102525';
+import { ACT, HOST, seatOrder, shuffle, rint, pick as pickOne, tally } from '../../core/engine-kit.js?v=20261003164441';
+import * as S from './script.js?v=20261003164441';
 
 // ---------- constants ----------
 

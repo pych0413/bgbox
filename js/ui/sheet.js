@@ -11,7 +11,7 @@
 // at once (the newest is on top); each locks page scroll while it lives.
 // ============================================================
 
-import { el, lockScroll, unlockScroll } from './dom.js?v=20261003102525';
+import { el, lockScroll, unlockScroll } from './dom.js?v=20261003164441';
 
 export function openSheet({ title = '', cls = '', render = () => [], onClose } = {}) {
   let open = true;
