@@ -16,8 +16,8 @@
 // drawer sends { type: 'done' } after drawing on the real paper.
 // ============================================================
 
-import { HOST, ACT, rint, seatOrder, tally, nextSeat } from '../../core/engine-kit.js?v=20261003164441';
-import * as S from './script.js?v=20261003164441';
+import { HOST, ACT, rint, seatOrder, tally, nextSeat } from '../../core/engine-kit.js?v=20261003171423';
+import * as S from './script.js?v=20261003171423';
 
 // ---------- constants ----------
 

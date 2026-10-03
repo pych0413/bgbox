@@ -1,4 +1,4 @@
-import * as g from './game.js?v=20261003164441';
-import { mount } from './ui.js?v=20261003164441';
+import * as g from './game.js?v=20261003171423';
+import { mount } from './ui.js?v=20261003171423';
 
 export default { ...g, ui: { mount } };

@@ -49,14 +49,14 @@
 //           (room.hostBack). The signalling server is rejoined at once (same code).
 // ============================================================
 
-import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003164441';
-import { hasPeer } from './net.js?v=20261003164441';
-import { Room } from './room.js?v=20261003164441';
-import { createBag } from './bag.js?v=20261003164441';
-import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003164441';
-import { cryptoRng } from './engine-kit.js?v=20261003164441';
-import { makeStore, uid, keepAwake, isRoomCode, connLog as pageLog } from './util.js?v=20261003164441';
-import { GAMES } from '../games/registry.js?v=20261003164441';
+import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003171423';
+import { hasPeer } from './net.js?v=20261003171423';
+import { Room } from './room.js?v=20261003171423';
+import { createBag } from './bag.js?v=20261003171423';
+import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003171423';
+import { cryptoRng } from './engine-kit.js?v=20261003171423';
+import { makeStore, uid, keepAwake, isRoomCode, connLog as pageLog } from './util.js?v=20261003171423';
+import { GAMES } from '../games/registry.js?v=20261003171423';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;

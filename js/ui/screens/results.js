@@ -11,11 +11,11 @@
 //    navigator.share (iOS only allows it inside a real tap).
 // ============================================================
 
-import { el, sig, toast } from '../dom.js?v=20261003164441';
-import { sfx } from '../../core/sfx.js?v=20261003164441';
-import { Scoreboard, Canvas } from '../components/index.js?v=20261003164441';
-import { resultSections, sectionsOpen, pictureFileName } from '../logic.js?v=20261003164441';
-import { paintStrokes } from '../ink.js?v=20261003164441';
+import { el, sig, toast } from '../dom.js?v=20261003171423';
+import { sfx } from '../../core/sfx.js?v=20261003171423';
+import { Scoreboard, Canvas } from '../components/index.js?v=20261003171423';
+import { resultSections, sectionsOpen, pictureFileName } from '../logic.js?v=20261003171423';
+import { paintStrokes } from '../ink.js?v=20261003171423';
 
 const CONFETTI = ['🎉', '✨', '🧀', '🎊', '⭐'];
 const PNG_PX = 1080;              // the picture itself; a strip underneath says what and when

@@ -37,8 +37,8 @@
 //  - result.points = { pid: n } for winners only.
 // ============================================================
 
-import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=20261003164441';
-import WORDS from '../../data/undercover-words.js?v=20261003164441';   // only to list the categories; words are drawn through ctx.bag
+import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=20261003171423';
+import WORDS from '../../data/undercover-words.js?v=20261003171423';   // only to list the categories; words are drawn through ctx.bag
 
 // ---------- constants ----------
 

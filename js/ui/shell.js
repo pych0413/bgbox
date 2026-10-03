@@ -28,18 +28,18 @@
 //    if it is missing they stay greyed out as 「即將推出」.
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261003164441';
-import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=20261003164441';
-import * as sfxMod from '../core/sfx.js?v=20261003164441';
-import { createTableTimer } from './timer.js?v=20261003164441';
-import { createStatus } from './status.js?v=20261003164441';
-import { openSettings, applyTextSize } from './settings.js?v=20261003164441';
-import { openPreflight } from './preflight.js?v=20261003164441';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003164441';
-import { mountJoin } from './screens/join.js?v=20261003164441';
-import { mountLobby } from './screens/lobby.js?v=20261003164441';
-import { mountPlay } from './screens/play.js?v=20261003164441';
-import { mountResults } from './screens/results.js?v=20261003164441';
+import { el, toast } from './dom.js?v=20261003171423';
+import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=20261003171423';
+import * as sfxMod from '../core/sfx.js?v=20261003171423';
+import { createTableTimer } from './timer.js?v=20261003171423';
+import { createStatus } from './status.js?v=20261003171423';
+import { openSettings, applyTextSize } from './settings.js?v=20261003171423';
+import { openPreflight } from './preflight.js?v=20261003171423';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003171423';
+import { mountJoin } from './screens/join.js?v=20261003171423';
+import { mountLobby } from './screens/lobby.js?v=20261003171423';
+import { mountPlay } from './screens/play.js?v=20261003171423';
+import { mountResults } from './screens/results.js?v=20261003171423';
 
 const MUTE_KEY = 'ct:muted';             // v1 key, so the preference survives the upgrade
 const NARR_KEY = 'bgb:narr';
@@ -64,7 +64,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=20261003164441');
+    const m = await import('../games/registry.js?v=20261003171423');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);

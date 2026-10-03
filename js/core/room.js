@@ -42,10 +42,10 @@
 // paused with the game's 暫停, kept in the snapshot.
 // ============================================================
 
-import { HOST, ACT, clone, cryptoRng } from './engine-kit.js?v=20261003164441';
-import { Session } from './session.js?v=20261003164441';
-import { PROTOCOL } from './transport.js?v=20261003164441';
-import { uid } from './util.js?v=20261003164441';
+import { HOST, ACT, clone, cryptoRng } from './engine-kit.js?v=20261003171423';
+import { Session } from './session.js?v=20261003171423';
+import { PROTOCOL } from './transport.js?v=20261003171423';
+import { uid } from './util.js?v=20261003171423';
 
 export const PALETTE = ['#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6',
   '#2dd4bf', '#facc15', '#a3e635', '#fb923c', '#60a5fa', '#e879f9', '#94a3b8', '#fda4af', '#86efac', '#fde68a'];

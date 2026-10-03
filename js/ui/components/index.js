@@ -3,20 +3,20 @@
 // `components` bundle the shell hands to game UIs as api.components.
 // ============================================================
 
-import { dieFace } from '../dom.js?v=20261003164441';
-import { Cover, closeAllCovers } from './Cover.js?v=20261003164441';
-import { RoleCard, teamStyle } from './RoleCard.js?v=20261003164441';
-import { DiceCup } from './DiceCup.js?v=20261003164441';
-import { PlayerPicker } from './PlayerPicker.js?v=20261003164441';
-import { VotePanel } from './VotePanel.js?v=20261003164441';
-import { Timer } from './Timer.js?v=20261003164441';
-import { Canvas } from './Canvas.js?v=20261003164441';
-import { RulesSheet } from './RulesSheet.js?v=20261003164441';
-import { NarratorBar } from './NarratorBar.js?v=20261003164441';
-import { PassGate } from './PassGate.js?v=20261003164441';
-import { SeatEditor } from './SeatEditor.js?v=20261003164441';
-import { Scoreboard } from './Scoreboard.js?v=20261003164441';
-import { ConfigForm } from './ConfigForm.js?v=20261003164441';
+import { dieFace } from '../dom.js?v=20261003171423';
+import { Cover, closeAllCovers } from './Cover.js?v=20261003171423';
+import { RoleCard, teamStyle } from './RoleCard.js?v=20261003171423';
+import { DiceCup } from './DiceCup.js?v=20261003171423';
+import { PlayerPicker } from './PlayerPicker.js?v=20261003171423';
+import { VotePanel } from './VotePanel.js?v=20261003171423';
+import { Timer } from './Timer.js?v=20261003171423';
+import { Canvas } from './Canvas.js?v=20261003171423';
+import { RulesSheet } from './RulesSheet.js?v=20261003171423';
+import { NarratorBar } from './NarratorBar.js?v=20261003171423';
+import { PassGate } from './PassGate.js?v=20261003171423';
+import { SeatEditor } from './SeatEditor.js?v=20261003171423';
+import { Scoreboard } from './Scoreboard.js?v=20261003171423';
+import { ConfigForm } from './ConfigForm.js?v=20261003171423';
 
 export {
   Cover, closeAllCovers, RoleCard, teamStyle, DiceCup, PlayerPicker, VotePanel, Timer, Canvas,
