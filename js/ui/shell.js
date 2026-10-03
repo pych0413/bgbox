@@ -27,14 +27,14 @@
 //    if it is missing they stay greyed out as 「即將推出」.
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261003075532';
-import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=20261003075532';
-import { sfx, setMuted, primeAudio } from '../core/sfx.js?v=20261003075532';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003075532';
-import { mountJoin } from './screens/join.js?v=20261003075532';
-import { mountLobby } from './screens/lobby.js?v=20261003075532';
-import { mountPlay } from './screens/play.js?v=20261003075532';
-import { mountResults } from './screens/results.js?v=20261003075532';
+import { el, toast } from './dom.js?v=20261003075613';
+import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=20261003075613';
+import { sfx, setMuted, primeAudio } from '../core/sfx.js?v=20261003075613';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003075613';
+import { mountJoin } from './screens/join.js?v=20261003075613';
+import { mountLobby } from './screens/lobby.js?v=20261003075613';
+import { mountPlay } from './screens/play.js?v=20261003075613';
+import { mountResults } from './screens/results.js?v=20261003075613';
 
 const RESUME_KEY = 'bgb:resume';   // written by core/client.js; the shell only reads and clears it
 const RESUME_TTL = 8 * 60 * 60 * 1000;   // 8h — long enough for an evening of games
@@ -58,7 +58,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=20261003075532');
+    const m = await import('../games/registry.js?v=20261003075613');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);

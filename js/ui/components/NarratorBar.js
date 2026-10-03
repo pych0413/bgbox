@@ -16,7 +16,7 @@
 // The bar never speaks by itself: the app speaks cues and reports them done.
 // ============================================================
 
-import { el } from '../dom.js?v=20261003075532';
+import { el } from '../dom.js?v=20261003075613';
 
 const MODES = [
   ['voice', '🔊 語音'],

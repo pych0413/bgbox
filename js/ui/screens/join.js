@@ -4,10 +4,10 @@
 // drops in), then your name.
 // ============================================================
 
-import { el, dieFace, addPips, toast } from '../dom.js?v=20261003075532';
-import { sfx } from '../../core/sfx.js?v=20261003075532';
-import { isRoomCode, CODE_LEN } from '../../core/util.js?v=20261003075532';
-import { friendlyError } from './home.js?v=20261003075532';
+import { el, dieFace, addPips, toast } from '../dom.js?v=20261003075613';
+import { sfx } from '../../core/sfx.js?v=20261003075613';
+import { isRoomCode, CODE_LEN } from '../../core/util.js?v=20261003075613';
+import { friendlyError } from './home.js?v=20261003075613';
 
 const NAME_MAX = 12;
 

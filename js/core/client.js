@@ -12,13 +12,13 @@
 // narrator.prime() as its FIRST statement, before any await.
 // ============================================================
 
-import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003075532';
-import { Room } from './room.js?v=20261003075532';
-import { createBag } from './bag.js?v=20261003075532';
-import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003075532';
-import { cryptoRng } from './engine-kit.js?v=20261003075532';
-import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003075532';
-import { GAMES } from '../games/registry.js?v=20261003075532';
+import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003075613';
+import { Room } from './room.js?v=20261003075613';
+import { createBag } from './bag.js?v=20261003075613';
+import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003075613';
+import { cryptoRng } from './engine-kit.js?v=20261003075613';
+import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003075613';
+import { GAMES } from '../games/registry.js?v=20261003075613';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;

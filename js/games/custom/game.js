@@ -19,7 +19,7 @@
 //    the active preset.
 // ============================================================
 
-import { seatOrder, shuffle, rollDie, note } from '../../core/engine-kit.js?v=20261003075532';
+import { seatOrder, shuffle, rollDie, note } from '../../core/engine-kit.js?v=20261003075613';
 
 // ---------- limits ----------
 

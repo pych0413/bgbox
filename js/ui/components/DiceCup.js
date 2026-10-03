@@ -22,13 +22,13 @@
 // a shake only rolls the cup that is actually on screen.
 // ============================================================
 
-import { el, dieFace, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=20261003075532';
-import { sfx } from '../../core/sfx.js?v=20261003075532';
-import { lsGet, lsSet } from '../../core/util.js?v=20261003075532';
+import { el, dieFace, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=20261003075613';
+import { sfx } from '../../core/sfx.js?v=20261003075613';
+import { lsGet, lsSet } from '../../core/util.js?v=20261003075613';
 import {
   ShakeDetector, motionSupported, needsMotionPermission, requestMotionPermission,
-} from '../../core/shake.js?v=20261003075532';
-import { Cover } from './Cover.js?v=20261003075532';
+} from '../../core/shake.js?v=20261003075613';
+import { Cover } from './Cover.js?v=20261003075613';
 
 // The cup is drawn upside-down: wide rim at the bottom, flat base on top.
 function cupSvg() {

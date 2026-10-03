@@ -8,7 +8,7 @@
 // "connect to cheesethief-v1-<CODE>".
 // ============================================================
 
-import { makeRoomCode, sleep } from './util.js?v=20261003075532';
+import { makeRoomCode, sleep } from './util.js?v=20261003075613';
 
 const NS = 'cheesethief-v1-';
 export const peerIdFor = (code) => NS + String(code);
