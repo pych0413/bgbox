@@ -27,11 +27,13 @@
 .ct-banner.big { font-size: 1.5rem; padding: 1.125rem 1rem; }
 .ct-over.won .ct-banner { background: linear-gradient(180deg, rgba(78,201,122,.28), rgba(78,201,122,.08)); border-color: rgba(78,201,122,.5); color: #8fe3ad; }
 
-.ct-badge {
-  text-align: center; font-size: .8125rem; font-weight: 600; line-height: 1.6;
-  padding: .625rem .875rem; border-radius: var(--radius);
-  background: rgba(228,87,61,.12); border: 1px solid rgba(228,87,61,.4); color: #ffb3a1;
+/* the dawn re-check: identical on every phone, under the role card (never a top banner) */
+.ct-recheck {
+  margin: -.25rem 0 0; text-align: center; font-size: .8125rem; line-height: 1.6; font-weight: 600;
+  padding: .5rem .75rem; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px dashed var(--line); color: var(--text);
 }
+.ct-recheck.is-done { font-weight: 400; color: var(--text-dim); border-style: solid; }
 
 /* ---------- roll ---------- */
 
@@ -45,7 +47,8 @@
 /* ---------- night ---------- */
 
 .ct-night { gap: .625rem; min-height: calc(100dvh - 8.5rem); -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-.ct-n-head { display: flex; align-items: center; justify-content: center; gap: .625rem; padding-top: .25rem; }
+.ct-n-head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: .5rem; padding-top: .25rem; }
+.ct-n-mid { display: flex; align-items: center; justify-content: center; gap: .625rem; }
 .ct-n-icon { font-size: 1.75rem; line-height: 1; }
 .ct-n-title { font-size: 1.5rem; letter-spacing: .12em; }
 
@@ -55,7 +58,7 @@
 @keyframes ct-pulse { 0%, 100% { opacity: .15; } 50% { opacity: .5; } }
 
 .ct-panel {
-  height: 12rem; overflow-y: auto; overscroll-behavior: contain;
+  height: 12.5rem; overflow-y: auto; overscroll-behavior: contain;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
   padding: .875rem 1rem;
   display: flex; flex-direction: column; gap: .5rem;
@@ -69,10 +72,30 @@
 .ct-line.cheese.hot { color: #ffb3a1; font-weight: 700; }
 .ct-line.role { color: #bfe9cf; }
 
-.ct-peekwrap .c-cover { aspect-ratio: 4 / 1; margin-bottom: 0; }
-.ct-peekfront { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem; height: 100%; padding: .25rem; }
+/* the peek result: first thing in the card, one compact row, so it never sits below the fold */
+.ct-peekwrap { flex: none; }
+.ct-peekwrap .c-cover { aspect-ratio: auto; height: 4rem; margin-bottom: 0; }
+.ct-peekfront { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: .75rem; height: 100%; padding: .25rem .5rem; }
 .ct-peekfront .die { width: 2.5rem; height: 2.5rem; border-radius: .625rem; font-size: 1.25rem; padding: .3125rem; }
-.ct-peeklabel { font-size: .8125rem; font-weight: 700; color: var(--cheese-2); }
+.ct-peeklabel { font-size: .875rem; font-weight: 700; color: var(--cheese-2); }
+
+.ct-peekwrap .c-cover-face { flex-direction: row; padding: .25rem .75rem; gap: .625rem; }
+.ct-peekwrap .c-cover-art { font-size: 1.75rem; }
+
+/* your own dice at night: a small silent cover in the title row, the same on every phone */
+.ct-mydice { justify-self: end; width: min(100%, 6.75rem); }
+.ct-mydice .c-cover { aspect-ratio: auto; height: 2.5rem; margin-bottom: 0; border-radius: .75rem; }
+.ct-mydice .c-cover-face { flex-direction: row; padding: .125rem .5rem; gap: .375rem; border-radius: .75rem; }
+.ct-mydice .c-cover-art { font-size: 1.125rem; }
+.ct-mydice .c-cover-label { font-size: .75rem; letter-spacing: .04em; white-space: nowrap; }
+.ct-mydice-front { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: .25rem; height: 100%; }
+.ct-mydice-front .die { width: 1.75rem; height: 1.75rem; border-radius: .4375rem; font-size: .9375rem; padding: .1875rem; }
+
+/* covers at night are dark, not cheese-yellow: a bright block on one phone would light up the table */
+.ct-night .c-cover-back {
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 .75rem, transparent .75rem 1.5rem), var(--surface-2);
+  border-color: var(--line); color: var(--text);
+}
 
 .ct-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; align-content: start; }
 .ct-chip {
@@ -137,6 +160,8 @@
 .ct-roll .c-rolecard .c-cover, .ct-day .c-rolecard .c-cover { aspect-ratio: 16 / 9; margin-bottom: .5rem; }
 .ct-roll .c-dicecup .c-cover, .ct-day .c-dicecup .c-cover { aspect-ratio: 2.2 / 1; margin-bottom: .5rem; }
 .ct-roll .c-rolecard-front .role-desc, .ct-day .c-rolecard-front .role-desc { -webkit-line-clamp: 4; font-size: .75rem; }
+/* a recruited follower's card also names who it knows: one more line in the day */
+.ct-day .c-rolecard-front .role-desc { -webkit-line-clamp: 5; }
 .ct-roll .c-rolecard-front .role-emoji, .ct-day .c-rolecard-front .role-emoji { font-size: 2.25rem; }
 
 .ct-roll .dice-sum, .ct-day .dice-sum { display: none; }

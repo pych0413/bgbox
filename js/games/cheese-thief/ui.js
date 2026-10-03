@@ -35,24 +35,53 @@ const sig = (x) => JSON.stringify(x ?? null);
 
 // ---------- text helpers ----------
 
-/** The role card text, tuned to this head-count so nobody has to read the rulebook. */
-function roleFor(my, n, opts) {
+/**
+ * The role card, tuned to this head-count so nobody has to read the rulebook.
+ * Everything here is drawn on the card's FRONT, which only shows while its owner
+ * holds it — so a recruited 共犯 (and who it knows) is never readable at a glance.
+ */
+export function roleFor(my, n, opts, nameOf = (p) => p) {
+  const names = (ids) => (ids ?? []).map(nameOf).join('、');
+  const crew = my.crew ?? null;
+  if (my.follower && (my.role === 'sleepyhead' || my.role === 'fall-mouse')) {
+    const knows = [
+      crew?.thief ? `大盜係 ${nameOf(crew.thief)}。` : '你唔知大盜係邊個。',
+      crew?.mates?.length ? `另一位共犯：${names(crew.mates)}。` : '',
+    ].join('');
+    if (my.role === 'fall-mouse') {
+      return {
+        emoji: '🎭', name: '背鍋鼠＋共犯', team: 'solo',
+        text: `${knows} 做乜：你仍然係背鍋鼠，天光扮可疑。點贏：你喺最高票（平票都算）就一個人贏；唔會跟大盜隊贏。`,
+      };
+    }
+    const f = ROLES.follower;
+    return { emoji: f.emoji, name: f.name, team: f.team, text: `${knows} ${f.text}` };
+  }
   const base = ROLES[my.role];
   if (!base) return null;
   let text = base.text;
   if (my.role === 'thief') {
     if (n === 4) text += ' 4 人局：你有兩粒骰，兩個點鐘都會醒，揀其中一次偷；平票都算你贏。';
-    else if (n === 5) text += ' 偷芝士時如果有貪瞓鼠一齊醒，你指一位做共犯。';
-    else if (n === 6) text += ' 夜晚尾你揀 1 位共犯。';
+    else if (n === 5 && !opts?.pick5) text += ' 偷芝士時如果有貪瞓鼠一齊醒，你指一位做共犯。';
+    else if (n === 5 || n === 6) text += ' 夜晚尾你揀 1 位共犯。';
     else text += ' 夜晚尾你揀 2 位共犯。';
+    if (crew?.mates?.length) text += ` 你嘅共犯：${names(crew.mates)}。`;
   } else if (my.role === 'sleepyhead') {
     if (n === 4) text += ` 4 人局：兩粒骰揀一粒做醒鐘。${opts?.peek4 ? '（今局家規：淨係得你醒都可以偷睇。）' : ''}`;
   }
   return { emoji: base.emoji, name: base.name, team: base.team, text };
 }
 
+/**
+ * Dawn: the same line on EVERY phone (thief, follower, sleepyhead alike), under the
+ * role card — never a banner at the top, and it never says whether anything changed.
+ * Only from 5 players up: no 4p game ever has a follower.
+ */
+export const RECHECK = '🔁 天光喇：再㩒住睇一次你張身份牌 — 夜晚可能有人畀大盜拉咗做共犯。';
+export const RECHECK_DONE = '✓ 睇咗。記住：身份牌嘅嘢唔好畀人睇到。';
+
 function readyLead(my, view) {
-  if (my.ready) return '好喇。等其他人準備好，夜晚就會開始 — 叫大家閉眼，部手機放低。';
+  if (my.ready) return '好喇。等其他人準備好，夜晚就會開始 — 部手機放喺面前，唔好鎖機（一鎖就斷線，到你醒都冇嘢睇）。';
   if (!my.locked) return '① 㩒住張牌睇你身份　② 搖你嘅骰（搖部機或者㩒掣）';
   if (my.needsChoice && my.chosen == null) return '③ 揀邊粒骰做你嘅醒鐘（先掀開個盅睇住）';
   return '③ 睇清楚晒就㩒「準備好」';
@@ -70,8 +99,8 @@ function makeEnv(api, local, refresh) {
   return { api, C: api.components, local, refresh, players, nameOf, colorOf, names };
 }
 
-/** The role card, shared by the roll and day screens. */
-function makeRoleCard(E) {
+/** The role card, shared by the roll and day screens. `onOpen(open)` fires when its owner lifts it. */
+function makeRoleCard(E, { onOpen } = {}) {
   const card = E.C.RoleCard({
     role: null,
     locked: E.local.roleLocked,
@@ -81,30 +110,20 @@ function makeRoleCard(E) {
     el: card.el,
     update(view) {
       card.update({
-        role: roleFor(view.my, view.n, view.opts),
+        role: roleFor(view.my, view.n, view.opts, E.nameOf),
         locked: E.local.roleLocked,
         onLockToggle: () => { E.local.roleLocked = !E.local.roleLocked; E.refresh(); },
         hint: E.local.roleLocked ? '已鎖定，㩒下面解鎖' : '㩒住先睇到，放手即刻冚返',
+        onOpen,
       });
     },
     destroy() { card.destroy(); },
   };
 }
 
-function followerBadge(E) {
-  const node = el('div', { class: 'ct-badge', hidden: true });
-  return {
-    el: node,
-    update(view) {
-      const my = view.my;
-      setHidden(node, !my.follower);
-      if (my.follower) {
-        setText(node, my.role === 'fall-mouse'
-          ? '🎭 你係背鍋鼠，仲畀大盜拉咗做共犯 — 但你淨係靠畀人投中先贏。（你唔可以投自己）'
-          : '🤝 你係共犯 — 同大盜一隊，贏就一齊贏。（你唔可以投自己）');
-      }
-    },
-  };
+/** Your own dice, as the role-card screens show them: a peek-only cup (it stands after the roll). */
+function cupProps(view, extra = {}) {
+  return { dice: view.my.dice, sides: 6, rollSeq: view.my.rollSeq, canRoll: false, lockedRoll: true, lockedLabel: '🔒 已鎖定', shakeToRoll: false, ...extra };
 }
 
 // ============================================================
@@ -131,9 +150,11 @@ function buildRoll(E) {
   const tip = el('details', { class: 'ct-tip' },
     el('summary', { text: '夜晚點玩？' }),
     el('p', { text: '手機會逐個點鐘報時。擲到幾點，就喺嗰個點鐘睜眼 — 到時你部機會自動亮起，話你知邊個同你一齊醒、芝士仲喺唔喺度。' }),
+    el('p', { text: '偷睇骰喺你自己部機做：淨係得你醒嗰陣，㩒個名再㩒大掣就睇到。唔使掂人哋部機 — 夜晚其他人部機係黑嘅。' }),
     el('p', { text: '每個點鐘（連你瞓緊嗰陣）都喺手機下半部大掣㩒一下，咁就冇人聽得出邊個醒。' }));
 
-  const node = el('div', { class: 'ct-screen ct-roll' }, lead, roleCard.el, cup.el, choose, readyBtn, count, tip);
+  // your dice sit ABOVE your card (as in v1): the number is what you need again and again
+  const node = el('div', { class: 'ct-screen ct-roll' }, lead, cup.el, choose, roleCard.el, readyBtn, count, tip);
 
   return {
     el: node,
@@ -148,6 +169,7 @@ function buildRoll(E) {
         lockedRoll: my.locked,
         onRoll: () => api.send({ type: 'roll' }),
         onLock: view.opts?.reroll ? () => api.send({ type: 'lock' }) : undefined,
+        lockedLabel: '🔒 已鎖定',
         shakeToRoll: true,
       });
 
@@ -223,7 +245,7 @@ function stepHead(step) {
 /** The lines on the info card while this seat is NOT awake. Same height as the awake card. */
 function sleepLines(step) {
   switch (step.k) {
-    case 'begin': return [['head', '🌙 天黑'], ['sub', '閉埋眼，部手機放低，唔好偷望。']];
+    case 'begin': return [['head', '🌙 天黑'], ['sub', '閉埋眼，部手機放低（唔好鎖機），唔好偷望。']];
     case 'open':
       return step.stage === 'window'
         ? [['head', '💤 瞓緊'], ['sub', '呢個鐘冇你份。閉住眼，等報下一點。']]
@@ -263,7 +285,7 @@ function awakeLines(E, view) {
     }
 
     const pk = night.peek;
-    if (pk.mode === 'can') L.push(['role', '👁 淨係得你醒：可以偷睇一個人粒骰（得一次）。㩒個名，再㩒大掣；唔想睇就直接㩒大掣。']);
+    if (pk.mode === 'can') L.push(['role', '👁 你可以偷睇一粒骰（得一次）：㩒個名，再㩒大掣。唔想睇就直接㩒大掣。']);
     else if (pk.mode === 'together') L.push(['note', '有人同你一齊醒，今次唔可以偷睇。']);
     else if (pk.mode === 'off' && my.role !== 'thief') L.push(['note', '4 人局唔可以偷睇（官方規則）。']);
 
@@ -307,9 +329,21 @@ function awakeLines(E, view) {
 export const ACK_MAIN = '👆 㩒一下';
 const ACK_DECOY = '每一步都㩒，咁就冇人聽得出邊個醒';
 
+/**
+ * A shared phone holding more than one of the seats awake right now (focus is filtered
+ * per device, so this can only ever be true on a phone passed around): this seat's
+ * last tap hands the phone on — the engine's `done` drops it from focus and the shell's
+ * pass gate walks to the next awake seat on this phone. A one-seat phone never sees it.
+ */
+function sharedWalk(E, view) {
+  if (!view?.nightSeat?.awake) return false;
+  return (view.__ctx?.focus?.pids ?? []).some((p) => p !== E.api.me);
+}
+
 /** The small line under the big button: what this seat's tap will do now. */
 function ackSubline(E, view, mode, selected) {
   const night = view.nightSeat;
+  const walk = sharedWalk(E, view);
   if (mode === 'peek') {
     return selected.length ? `㩒落去就睇 ${E.nameOf(selected[0])} 粒骰（得一次）` : '揀咗名先會睇到；唔想睇就直接㩒';
   }
@@ -317,7 +351,10 @@ function ackSubline(E, view, mode, selected) {
     const c = night.recruit.count;
     return selected.length === c ? `㩒落去就揀 ${E.names(selected)} 做共犯` : `喺上面揀 ${c} 位（${selected.length}/${c}）`;
   }
-  if (night?.awake && night.steal?.can) return '㩒落去＝而家偷芝士；想等就唔好㩒';
+  if (night?.awake && night.steal?.can) {
+    return walk ? '㩒落去＝而家偷芝士；想等：㩒個名再㩒（交畀下一位）' : '㩒落去＝而家偷芝士；想等就唔好㩒';
+  }
+  if (walk) return '睇完就㩒：交畀下一位';
   return ACK_DECOY;
 }
 
@@ -325,7 +362,16 @@ function buildNight(E) {
   const { api, C } = E;
   const icon = el('span', { class: 'ct-n-icon' });
   const title = el('b', { class: 'ct-n-title' });
-  const head = el('div', { class: 'ct-n-head' }, icon, title);
+
+  // your own dice, one hold away, in the top row of every phone's night screen (the
+  // same silent cover on every seat, so it says nothing at a glance; it shares the
+  // title row so the big button stays where thumbs expect it on a small phone)
+  const myDiceFront = el('div', { class: 'ct-mydice-front' });
+  const myDiceProps = () => ({ front: myDiceFront, backArt: '🎲', backLabel: '你粒骰', lockMode: 'none', locked: false, openSound: 'none', ariaLabel: '㩒住睇你粒骰' });
+  const myDice = C.Cover(myDiceProps());
+  const myDiceWrap = el('div', { class: 'ct-mydice' }, myDice.el);
+
+  const head = el('div', { class: 'ct-n-head' }, el('span', { class: 'ct-n-side' }), el('div', { class: 'ct-n-mid' }, icon, title), myDiceWrap);
   const fill = el('i');
   const bar = el('div', { class: 'ct-bar' }, fill);
 
@@ -333,7 +379,9 @@ function buildNight(E) {
   const peekFront = el('div', { class: 'ct-peekfront' });
   const peekCover = C.Cover({ front: peekFront, backArt: '👁', backLabel: '㩒住睇結果', lockMode: 'none', locked: false, openSound: 'none' });
   const peekWrap = el('div', { class: 'ct-peekwrap', hidden: true }, peekCover.el);
-  const panel = el('div', { class: 'ct-panel' }, lines, peekWrap);
+  // the peek result goes FIRST in the fixed-height card, so it is never below the fold
+  // (a 10 s hour leaves no time to go looking for it)
+  const panel = el('div', { class: 'ct-panel' }, peekWrap, lines);
 
   const chips = makeChips(E);
   const ackLabel = el('span', { class: 'ct-ack-main' });
@@ -382,11 +430,19 @@ function buildNight(E) {
     if (!v) return;
     const night = v.nightSeat;
     const mode = pickMode(v);
+    const walk = sharedWalk(E, v);
     if (mode === 'peek' && selected.length === 1) { api.send({ type: 'peek', target: selected[0] }); selected = []; paint(); return; }
     if (mode === 'recruit' && selected.length === night.recruit.count) { api.send({ type: 'recruit', targets: selected.slice() }); selected = []; paint(); return; }
-    if (night?.awake && night.steal?.can) { api.send({ type: 'steal' }); return; }
+    if (night?.awake && night.steal?.can) {
+      // 4p first wake on a shared phone: a name + the button = "wait", and hand the phone on
+      if (walk && selected.length) { selected = []; paint(); api.send({ type: 'done' }); return; }
+      api.send({ type: 'steal' });
+      return;
+    }
     // the decoy: a sleeper's name tap is cleared exactly like a sent peek
     if (selected.length) { selected = []; paint(); }
+    // a shared phone with another awake seat on it: this tap hands it on (never while a pick is owed)
+    if (walk && mode !== 'recruit') { api.send({ type: 'done' }); return; }
     api.send({ type: 'ack' });
   }
   ack.addEventListener('click', onAck);
@@ -410,8 +466,17 @@ function buildNight(E) {
       lines.replaceChildren(...ls.map(([cls, text]) => el('p', { class: `ct-line ${cls}`, text })));
     }
 
+    // your own dice (silent, same on every phone)
+    const md = sig(view.my?.dice ?? null);
+    if (myDiceFront.dataset.key !== md) {
+      myDiceFront.dataset.key = md;
+      myDiceFront.replaceChildren(el('div', { class: 'dice-row' }, (view.my?.dice ?? []).map((d) => E.C.dieFace(d, 6))));
+    }
+    myDice.update(myDiceProps());
+
     // peek result sits behind a cover: neighbours with open eyes (silent mode) cannot read it
     const done = awake ? night.peek?.done : null;
+    const wasHidden = peekWrap.hidden;
     setHidden(peekWrap, !done);
     if (done) {
       const k = sig(done);
@@ -422,6 +487,7 @@ function buildNight(E) {
           el('div', { class: 'dice-row' }, done.dice.map((d) => E.C.dieFace(d, 6))));
       }
       peekCover.update({ front: peekFront, backArt: '👁', backLabel: `㩒住睇 ${E.nameOf(done.target)} 粒骰`, lockMode: 'none', locked: false, openSound: 'none' });
+      if (wasHidden && typeof panel.scrollTo === 'function') panel.scrollTo({ top: 0 });   // the result is first in the card
     }
 
     // the grid: every phone shows the same tappable names; only this seat
@@ -472,7 +538,7 @@ function buildNight(E) {
       paint();
       tick();
     },
-    destroy() { clearInterval(timer); peekCover.destroy(); node.remove(); },
+    destroy() { clearInterval(timer); peekCover.destroy(); myDice.destroy(); node.remove(); },
   };
 }
 
@@ -509,7 +575,6 @@ export function describeNote(note, E) {
 function buildDay(E) {
   const { api, C } = E;
   const banner = el('div', { class: 'ct-banner', text: '☀️ 天光喇！芝士唔見咗！' });
-  const badge = followerBadge(E);
   const timerSlot = el('div', { class: 'ct-timer', hidden: true });
   let timer = null;
 
@@ -519,21 +584,36 @@ function buildDay(E) {
   const recapCover = C.Cover({ front: recapFront, backArt: '📓', backLabel: '㩒住睇你嘅夜晚記錄', lockMode: 'none', locked: false, openSound: 'flip' });
   const recapWrap = el('div', { class: 'ct-recapwrap' }, el('h3', { class: 'ct-h', text: '📓 你嘅夜晚記錄' }), recapCover.el);
 
-  const roleCard = makeRoleCard(E);
-  const cup = C.DiceCup({ dice: null, sides: 6, rollSeq: 0, canRoll: false, lockedRoll: true, shakeToRoll: false });
+  // the dawn re-check: the same words on every phone, right under the card (not a top
+  // banner); a recruited 共犯 finds out only by lifting the card itself
+  let rechecked = false;
+  let lastView = null;
+  const recheck = el('p', { class: 'ct-recheck', hidden: true });
+  const roleCard = makeRoleCard(E, {
+    onOpen: (open) => { if (open && !rechecked) { rechecked = true; if (lastView) paintRecheck(lastView); } },
+  });
+  const cup = C.DiceCup(cupProps({ my: { dice: null, rollSeq: 0 } }));
+  function paintRecheck(view) {
+    const show = view.n >= 5;
+    setHidden(recheck, !show);
+    setText(recheck, rechecked ? RECHECK_DONE : RECHECK);
+    recheck.classList.toggle('is-done', rechecked);
+  }
 
   let mine = false;
   const readyBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'day-ready', on: !mine }) });
   const count = el('p', { class: 'ct-count' });
 
-  const node = el('div', { class: 'ct-screen ct-day' }, banner, badge.el, timerSlot, readyBtn, count, lead, recapWrap, roleCard.el, cup.el);
+  // dice above the card (as in v1), the card, then the re-check line under it
+  const node = el('div', { class: 'ct-screen ct-day' }, banner, timerSlot, cup.el, roleCard.el, recheck, readyBtn, count, lead, recapWrap);
 
   return {
     el: node,
     update(view, ctx) {
-      badge.update(view);
+      lastView = view;
       roleCard.update(view);
-      cup.update({ dice: view.my.dice, sides: 6, rollSeq: view.my.rollSeq, canRoll: false, lockedRoll: true, shakeToRoll: false });
+      paintRecheck(view);
+      cup.update(cupProps(view));
 
       // timer
       if (view.deadline != null) {
@@ -571,14 +651,13 @@ function buildDay(E) {
 
 function buildVote(E) {
   const { api, C } = E;
-  const badge = followerBadge(E);
-  const lead = el('p', { class: 'ct-lead', text: '邊個係芝士大盜？揀一個，確定。全部人投晒就同時公開。' });
+  // (no follower banner here: the top of a phone is the easiest part for a neighbour to read)
+  const lead = el('p', { class: 'ct-lead', text: '邊個係芝士大盜？揀一個（唔可以投自己），確定。全部人投晒就同時公開。' });
   const panel = C.VotePanel({ players: [], candidates: [], me: api.me, progress: { done: 0, total: 0 }, reveal: null, onVote: () => {} });
-  const node = el('div', { class: 'ct-screen ct-vote' }, badge.el, lead, panel.el);
+  const node = el('div', { class: 'ct-screen ct-vote' }, lead, panel.el);
   return {
     el: node,
     update(view) {
-      badge.update(view);
       panel.update({
         players: E.players(), candidates: view.candidates, me: api.me,
         myVote: view.myVote, allowAbstain: false, allowChange: true,
