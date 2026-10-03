@@ -27,7 +27,7 @@
 //   state.versionMismatch       build stamps differ between host and a phone (G10); state.versionInfo
 //   app.canNetwork()            PeerJS loaded (multi-phone needs it; local never does)
 //   state.saveFailed            the host snapshot could not be written (storage full) (G9)
-//   lobby.keepSeat(pid)         keep an offline lobby seat past the 60 s grace (G3)
+//   lobby.keepSeat(pid)         keep an offline lobby seat past the 180 s grace (G3)
 //   hostCtl.voidRound()         `@void-round` for engines that support it
 //   resumeInfo() / forgetResume()  what 「返去上一局」 would resume (read through THIS app's store, so a
 //                               `?as=` testing identity sees its own), and dropping it
@@ -36,22 +36,36 @@
 //                               on), and all of them incl. the current one — the results screen's souvenir
 //   state.canInk                this device's seats engine.canInk lets draw now (the narrator bar folds)
 //   state.hostActions / hostCtl.hostAction(i, label)   the game's own host buttons (engine.hostActions)
+//   connLog()                   the last ~40 connection events as `<UTC ISO> text` lines (⚙️ 連線記錄); no tokens
+//
+// Liveness (iOS locks phones and suspends pages; a dead DataChannel often never says 'close'):
+//   client  a seated device pings every PING_MS while in a room — every reply (and every other message) is
+//           proof of life. Nothing at all from the host for SILENT_MS → the channel is dead: close it and
+//           re-dial (ClientTransport.reset); the seat tokens re-seat this device, the screen never goes back to
+//           join. Back in the foreground (visibilitychange / pageshow / online): ping at once, re-dial if
+//           there is no reply within PROBE_MS.
+//   host    net.js times out silent phones; on the way back from hidden every phone gets a fresh window
+//           (HostTransport.resume) and offline lobby seats do not lose the time this page was away
+//           (room.hostBack). The signalling server is rejoined at once (same code).
 // ============================================================
 
-import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003102525';
-import { hasPeer } from './net.js?v=20261003102525';
-import { Room } from './room.js?v=20261003102525';
-import { createBag } from './bag.js?v=20261003102525';
-import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003102525';
-import { cryptoRng } from './engine-kit.js?v=20261003102525';
-import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003102525';
-import { GAMES } from '../games/registry.js?v=20261003102525';
+import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=1';
+import { hasPeer } from './net.js?v=1';
+import { Room } from './room.js?v=1';
+import { createBag } from './bag.js?v=1';
+import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=1';
+import { cryptoRng } from './engine-kit.js?v=1';
+import { makeStore, uid, keepAwake, isRoomCode, connLog as pageLog } from './util.js?v=1';
+import { GAMES } from '../games/registry.js?v=1';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;
 const LEAVE_GRACE = 200;                   // let the goodbye reach the wire before closing
 const ACK_TIMEOUT = 4000;                  // an action the host has not confirmed by now did not get there (G4)
 const NARR_START_MS = 1500;                // speech that has not started by now is "stalled" (#1)
+const PING_MS = 4000;                      // a seated client pings the host this often: clock sync + proof of life
+const SILENT_MS = 12_000;                  // nothing at all from the host for this long = the channel is dead → re-dial
+const PROBE_MS = 3000;                     // back in the foreground: no reply to a fresh ping by then → re-dial
 const SNAP_SOFT_MAX = 1_500_000;           // JSON chars; past this the drawing is left out of the snapshot (G9)
 const PICTURES_MAX = 24;                   // earlier pictures kept for the results screen's keepsake
 const NOT_HOST = { ok: false, message: '淨係房主先做到呢樣' };
@@ -108,6 +122,7 @@ const safeJSON = (x) => { try { return JSON.stringify(x); } catch { return null;
  * @param {number}  [opts.saveEveryMs]    host snapshot heartbeat (default 5000)
  * @param {object}  [opts.banks]          extra content banks for the bag (tests)
  * @param {string}  [opts.build]          build stamp override (tests); default: detected
+ * @param {object}  [opts.connLog]        makeConnLog() — where connection events go (default: this page's util.connLog)
  */
 export function createApp(opts = {}) {
   const {
@@ -124,6 +139,9 @@ export function createApp(opts = {}) {
   };
   const store = makeStore(storage);
   const listeners = { change: new Set(), notice: new Set() };
+  const log = opts.connLog ?? pageLog;
+  const note = (text) => { try { log.add(text); } catch { /* the log is a nicety */ } };
+  const secs = (ms) => `${Math.round(ms / 100) / 10} s`;
 
   // ---------- state ----------
   const state = {
@@ -162,6 +180,12 @@ export function createApp(opts = {}) {
   let clockSamples = [];
   let pendingHostMsgs = null;
   let resyncPending = false;
+  let lastRx = 0;                  // client: when anything last arrived from the host (heartbeat)
+  let watchFrom = 0;               // client: the heartbeat window opens at the later of lastRx and this (a (re)start of pinging)
+  let lastTick = 0;                // client: when the ping loop last ran (a late tick = this page's timers were frozen)
+  let probeTimer = null;           // client: a wake-up ping's deadline
+  let pageHidden = !!globalThis.document?.hidden;
+  let hiddenAt = 0;
 
   const bag = createBag({ storage, rng, banks, onNotice: (text, info) => emit('notice', text, info) });
   const gameCache = new Map();
@@ -179,6 +203,7 @@ export function createApp(opts = {}) {
   const isHostish = () => (state.mode === 'host' || state.mode === 'local') && !!room;
 
   function setConn(conn, message = '') {
+    if (conn !== state.conn || message !== state.connMessage) note(`conn ${state.conn} → ${conn}${message ? ` (${message})` : ''}`);
     state.conn = conn;
     state.connMessage = message;
     if (conn !== 'online') failOutbox('offline');
@@ -522,17 +547,62 @@ export function createApp(opts = {}) {
     clockOffset = clockSamples.reduce((a, b) => (b.rtt < a.rtt ? b : a)).offset;
   }
 
+  /**
+   * The ping loop (client, while in a room): four quick pings to learn the clock, then one every PING_MS.
+   * Every ping carries `hb` (the host may then time this device out after 15 s of silence; an older host
+   * ignores it). Any message from the host is proof of life; none for SILENT_MS → channelDead().
+   */
   function startClock() {
     stopClock();
     let n = 0;
+    lastTick = watchFrom = now();
     const tick = () => {
-      clientT?.send({ t: 'ping', c: now() });
+      clockTimer = null;
+      if (!clientT) return;
+      const t = now();
+      const late = t - lastTick > PING_MS * 2.5;     // this page's timers were frozen (locked, suspended): not the host's fault
+      lastTick = t;
+      if (late) {
+        watchFrom = t;
+        probe('timers resumed');
+      } else if (state.mySeats.length && t - Math.max(lastRx, watchFrom) > SILENT_MS) {
+        channelDead(`heard nothing from the host for ${secs(t - Math.max(lastRx, watchFrom))}`);
+        return;
+      } else {
+        clientT.send({ t: 'ping', c: t, hb: 1 });
+      }
       n++;
-      clockTimer = T.setTimeout(tick, n < 4 ? 250 : 15_000);
+      clockTimer = T.setTimeout(tick, n < 4 ? 250 : PING_MS);
     };
     tick();
   }
-  function stopClock() { if (clockTimer !== null) { T.clearTimeout(clockTimer); clockTimer = null; } }
+  function stopClock() {
+    if (clockTimer !== null) { T.clearTimeout(clockTimer); clockTimer = null; }
+    if (probeTimer !== null) { T.clearTimeout(probeTimer); probeTimer = null; }
+  }
+
+  /** The channel is dead (open or not): drop it and re-dial now. The seat tokens re-seat this device; no join screen. */
+  function channelDead(why) {
+    if (!clientT) return;
+    stopClock();
+    note(`client: heartbeat timeout — ${why} → re-dial`);
+    setConn('reconnecting', '同房主斷咗，重連緊…');
+    clientT.reset(why);
+  }
+
+  /** Back in the foreground (or the network returned): is the channel still alive? Ping now, verdict in PROBE_MS. */
+  function probe(reason) {
+    if (state.mode !== 'client' || !clientT || !state.mySeats.length) return;
+    clientT.nudge(reason);                      // no channel: dial now, not in up to 6 s; signalling lost: rejoin it now
+    if (state.conn !== 'online') return;         // a re-dial is under way; its own heartbeat watches it
+    const sentAt = now();
+    clientT.send({ t: 'ping', c: sentAt, hb: 1 });
+    if (probeTimer !== null) T.clearTimeout(probeTimer);
+    probeTimer = T.setTimeout(() => {
+      probeTimer = null;
+      if (clientT && state.conn === 'online' && lastRx < sentAt) channelDead(`no reply ${secs(PROBE_MS)} after ${reason}`);
+    }, PROBE_MS);
+  }
 
   // ---------- delivery from the Room ----------
   /** Room → device. The host's own device is delivered in-process; everyone else over the wire. */
@@ -652,7 +722,7 @@ export function createApp(opts = {}) {
     let t = null;
     try {
       pendingHostMsgs = [];
-      t = hostT = new HostTransport(makeHostNet?.());
+      t = hostT = new HostTransport(makeHostNet?.(), { log: note });
       wireHost(t);
       const code = await t.open(null);
       if (gen !== generation) { try { t.close(); } catch { /* gone */ } return null; }   // left meanwhile
@@ -708,9 +778,13 @@ export function createApp(opts = {}) {
     clientT?.send({ t: 'claim', v: PROTOCOL, build: BUILD, deviceId: state.deviceId, pid: state.claim.pid });
   }
 
-  /** Every (re)connect: seated devices say hello again; a device still asking for its seat re-asks. */
+  /**
+   * Every (re)connect: seated devices say hello again (and start pinging: a channel that opened but whose
+   * host never answers is caught by the heartbeat too); a device still asking for its seat re-asks.
+   */
   function onClientOpen() {
-    if (seatRecs.length) sendHello();
+    lastRx = now();
+    if (seatRecs.length) { sendHello(); startClock(); }
     else if (state.claim) sendClaim();
   }
 
@@ -723,9 +797,10 @@ export function createApp(opts = {}) {
   }
 
   function openClient(code) {
-    const t = new ClientTransport(makeClientNet?.());
+    const t = new ClientTransport(makeClientNet?.(), { log: note });
     clientT = t;
     // a transport that was closed (leave, a new join) must never write into the next session's state
+    t.on('rx', () => { if (clientT === t) lastRx = now(); });
     t.on('message', (msg) => { if (clientT === t) handleMessage(msg); });
     t.on('status', (kind) => { if (clientT === t) onClientStatus(kind); });
     t.on('open', () => { if (clientT === t) onClientOpen(); });
@@ -842,7 +917,7 @@ export function createApp(opts = {}) {
         room = restored;
         if (r.mode === 'host') {
           pendingHostMsgs = [];
-          t = hostT = new HostTransport(makeHostNet?.());
+          t = hostT = new HostTransport(makeHostNet?.(), { log: note });
           wireHost(t);
           const code = await t.open(snap.code);
           if (gen !== generation) return abandon();
@@ -920,15 +995,19 @@ export function createApp(opts = {}) {
   }
 
   /**
-   * #5 — the page came back to the foreground (called on visibilitychange; the UI may call it too).
-   * Host/local: re-check every timer now (phones throttle them in the background).
-   * Client: re-learn the clock and ask the host for everything again; state.resyncedAt is set when it arrives.
+   * #5 — the page came back to the foreground (visibilitychange, pageshow, online; the UI may call it too).
+   * Host/local: re-check every timer now (phones throttle them in the background); a host that was away
+   * `awayMs` does not count that time against offline lobby seats, gives every phone a fresh heartbeat
+   * window and gets back on the signalling server at once.
+   * Client: re-learn the clock and ask the host for everything again (state.resyncedAt is set when it arrives),
+   * and probe the channel: no reply within PROBE_MS → re-dial.
    */
-  function resync() {
+  function resync(reason = 'resync', awayMs = 0) {
     if (!state.mode) return false;
     keepAwake(true);
     if (isHostish()) {
-      room.poke();
+      if (awayMs > 0) room.hostBack(awayMs); else room.poke();
+      hostT?.resume(reason);
       state.resyncedAt = now();
       touch();
       return true;
@@ -939,9 +1018,36 @@ export function createApp(opts = {}) {
         startClock();
         clientT.send({ t: 'sync' });
       }
+      probe(reason);
       return true;
     }
     return false;
+  }
+
+  /**
+   * Page lifecycle → connection work. kind: 'hidden' | 'visible' | 'pageshow' (bfcache) | 'resume' (unfrozen)
+   * | 'online' | 'offline'. Wired to the real events below; tests call it as app._page(kind).
+   */
+  function onPage(kind, info = '') {
+    if (kind === 'hidden') {
+      if (!pageHidden) { pageHidden = true; hiddenAt = now(); note('page hidden'); }
+      saveNow();
+      return;
+    }
+    if (kind === 'offline') { note('network offline'); return; }
+    let away = 0;
+    // 'visible' means visible; an unfrozen or bfcache-restored page may still be in the background
+    if (kind === 'visible' || (kind !== 'online' && !globalThis.document?.hidden)) {
+      if (pageHidden) away = Math.max(0, now() - hiddenAt);
+      pageHidden = false;
+    }
+    note(`${kind === 'online' ? 'network online' : `page ${kind}`}${info}${away ? ` after ${secs(away)} hidden` : ''}`);
+    if (pageHidden) {                // the network came back while this page is still hidden: just get ready
+      hostT?.resume('online');
+      clientT?.nudge('online');
+      return;
+    }
+    resync(kind, away);
   }
 
   // ============================================================
@@ -977,7 +1083,7 @@ export function createApp(opts = {}) {
     /** #6 host: give a disconnected seat to the phone that asked for it (state.room.claims). */
     approveClaim: (pid) => (isHostish() ? room.approveClaim(pid) : NOT_HOST),
     rejectClaim: (pid) => (isHostish() ? room.rejectClaim(pid) : NOT_HOST),
-    /** G3 host: an offline lobby seat is dropped 60 s after it went away (players[].dropAt) unless kept. */
+    /** G3 host: an offline lobby seat is dropped 180 s after it went away (players[].dropAt) unless kept. */
     keepSeat: (pid, keep = true) => (isHostish() ? room.keepSeat(pid, keep) : NOT_HOST),
     /** #9 host: seat order and colours of the last game started on this phone (state.savedGroup). */
     applySavedOrder: () => (isHostish() ? room.applySavedOrder() : NOT_HOST),
@@ -1127,10 +1233,11 @@ export function createApp(opts = {}) {
 
   // ---------- page lifecycle (browser only) ----------
   if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { saveNow(); return; }
-      resync();
-    });
+    document.addEventListener('visibilitychange', () => onPage(document.hidden ? 'hidden' : 'visible'));
+    document.addEventListener('resume', () => onPage('resume'));                         // Chrome: unfrozen
+    window.addEventListener('pageshow', (e) => { if (e.persisted) onPage('pageshow', ' (bfcache)'); });
+    window.addEventListener('online', () => onPage('online'));
+    window.addEventListener('offline', () => onPage('offline'));
     window.addEventListener('pagehide', saveNow);
   }
 
@@ -1154,7 +1261,11 @@ export function createApp(opts = {}) {
     bag: bagApi,
     canNetwork,
     build: BUILD,
+    /** The last ~40 connection events, `<UTC ISO time> text`, oldest first (⚙️ 連線記錄). Never holds a token. */
+    connLog: () => log.lines(),
     /** Test/debug access to the in-process Room (host / local only). */
     get _room() { return room; },
+    /** Test hook: feed a page-lifecycle event ('hidden' | 'visible' | 'pageshow' | 'resume' | 'online' | 'offline'). */
+    _page: onPage,
   };
 }

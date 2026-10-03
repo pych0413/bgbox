@@ -15,7 +15,6 @@ const NAME_MAX = 12;
 export function mountJoin(sh) {
   const { app, drafts } = sh;
   let busy = false;
-  let watchdog = null;
 
   const slots = el('div', { class: 'code-slots', 'aria-label': '已輸入嘅房間號碼' });
   const frame = el('div', { class: 'code-frame' }, slots);
@@ -94,9 +93,11 @@ export function mountJoin(sh) {
     try {
       if (!(await sh.whenPeer())) throw new Error(sh.peerMissing);
       await app.join(code, { names: [n] });
-      // success: the shell swaps this screen for the lobby as soon as the host welcomes us.
-      // If the host never does, do not leave the keypad frozen.
-      watchdog = setTimeout(() => { if (busy) failJoin('連到，但房主冇回應。佢可能已經熄咗個頁面。'); }, 20000);
+      // join() resolves only once the host has welcomed us (it has its own 12 s timeout), and by then the
+      // shell has already swapped this screen for the lobby and called destroy(). A 20 s timer started
+      // here used to outlive the screen and call app.leave() — the "drops out of the lobby" bug from the
+      // first real-phone game (2026-10-03). Nothing is left to wait for.
+      busy = false;
     } catch (err) {
       console.error(err);
       failJoin(friendlyError(err, '入唔到房 — 睇下啲骰啱唔啱，房主係咪仲開緊個頁面。'));
@@ -105,7 +106,6 @@ export function mountJoin(sh) {
 
   /** A failed dial must not leave the app half-joined, or the router would wait for a welcome forever. */
   function failJoin(message) {
-    clearTimeout(watchdog);
     // join() tears itself down on failure; leave() is only needed if it is still half-joined
     try { if (app.state.mode) app.leave(); } catch { /* already clean */ }
     busy = false;
@@ -205,8 +205,7 @@ export function mountJoin(sh) {
       else if (st.connMessage) setStatus(claiming && st.claim?.status === 'waiting' ? `⏳ ${st.connMessage}` : st.connMessage);
     },
     destroy() {
-      clearTimeout(watchdog);
-      window.removeEventListener('online', paintNet);
+        window.removeEventListener('online', paintNet);
       window.removeEventListener('offline', paintNet);
       peerTag?.removeEventListener('error', paintNet);
       peerTag?.removeEventListener('load', paintNet);

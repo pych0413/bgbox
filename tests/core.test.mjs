@@ -1133,8 +1133,9 @@ function makeLoopback() {
   }
   class LoopHost extends Em {
     conns = new Map();
+    mute = false;          // true: the host's messages vanish (a locked phone: its channel is dead but nobody says close)
     async open(preferred) { this.code = preferred ?? '1352'; hosts.set(this.code, this); return this.code; }
-    sendTo(peerId, msg) { const c = this.conns.get(peerId); if (!c) return false; c.deliver(msg); return true; }
+    sendTo(peerId, msg) { const c = this.conns.get(peerId); if (!c) return false; if (!this.mute) c.deliver(msg); return true; }
     close() { hosts.delete(this.code); for (const c of this.conns.values()) c.drop(); this.conns.clear(); }
   }
   class LoopClient extends Em {
@@ -1151,6 +1152,11 @@ function makeLoopback() {
     }
     /** What the real ClientNet does by itself after a drop. */
     redial() { this.dial(); }
+    /** The app's heartbeat says the channel is dead: drop it (the test re-dials with redial() when the host is back). */
+    resets = 0;
+    reset() { this.resets++; this.drop(); return true; }
+    nudges = 0;
+    nudge() { this.nudges++; return false; }
     send(msg) { if (!this.host) return false; const m = clone(msg); const { host, peerId } = this; queueMicrotask(() => host.emit('message', peerId, m)); return true; }
     deliver(msg) { const m = clone(msg); queueMicrotask(() => this.emit('message', m)); }
     drop() { const { host, peerId } = this; this.host = null; if (host) { host.conns.delete(peerId); host.emit('peer-close', peerId); } this.emit('status', 'offline'); }
@@ -1631,6 +1637,179 @@ test('net: a stale channel closing late does not evict the phone\'s newer channe
     net.close();
     delete globalThis.Peer;
   }
+});
+
+// ============================================================
+// liveness (the iOS lobby drops): heartbeat, wake-up probe, host away, lobby grace, connection log
+// ============================================================
+
+/** A host + one phone 阿花 with its own connection log (and optionally its own clock = its own page timers). */
+async function livePair({ clientClock = null } = {}) {
+  const f = appFixture();
+  const code = await f.host.host({ names: ['阿明'] });
+  const log = util.makeConnLog({ now: clientClock?.now ?? f.clock.now });
+  const a = createApp({
+    ...f.common, storage: new Map(), connLog: log,
+    ...(clientClock ? { timers: clientClock, now: clientClock.now } : {}),
+  });
+  await a.join(code, { names: ['阿花'] });
+  await settle();
+  const lh = f.loop.hosts.get(code);
+  const pings = [];
+  lh.on('message', (peer, m) => { if (m.t === 'ping') pings.push(m); });
+  const run = async (ms, step = 500) => { for (let left = ms; left > 0; left -= step) { f.clock.advance(Math.min(step, left)); await settle(); } };
+  return { ...f, code, a, log, lh, pings, run, net: () => f.loop.clients.at(-1) };
+}
+
+test('liveness: a seated phone pings every 4 s (hb); a host gone silent is caught in 12–16 s → re-dial, seat kept, never the join screen', async () => {
+  const f = await livePair();
+  await f.run(20_000);
+  assert.ok(f.pings.length >= 5, `pings: ${f.pings.length}`);
+  assert.ok(f.pings.every((m) => m.hb === 1 && typeof m.c === 'number'), 'every ping says it is on the heartbeat');
+  assert.equal(f.a.state.conn, 'online');
+  assert.equal(f.net().resets, 0);
+
+  f.lh.mute = true;                                            // the host phone locked: its channel is dead, nobody says close
+  await f.run(11_000);
+  assert.equal(f.a.state.conn, 'online', 'not before 12 s of silence');
+  await f.run(6_000);
+  assert.equal(f.a.state.conn, 'reconnecting');
+  assert.equal(f.net().resets, 1, 'the channel was dropped and a re-dial started');
+  assert.deepEqual(f.a.state.mySeats, ['p2'], 'the seat stays: the shell keeps the lobby on screen');
+  assert.equal(f.a.state.mode, 'client');
+  assert.ok(f.a.connLog().some((l) => /heartbeat timeout — heard nothing from the host for 1[2-6](\.\d)? s → re-dial/.test(l)), f.a.connLog().join('\n'));
+
+  f.lh.mute = false;                                           // the host is back; the next re-dial gets through
+  f.net().redial();
+  await settle();
+  assert.equal(f.a.state.conn, 'online');
+  assert.deepEqual(f.a.state.mySeats, ['p2'], 'same seat, by token');
+  assert.equal(f.host.state.room.players.find((p) => p.id === 'p2').connected, true);
+  assert.equal(f.host.state.room.players.length, 2, 'no ghost seat');
+  await f.run(30_000);
+  assert.equal(f.a.state.conn, 'online', 'and it stays up');
+});
+
+test('liveness: back in the foreground a phone pings at once and re-dials when the host does not answer within 3 s', async () => {
+  const f = await livePair();
+  await f.run(5_000);
+  f.lh.mute = true;
+  await f.run(1_000);                                          // (a pong in the very ms of the probe would count as a reply)
+  f.a._page('hidden');
+  f.a._page('visible');
+  await f.run(2_900, 100);
+  assert.equal(f.a.state.conn, 'online', 'the probe waits 3 s');
+  await f.run(200, 100);
+  assert.equal(f.a.state.conn, 'reconnecting', 'no reply in 3 s → re-dial (well before the 12 s heartbeat)');
+  assert.equal(f.net().resets, 1);
+  assert.ok(f.a.connLog().some((l) => /no reply 3 s after visible/.test(l)), f.a.connLog().join('\n'));
+
+  f.lh.mute = false;
+  f.net().redial();
+  await settle();
+  assert.equal(f.a.state.conn, 'online');
+  f.a._page('hidden');
+  await f.run(30_000, 1000);
+  f.a._page('visible');                                        // a host that answers: nothing happens
+  await settle();
+  await f.run(5_000, 100);
+  assert.equal(f.a.state.conn, 'online');
+  assert.equal(f.net().resets, 1);
+  assert.equal(f.a.state.resyncedAt, f.clock.now() - 5_000, 'the resync welcome arrived');
+  assert.ok(f.a.connLog().some((l) => /page visible after 30 s hidden/.test(l)));
+});
+
+test('liveness: timers that were frozen (a locked phone) mean a probe, not "the host is dead"', async () => {
+  const cc = new FakeClock(1_700_000_000_000);
+  const f = await livePair({ clientClock: cc });
+  const both = async (ms) => { for (let left = ms; left > 0; left -= 250) { f.clock.advance(250); cc.advance(250); await settle(); } };
+  await both(10_000);
+  const n = f.pings.length;
+  cc.t += 60_000;                                              // the page slept a minute: its next tick fires late
+  f.clock.advance(60_000);
+  cc.advance(0);
+  await settle();
+  assert.equal(f.pings.length, n + 1, 'the late tick pings at once');
+  await both(3_500);
+  assert.equal(f.a.state.conn, 'online', 'the host answered: no re-dial');
+  assert.equal(f.net().resets, 0);
+});
+
+test('lobby: a seat now gets 180 s, and the time the host page itself was hidden does not count against it', async () => {
+  assert.equal(LOBBY_GRACE_MS, 180_000);
+  const { room, clock, sent } = await lobby3();
+  const seatOf = (name) => roomOf(sent, 'dev_host').players.find((p) => p.name === name);
+  const t0 = clock.t;
+  room.peerClosed('peer_a');
+  assert.equal(seatOf('阿花').dropAt, t0 + 180_000);
+  clock.advance(120_000);
+  room.hostBack(120_000);                                      // those two minutes the host phone was locked
+  assert.equal(seatOf('阿花').dropAt, t0 + 300_000, 'the grace clock stopped while the host was away');
+  assert.equal(seatOf('阿強').dropAt, null, 'online seats are untouched');
+  clock.advance(179_999);
+  assert.ok(seatOf('阿花'));
+  clock.advance(1);
+  assert.equal(seatOf('阿花'), undefined);
+  room.peerClosed('peer_b');
+  room.hostBack(10 * 60_000);
+  assert.equal(seatOf('阿強').offlineSince, clock.t, 'never in the future');
+  room.hostBack(0);                                            // = poke
+  assert.ok(seatOf('阿強'));
+});
+
+test('app: a host back from hidden resumes its net and its lobby seats keep the time it was away; connection log in UTC', async () => {
+  const f = appFixture();
+  const hostLog = util.makeConnLog({ now: f.clock.now });
+  const host = createApp({ ...f.common, storage: new Map(), connLog: hostLog });
+  const code = await host.host({ names: ['阿明'] });
+  const a = f.client();
+  await a.join(code, { names: ['阿花'] });
+  await settle();
+  const lh = f.loop.hosts.get(code);
+  lh.resumed = [];
+  lh.resume = (why) => lh.resumed.push(why);
+  f.loop.clients[0].drop();                                    // 阿花's channel closed
+  await settle();
+  const seat = () => host.state.room.players.find((p) => p.name === '阿花');
+  const dropAt = seat().dropAt;
+  host._page('hidden');
+  f.clock.advance(100_000);
+  host._page('visible');
+  await settle();
+  assert.deepEqual(lh.resumed, ['visible'], 'fresh heartbeat windows + signalling back at once');
+  assert.equal(seat().dropAt, dropAt + 100_000);
+  host._page('online');
+  assert.deepEqual(lh.resumed, ['visible', 'online']);
+  const lines = host.connLog();
+  assert.ok(lines.some((l) => /page hidden$/.test(l)));
+  assert.ok(lines.some((l) => /page visible after 100 s hidden/.test(l)));
+  assert.ok(lines.every((l) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z /.test(l)), 'every line starts with a UTC ISO time');
+});
+
+test('connLog: a 40-line ring of UTC ISO lines; a whole join / drop / re-dial never writes a seat token into it', async () => {
+  const L = util.makeConnLog({ now: () => Date.UTC(2026, 9, 3, 6, 5, 0) });
+  for (let i = 0; i < 50; i++) L.add(`event ${i}`);
+  const lines = L.lines();
+  assert.equal(lines.length, util.CONN_LOG_MAX);
+  assert.equal(lines[0], '2026-10-03T06:05:00.000Z event 10');
+  assert.equal(lines.at(-1), '2026-10-03T06:05:00.000Z event 49');
+  lines.push('mutating the copy');
+  assert.equal(L.lines().length, 40, 'lines() is a copy');
+
+  const f = await livePair();
+  f.lh.mute = true;
+  await f.run(17_000);
+  f.lh.mute = false;
+  f.net().redial();
+  await settle();
+  f.a._page('hidden');
+  f.a._page('visible');
+  await f.run(4_000);
+  const tokens = f.host._room.snapshot().players.map((p) => p.token);
+  const all = [...f.a.connLog(), ...util.connLog.lines()].join('\n');
+  assert.ok(f.a.connLog().length > 3);
+  for (const t of tokens) assert.equal(all.includes(t), false, 'no token in the log');
+  assert.equal(typeof f.a.connLog, 'function');
 });
 
 // ============================================================

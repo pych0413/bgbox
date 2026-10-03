@@ -142,8 +142,14 @@ export function mountLobby(sh) {
   const gridHint = el('span', { class: 'hint' });
   const grid = el('div', { class: 'game-grid' });
   const detail = el('div');
+  // Once a game is picked the ten cards fold away (one less screenful above 開始); 換遊戲 brings them back.
+  let gridOpen = false;
+  const gridToggle = el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button', hidden: true,
+    onclick: () => { gridOpen = !gridOpen; gridKey = null; paintGrid(last); },
+  });
   const gameCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h3', { text: '揀遊戲' }), gridHint), grid, detail);
+    el('div', { class: 'card-head' }, el('h3', { text: '揀遊戲' }), el('span', { style: { display: 'flex', gap: '.5rem', alignItems: 'center' } }, gridHint, gridToggle)), grid, detail);
 
   // ---------- config ----------
   const presetsBox = el('div', { class: 'cfg-presets' });
@@ -154,8 +160,22 @@ export function mountLobby(sh) {
 
   const summaryTags = el('div', { class: 'cfg-summary' });
   const validBox = el('div');
+  // Most tables play the defaults: the full form stays folded until the host asks for it (user, 2026-10-03).
+  // Opened per game and remembered per identity; a setting that blocks the start unfolds it by itself.
+  const CFG_OPEN_KEY = 'bgb:cfgOpen';
+  const cfgOpen = (() => { try { const o = app.prefs?.get(CFG_OPEN_KEY, {}); return o && typeof o === 'object' ? { ...o } : {}; } catch { return {}; } })();
+  const cfgToggle = el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button', hidden: true,
+    onclick: () => {
+      const id = last.room?.gameId;
+      if (!id) return;
+      cfgOpen[id] = !cfgOpen[id];
+      try { app.prefs?.set(CFG_OPEN_KEY, cfgOpen); } catch { /* storage blocked: this visit only */ }
+      paintConfig(last);
+    },
+  });
   const summaryCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h3', { text: '今局設定' })), summaryTags, validBox);
+    el('div', { class: 'card-head' }, el('h3', { text: '今局設定' }), cfgToggle), summaryTags, validBox);
 
   // ---------- narration ----------
   const narrHint = el('div', { class: 'warn' });
@@ -174,9 +194,14 @@ export function mountLobby(sh) {
       el('span', { class: 'field-label', style: { margin: 0 }, text: '語速' }), rateLabel),
     rate,
     el('div', { style: { marginTop: '.625rem' } }, testBtn));
+  let voiceOpen = false;
+  const voiceToggle = el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button', style: { marginTop: '.5rem' },
+    onclick: () => { voiceOpen = !voiceOpen; paintNarration(last); },
+  });
   const narrCard = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h3', { text: '旁白' }), el('span', { class: 'hint', text: '主持用部手機讀稿' })),
-    narrSeg, voiceBox, narrHint);
+    narrSeg, voiceToggle, voiceBox, narrHint);
 
   voiceSel.addEventListener('change', () => { narrator.set({ voiceURI: voiceSel.value || null }); sh.saveNarration(); });
   rate.addEventListener('input', () => { narrator.set({ rate: Number(rate.value) }); rateLabel.textContent = `×${Number(rate.value).toFixed(2)}`; });
@@ -228,9 +253,15 @@ export function mountLobby(sh) {
   function paintGrid(st) {
     const room = st.room;
     const n = headCount(room);
-    const key = sig([n, room.gameId, room.loading, st.isHost, st.mode, sh.catalog.map((c) => [c.id, c.ready, !!sh.cached(c.id)])]);
+    const key = sig([n, room.gameId, room.loading, st.isHost, st.mode, gridOpen, sh.catalog.map((c) => [c.id, c.ready, !!sh.cached(c.id)])]);
     if (key === gridKey) return;
     gridKey = key;
+
+    const folded = !!room.gameId && !gridOpen;
+    grid.hidden = folded;
+    gridToggle.hidden = !st.isHost || !room.gameId;
+    gridToggle.textContent = gridOpen ? '收起 ▴' : '🔄 換遊戲';
+    gridToggle.setAttribute('aria-expanded', String(!folded));
 
     grid.replaceChildren(...sh.catalog.map((entry) => {
       const meta = sh.gameMeta(entry.id);
@@ -263,6 +294,7 @@ export function mountLobby(sh) {
         class: cls, type: 'button', style,
         onclick: async () => {
           sfx('tap');
+          gridOpen = false;   // picked: fold the cards again
           try { report(await app.lobby.selectGame(entry.id)); } catch (err) { console.error(err); toast('揀唔到呢隻遊戲'); }
         },
       }, body);
@@ -286,7 +318,10 @@ export function mountLobby(sh) {
     detail.replaceChildren(el('div', { class: 'game-detail', style: { '--accent': meta.accent ?? 'var(--cheese)' } },
       el('h4', { text: `${meta.emoji ?? '🎲'} ${meta.name}` }),
       meta.blurb ? el('div', { class: 'hint', text: meta.blurb }) : null,
-      quick.length ? el('ul', {}, quick.map((q) => el('li', { text: q }))) : null,
+      // help on demand only (user): the quick rules stay folded under one line
+      quick.length ? el('details', { class: 'game-quick' },
+        el('summary', { text: `💡 簡單講點玩（${quick.length} 句）` }),
+        el('ul', {}, quick.map((q) => el('li', { text: q })))) : null,
       !game ? el('div', { class: 'hint', style: { margin: '.5rem 0' }, text: '載入緊規則…' }) : null,
       el('button', {
         class: 'btn btn-ghost btn-sm', type: 'button', disabled: !game,
@@ -307,7 +342,13 @@ export function mountLobby(sh) {
     for (const w of v?.warnings ?? []) boxes.push(el('div', { class: 'warn', text: w }));
     validBox.replaceChildren(...boxes);
 
-    configCard.hidden = !(st.isHost && game);
+    const blocked = !!(v && v.ok === false);
+    const canEdit = !!(st.isHost && game);
+    const open = canEdit && (blocked || !!cfgOpen[room.gameId]);
+    cfgToggle.hidden = !canEdit || blocked;
+    cfgToggle.textContent = open ? '收起 ▴' : '⚙️ 改設定';
+    cfgToggle.setAttribute('aria-expanded', String(open));
+    configCard.hidden = !open;
     if (!configCard.hidden) {
       paintPresets(room, game, n);
       let fields = [];
@@ -349,7 +390,7 @@ export function mountLobby(sh) {
     if (key === awayKey) return;
     awayKey = key;
     awayBox.replaceChildren(...list.map((p) => el('div', { class: 'banner' },
-      el('span', { class: 'grow', text: `📴 ${p.name} 斷咗線 — 一分鐘內返唔到就會移走` }),
+      el('span', { class: 'grow', text: `📴 ${p.name} 斷咗線 — 三分鐘內返唔到就會移走` }),
       el('button', {
         class: 'btn btn-ghost btn-sm', type: 'button',
         onclick: () => { report(app.lobby.keepSeat(p.id, true)); sfx('tap'); },
@@ -374,7 +415,10 @@ export function mountLobby(sh) {
     const mode = room.narration?.mode ?? 'voice';
     for (const b of narrSeg.children) b.classList.toggle('on', b.dataset.mode === mode);
 
-    voiceBox.hidden = mode !== 'voice';
+    voiceToggle.hidden = mode !== 'voice';
+    voiceToggle.textContent = voiceOpen ? '收起語音設定 ▴' : '🗣️ 語音、語速、試聽';
+    voiceToggle.setAttribute('aria-expanded', String(voiceOpen));
+    voiceBox.hidden = mode !== 'voice' || !voiceOpen;
     const voices = narrator.voices();
     const chosen = narrator.settings.voiceURI ?? '';
     const key = sig([voices.map((v) => v.voiceURI), chosen]);

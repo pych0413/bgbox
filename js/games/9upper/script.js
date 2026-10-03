@@ -46,8 +46,20 @@ export function cueRead({ readSecs, pass, first }) {
   return `開始睇卡！大家一齊數 ${readSecs} 秒。`;
 }
 
-export function cueExplain({ term, first, judge }) {
+/**
+ * Start of the explaining step. `mode` = who decides the order: 'judge' (default), 'system', 'free'.
+ * Only public facts: the order of a 系統派 round is public to everybody.
+ */
+export function cueExplain({ mode, term, first, judge }) {
+  const ask = `${judge}可以追問，但唔可以問人係咩身份。`;
+  if (mode === 'system') return `睇卡完。收起電話，今輪由電話隨機派人，第一位係${first}，解釋「${term}」。${ask}`;
+  if (mode === 'free') return `睇卡完。收起電話，大家自己傾好邊個先講，逐個解釋「${term}」，講完㩒「我講完」。${ask}`;
   return `睇卡完。收起電話，由${first}開始解釋「${term}」。${judge}可以叫人、追問，但唔可以問人係咩身份。`;
+}
+
+/** 系統派: one short line each time somebody finishes and the phone deals the next speaker. */
+export function cueNextSpeaker({ name, last }) {
+  return last ? `最後一位，輪到${name}。` : `輪到${name}。`;
 }
 
 export function cueJudge({ judge }) {
@@ -103,19 +115,7 @@ export function hintFor(c) {
       if (c.readerIsMe) return cardTip;
       if (c.readDone) return '睇完喇，等其他人輪流睇。';
       return `等 ${c.readerName || '其他人'} 睇卡，輪到你會叫你。`;
-    case 'explain':
-      if (c.role === 'judge') {
-        return c.callouts > 0
-          ? '㩒名叫人解釋、隨便追問（唔可以問身份）；覺得離譜就出收皮啦。'
-          : '㩒名叫人解釋、隨便追問（唔可以問身份）；問夠就揀人。';
-      }
-      if (c.role === 'table') return '大家輪流解釋，諗樣負責追問。';
-      if (c.speakingNow) {
-        return honest
-          ? '輪到你：照張卡講，唔記得可以話「張卡冇寫」。講完㩒「我講完」。'
-          : '輪到你：自信咁作一個解釋，講完㩒「我講完」。';
-      }
-      return honest ? '聽住其他人講；諗樣問你就照實答。' : '聽住其他人講，可以幫手追問；諗樣問你就繼續作。';
+    case 'explain': return explainHint(c, honest);
     case 'judge':
       if (c.role === 'judge') return '揀你覺得係老實人嗰個；揀之前仲可以繼續問。';
       if (c.role === 'table') return '等諗樣揀邊個係老實人。';
@@ -126,6 +126,39 @@ export function hintFor(c) {
     default:
       return '玩完喇！最高分嘅贏，下面有每輪發生咩事。';
   }
+}
+
+/** The explaining step, for each way of ordering it. */
+function explainHint(c, honest) {
+  const system = c.speakOrder === 'system';
+  const free = c.speakOrder === 'free';
+  if (c.role === 'judge') {
+    const tail = c.callouts > 0 ? '覺得離譜就出收皮啦。' : '問夠就揀人。';
+    if (system) return `電話派人講，你追問（唔可以問身份）；${tail}`;
+    if (free) return `大家自己傾次序，講完㩒佢個名；${c.callouts > 0 ? '覺得離譜出收皮啦。' : '問夠就揀人。'}`;
+    return `㩒名叫人解釋、隨便追問（唔可以問身份）；${tail}`;
+  }
+  if (c.role === 'table') {
+    return system ? '電話隨機派人輪流解釋，諗樣負責追問。'
+      : free ? '大家自己傾好次序輪流解釋，諗樣負責追問。' : '大家輪流解釋，諗樣負責追問。';
+  }
+  if (c.speakingNow) {
+    return honest
+      ? '輪到你：照張卡講，唔記得可以話「張卡冇寫」。講完㩒「我講完」。'
+      : '輪到你：自信咁作一個解釋，講完㩒「我講完」。';
+  }
+  if (free && !c.spokenMe) {
+    return honest
+      ? '自己傾好次序先講：照張卡講，講完㩒「我講完」。'
+      : '自己傾好次序先講：自信咁作，講完㩒「我講完」。';
+  }
+  if ((free || system) && c.spokenMe) {
+    return honest ? '你講完喇；聽住其他人，諗樣問你就照實答。' : '你講完喇；聽住其他人，諗樣問你就繼續作。';
+  }
+  if (system) {
+    return honest ? '等電話派到你；聽住其他人講，諗樣問你就照實答。' : '等電話派到你；聽住其他人講，諗樣問你就繼續作。';
+  }
+  return honest ? '聽住其他人講；諗樣問你就照實答。' : '聽住其他人講，可以幫手追問；諗樣問你就繼續作。';
 }
 
 // ---------- reveal explanation (UI + log) ----------

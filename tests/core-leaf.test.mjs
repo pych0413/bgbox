@@ -394,3 +394,136 @@ test('util.keepAwake: overlapping requests hold ONE wake lock, and turning it of
     if (desc) Object.defineProperty(globalThis, 'navigator', desc); else delete globalThis.navigator;
   }
 });
+
+test('util.iosVersion / iosBrowser / wakeFallbackReason: which phones get the video fallback, and why', () => {
+  const IPHONE_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  const IPHONE_CHROME = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0.6668.69 Mobile/15E148 Safari/604.1';
+  const IPHONE_GOOGLE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) GSA/336.0.672814960 Mobile/15E148 Safari/604.1';
+  const IPHONE_INAPP = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/FBIOS;FBAV/450.0]';
+  const IPAD_DESKTOP = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15';
+  assert.deepEqual(util.iosVersion(IPHONE_SAFARI), [17, 5]);
+  assert.deepEqual(util.iosVersion('Mozilla/5.0 (iPad; CPU OS 18_4 like Mac OS X) AppleWebKit/605.1.15'), [18, 4]);
+  assert.deepEqual(util.iosVersion(IPAD_DESKTOP, 5), [18, 3], 'iPadOS posing as a Mac');
+  assert.deepEqual(util.iosVersion('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)', 5), [0, 0], 'a Home Screen iPad hides its version');
+  assert.equal(util.iosVersion(IPAD_DESKTOP, 0), null, 'a real Mac');
+  assert.equal(util.iosVersion('Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/129.0 Mobile Safari/537.36'), null);
+  assert.equal(util.iosBrowser(IPHONE_SAFARI), 'safari');
+  assert.equal(util.iosBrowser(IPHONE_CHROME), 'chrome');
+  assert.equal(util.iosBrowser(IPHONE_GOOGLE), 'google', 'the Google app (where a scanned QR code opens)');
+  assert.equal(util.iosBrowser(IPHONE_INAPP), 'webview');
+  assert.equal(util.iosBrowser(IPAD_DESKTOP, 5), 'safari');
+  assert.equal(util.iosBrowser('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0'), null);
+
+  const why = util.wakeFallbackReason;
+  const iphone = (browser, ios = [17, 5], extra = {}) => ({ mobile: true, hasNative: true, ios, browser, ...extra });
+  assert.equal(why(iphone('safari')), '', 'a Safari tab that got the lock: the native lock is enough');
+  assert.match(why(iphone('safari', [16, 2], { hasNative: false })), /no Screen Wake Lock API/);
+  assert.match(why(iphone('safari', [17, 5], { refused: true })), /refused/);
+  assert.match(why(iphone('safari', [17, 5], { released: true })), /released while visible/);
+  assert.match(why(iphone('chrome', [18, 6])), /iOS chrome \(WKWebView\)/, 'Chrome iOS, even with a granted lock');
+  assert.match(why(iphone('google', [17, 4])), /iOS google/);
+  assert.match(why(iphone('webview', [17, 4], { standalone: true })), /WKWebView/);
+  assert.equal(why({ mobile: true, hasNative: true, ios: [18, 4], browser: 'safari', standalone: true }), '', 'Home Screen fixed in 18.4');
+  assert.match(why({ mobile: true, hasNative: true, ios: [18, 3], browser: 'safari', standalone: true }), /Home Screen app on iOS 18\.3/);
+  assert.match(why({ mobile: true, hasNative: false, ios: null }), /no Screen Wake Lock API/, 'an Android WebView without it');
+  assert.equal(why({ mobile: false, hasNative: false }), '', 'desktops never get the video');
+  assert.equal(why({ mobile: false, hasNative: true, refused: true }), '');
+  assert.equal(util.wakeNeedsFallback(iphone('chrome')), true);
+  assert.equal(util.wakeNeedsFallback(iphone('safari')), false);
+});
+
+test('util.keepAwake: Chrome iOS (or a refused / released lock) also plays a muted inline canvas-stream video, logs the path; off removes it; desktops never', async () => {
+  const navDesc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const docDesc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const appended = [];
+  const doc = {
+    hidden: false,
+    body: { append: (n) => { n.parent = 'body'; appended.push(n); } },
+    addEventListener() {}, removeEventListener() {},
+    createElement(tag) {
+      const n = { tag, attrs: {}, style: {}, setAttribute(k, v) { this.attrs[k] = v; }, remove() { this.parent = null; } };
+      if (tag === 'canvas') {
+        n.getContext = () => ({ fillRect() {} });
+        n.captureStream = (fps) => ({ fps, getTracks: () => [{ stop() { n.trackStopped = true; } }] });
+      }
+      if (tag === 'video') { n.paused = true; n.play = async () => { n.paused = false; }; n.pause = () => { n.paused = true; }; }
+      return n;
+    },
+  };
+  const locks = [];
+  let refuse = false;
+  const nav = {
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0 Mobile/15E148 Safari/604.1',
+    maxTouchPoints: 5,
+    wakeLock: {
+      async request() {
+        if (refuse) throw Object.assign(new Error('no'), { name: 'NotAllowedError' });
+        const lock = { released: false, h: [], async release() { this.released = true; }, addEventListener(ev, fn) { if (ev === 'release') this.h.push(fn); } };
+        locks.push(lock);
+        return lock;
+      },
+    },
+  };
+  const videos = () => appended.filter((n) => n.tag === 'video');
+  const logged = (re) => util.connLog.lines().some((l) => re.test(l));
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, get: () => nav });
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: doc });
+  try {
+    // Chrome on iOS: the lock is granted, and the video runs too (a WKWebView may not honour the lock)
+    await util.keepAwake(true);
+    assert.equal(locks.length, 1, 'the native lock is still asked for');
+    const video = videos()[0];
+    assert.ok(video, 'and the fallback video is on the page');
+    assert.equal(video.muted, true);
+    assert.equal(video.playsInline, true);
+    assert.ok('playsinline' in video.attrs && 'muted' in video.attrs);
+    assert.equal(video.srcObject.fps, 1, 'its source is a canvas stream — no media file');
+    assert.equal(video.paused, false, 'playing');
+    assert.match(video.style.cssText, /pointer-events:none/);
+    assert.equal(util.wakeLockActive(), true);
+    assert.ok(logged(/wake: video fallback — iOS chrome \(WKWebView\) may ignore the wake lock \(iOS 18\.6 chrome\), native lock held too/), util.connLog.lines().join('\n'));
+    assert.ok(logged(/wake: video fallback playing/));
+
+    await util.keepAwake(false);
+    assert.equal(locks[0].released, true);
+    assert.equal(video.parent, null, 'removed');
+    assert.equal(video.paused, true);
+    assert.equal(appended.find((n) => n.tag === 'canvas')?.parent, undefined, 'the canvas never joins the page');
+    assert.equal(util.wakeLockActive(), false);
+
+    // Safari on iOS: a granted lock is enough…
+    nav.userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+    await util.keepAwake(true);
+    assert.equal(videos().length, 1, 'no video for a Safari tab holding the lock');
+    assert.ok(logged(/wake: native wake lock \(iOS 17\.5 safari\)/));
+    // …until the system takes it back while the page is still on screen
+    for (const fn of locks.at(-1).h) fn();
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(videos().length, 2, 'released while visible → the video keeps the screen on');
+    assert.equal(videos()[1].paused, false);
+    assert.ok(logged(/wake lock released while visible/));
+    await util.keepAwake(false);
+
+    // Android, lock refused → the video too
+    nav.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/129.0 Mobile Safari/537.36';
+    refuse = true;
+    await util.keepAwake(true);
+    assert.equal(videos().length, 3);
+    assert.equal(videos()[2].paused, false);
+    assert.ok(logged(/wake lock refused \(NotAllowedError\)/));
+    await util.keepAwake(false);
+
+    // a desktop: refused means nothing more is tried
+    nav.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/129.0 Safari/537.36';
+    await util.keepAwake(true);
+    assert.equal(videos().length, 3, 'desktops never get the video');
+    assert.ok(logged(/wake: nothing keeps the screen on \(desktop\)/));
+    refuse = false;
+    await util.keepAwake(true);
+    assert.equal(util.wakeLockActive(), true);
+  } finally {
+    await util.keepAwake(false);
+    if (navDesc) Object.defineProperty(globalThis, 'navigator', navDesc); else delete globalThis.navigator;
+    if (docDesc) Object.defineProperty(globalThis, 'document', docDesc); else delete globalThis.document;
+  }
+});

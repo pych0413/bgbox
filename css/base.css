@@ -883,8 +883,13 @@ button.game-card:active { transform: scale(.97); }
 .game-detail { margin-top: .875rem; padding: .875rem; border-radius: var(--radius); border: 1px solid var(--accent); background: var(--bg-2); }
 .game-detail h4 { margin: 0 0 .25rem; font-size: 1rem; }
 .game-detail ul { margin: .5rem 0 .75rem; padding-left: 1.125rem; font-size: .8125rem; color: var(--text-dim); display: flex; flex-direction: column; gap: .25rem; }
+.game-quick { margin: .5rem 0 .625rem; }
+.game-quick > summary { cursor: pointer; font-size: .8125rem; font-weight: 600; color: var(--text-dim); list-style: none; -webkit-user-select: none; user-select: none; padding: .25rem 0; }
+.game-quick > summary::-webkit-details-marker { display: none; }
+.game-quick[open] > summary { color: var(--text); }
+.game-quick ul { margin-bottom: .25rem; }
 .cfg-summary { display: flex; flex-wrap: wrap; gap: .375rem; margin: .625rem 0 0; }
-.cfg-summary .tag { font-size: .75rem; padding: .25rem .625rem; background: var(--surface-2); color: var(--text); }
+.cfg-summary .tag { font-size: .75rem; padding: .25rem .625rem; background: var(--surface-2); color: var(--text); white-space: normal; max-width: 100%; line-height: 1.35; }
 
 /* play */
 .play { --pad-bottom: 0rem; }
@@ -929,6 +934,16 @@ button.game-card:active { transform: scale(.97); }
 .sheet-list { display: flex; flex-direction: column; gap: .5rem; }
 .sheet-list .btn { justify-content: flex-start; }
 .sheet-list .sec { margin: .625rem 0 .125rem; font-size: .75rem; color: var(--text-dim); letter-spacing: .06em; }
+.conn-log > summary { cursor: pointer; list-style: none; }
+.conn-log > summary::-webkit-details-marker { display: none; }
+.conn-log > summary::after { content: " ▸"; }
+.conn-log[open] > summary::after { content: " ▾"; }
+.conn-log .btn { width: auto; }
+.conn-log-text {
+  max-height: 12rem; overflow: auto; margin: .375rem 0 .5rem; padding: .5rem .625rem; border-radius: var(--radius);
+  background: var(--surface-2); color: var(--text-dim); font-size: .6875rem; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text;
+}
 .menu-sheet { position: fixed; inset: 0; z-index: 75; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; opacity: 0; transition: opacity .15s; }
 .menu-sheet.in { opacity: 1; }
 .menu-sheet .panel {

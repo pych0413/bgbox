@@ -228,13 +228,23 @@ lobby seat will be dropped).
   than `stallMs` (config, default 45 s; the clock restarts whenever the game state changes), the host sees
   「阿明斷咗線 — 代佢做／呢鋪唔計／再等」. Auto-act uses `engine.autoAct` (abstain, pass, random legal choice);
   呢鋪唔計 sends `@void-round`.
-- **Lobby ghosts.** A remote seat that goes offline in the lobby is dropped `LOBBY_GRACE_MS` (60 s) later unless
+- **Lobby ghosts.** A remote seat that goes offline in the lobby is dropped `LOBBY_GRACE_MS` (180 s — a phone that
+  auto-locked for a minute or two keeps its seat and its place) later unless
   the host keeps it (`keepSeat`, banner 「保留個位」). Mid-game seats are always kept.
 - **Lost token.** A phone that lost its token can `claim` an offline seat; the host approves
   (`state.room.claims`) and the old token dies.
 - **Table timer.** A host-clock countdown that lives on the room in every phase (`room.timer`): the host starts
   1 s – 3 h, every phone shows it from the same `endsAt`; 暫停 holds it, 繼續 releases it; a timer that rang
   clears itself after 60 s.
+- **Liveness.** iOS suspends a locked or backgrounded page and its DataChannel dies, often without a `close`. So a
+  seated client pings every 4 s (`hb: 1`) and treats 12 s with nothing at all from the host as a dead channel: it
+  closes it and re-dials (the seat tokens re-seat it; it never goes back to the join screen). Back in the
+  foreground (visibilitychange / pageshow / online) it pings at once and re-dials if there is no reply in 3 s. The
+  host closes a heartbeat phone that has been silent 15 s while the host page is visible (same path as a close);
+  time the host page itself spent hidden never counts (fresh windows on return, and `room.hostBack(ms)` stops the
+  lobby-grace clock for that time), and it rejoins the signalling server at once under the same code. Transient
+  PeerJS errors never end a client's retries — only a host `reject` or leaving does. `app.connLog()` keeps the last
+  40 connection events (UTC, no tokens) for ⚙️ 連線記錄.
 - **Host refresh.** Snapshot of the room + session to localStorage on every change,
   restored under the same room code (v1 behaviour, kept).
 - Every room/session change → per-device messages (§8).
@@ -304,7 +314,7 @@ Client → host
 | `ink` | `{ pid, stroke, pts, end?, color?, width?, eraser? } \| { pid, op }` | canvas stream, see §11 |
 | `lobby` | `{ op: 'color' \| 'leave' \| 'addSeat', ... }` | colour pick, leave seat, add a seat on this device |
 | `sync` | `{}` | send me everything again (page came back to the foreground; throttled to 1/s) |
-| `ping` | `{ c }` | clock sync |
+| `ping` | `{ c, hb? }` | clock sync + heartbeat (every 4 s; `hb: 1` lets the host close it after 15 s of silence — older hosts ignore it) |
 | `bye` | `{}` | leaving on purpose |
 
 Host → client
@@ -579,7 +589,7 @@ app.lobby.setColor(pid, color)     // host, or the seat's own device
 app.lobby.addSeat(name)            // any device: add a seat on THIS device (shared phone)
 app.lobby.removeSeat(pid)
 app.lobby.kick(pid)
-app.lobby.keepSeat(pid, keep = true)    // keep an offline lobby seat past the 60 s grace
+app.lobby.keepSeat(pid, keep = true)    // keep an offline lobby seat past the 180 s grace
 app.lobby.applySavedOrder()             // seat order + colours of the last start on this phone (state.savedGroup)
 app.lobby.approveClaim(pid); app.lobby.rejectClaim(pid)   // state.room.claims
 app.lobby.start() → { ok, message, warnings? }   // warnings name seats that are offline (the game starts anyway)
@@ -606,6 +616,7 @@ app.narration.replay(); app.narration.skip()   // 重講 / 跳過 the current li
 app.clock.now()                    // host-synced ms
 app.game(id) → Promise<loaded game module>   // cached; the shell uses it for rules/ui
 app.games                          // the registry (picker cards need no module); app.narrator; app.build; app.canNetwork()
+app.connLog() → ['<UTC ISO> text']  // last 40 connection events (status, re-dials and why, visibility, wake lock, timeouts); no tokens
 app.bag.stats(bankId, filter?) → { used, total } | null   // null on a client or before the bank is loaded
 app.bag.reset(bankId) → bool                              // false on a client
 ```
@@ -836,7 +847,7 @@ room.kick(pid) · keepSeat(pid, keep) · applySavedOrder() · approveClaim(pid) 
 room.start() → { ok, message, warnings? }  ·  room.again()  ·  room.toLobby()   // toLobby also aborts a running game (nothing scored)
 room.act(deviceId, pid, action) → bool          // the seat's own device only; '@…' types and > 8 KB refused
 room.ink(deviceId, pid, payload) → bool
-room.pause() · resume() · next() · cueDone(id) · autoAct(pid) · voidRound() · hostAction(i, label?) · setNarrationMode(mode) · poke()
+room.pause() · resume() · next() · cueDone(id) · autoAct(pid) · voidRound() · hostAction(i, label?) · setNarrationMode(mode) · poke() · hostBack(awayMs)
 room.timerStart(ms, label?) · timerPause() · timerResume() · timerAdd(ms) · timerStop()
 room.snapshot() · close(reason) · dispose() · currentCue() · seatedCount · player(pid) · seatsOfDevice(id) · deviceOfPeer(peerId)
 export filterFocus(focus, seatIds)   // §4: what one device may learn about focus

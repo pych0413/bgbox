@@ -162,6 +162,10 @@ test('9upper: config.defaults keeps prev, sanitises it and honours singleDevice'
   assert.deepEqual(fresh.topics, { cats: [] });
   assert.equal(fresh.passPhone, false);
   assert.equal(fresh.antiStreak, false);
+  assert.equal(fresh.speakOrder, 'judge', 'the rulebook: the 諗樣 decides the order');
+  assert.equal(config.defaults(5, { speakOrder: 'system' }).speakOrder, 'system');
+  assert.equal(config.defaults(5, { speakOrder: 'free' }, { singleDevice: true }).speakOrder, 'free', 'one phone does not change it');
+  assert.equal(config.defaults(5, { speakOrder: 'random' }).speakOrder, 'judge', 'unknown value → default');
   assert.deepEqual(config.defaults(5, { topics: ['地理'] }).topics, { cats: ['地理'] });          // bare array tolerated
   assert.deepEqual(config.defaults(5, { topics: { categories: ['地理'] } }).topics, { cats: ['地理'] });
   assert.equal(config.defaults(5, {}, { singleDevice: true }).passPhone, true);
@@ -173,7 +177,7 @@ test('9upper: config.validate rejects bad player counts and bad values, warns on
   for (const n of [0, 1, 2, 10, 12, 4.5]) assert.equal(config.validate(base, n).ok, false, `n=${n}`);
   for (const bad of [{ laps: 4 }, { laps: -1 }, { readSecs: 4 }, { readSecs: 31 }, { readSecs: 0 }, { readSecs: 9.5 },
     { speakSecs: 301 }, { callouts: 3 }, { levelMode: '4' }, { preset: 'pro' }, { scoreFloor: 'yes' }, { passPhone: 1 },
-    { antiStreak: 'on' }, { topics: 'x' }, { topics: { cats: [1] } }, { topics: [1] }]) {
+    { antiStreak: 'on' }, { speakOrder: 'random' }, { speakOrder: 1 }, { speakOrder: '' }, { topics: 'x' }, { topics: { cats: [1] } }, { topics: [1] }]) {
     const v = config.validate({ ...base, ...bad }, 5);
     assert.equal(v.ok, false, JSON.stringify(bad));
     assert.ok(v.message.length > 0);
@@ -183,6 +187,13 @@ test('9upper: config.validate rejects bad player counts and bad values, warns on
   assert.ok(config.validate({ ...base, preset: 'custom', callouts: 2 }, 3).warnings.length >= 1);
   assert.ok(config.validate({ ...base, antiStreak: true }, 4).warnings.length >= 1);
   assert.deepEqual(config.validate({ ...base, antiStreak: true }, 6).warnings, []);
+  for (const speakOrder of ['judge', 'system', 'free']) {
+    assert.deepEqual(config.validate({ ...base, speakOrder }, 5).warnings, [], speakOrder);
+    assert.deepEqual(config.validate({ ...base, speakOrder, speakSecs: 0 }, 5, { singleDevice: true }).warnings, [], speakOrder);
+  }
+  assert.deepEqual(config.validate({ ...base, speakOrder: 'system', speakSecs: 45 }, 5).warnings, [], 'a clock works with 系統派');
+  const freeClock = config.validate({ ...base, speakOrder: 'free', speakSecs: 45 }, 5);
+  assert.ok(freeClock.ok && freeClock.warnings.length === 1 && freeClock.warnings[0].includes('自己決定'), 'no clock in 自己決定');
   // numeric strings from a <select> / input are accepted
   assert.ok(config.validate({ ...base, readSecs: '20', callouts: '2' }, 5).ok);
   assert.equal(config.defaults(5, { readSecs: '20' }).readSecs, 20);
@@ -196,6 +207,10 @@ test('9upper: config.summary reflects the settings', () => {
     assert.ok(s.includes(t), t);
   }
   assert.ok(config.summary(config.defaults(5), 5).join('|').includes('睇卡 9 秒'));
+  const order = (speakOrder) => config.summary({ ...config.defaults(5), speakOrder }, 5).filter((l) => l.startsWith('發言次序'));
+  assert.deepEqual(order('judge'), ['發言次序：諗樣揀']);
+  assert.deepEqual(order('system'), ['發言次序：系統隨機派']);
+  assert.deepEqual(order('free'), ['發言次序：自己決定']);
 });
 
 // ---------- setup and rotation ----------
@@ -704,6 +719,308 @@ test('9upper: rule: the 諗樣 may accuse at any moment after the peek; no clock
   assert.equal(phase(sim), 'judge');
 });
 
+// ---------- who decides the speaking order: 諗樣揀 / 系統派 / 自己決定 ----------
+
+/** The 玩家 in seat order from the 諗樣's left. */
+const ringOf = (sim) => {
+  const order = sim.state.order;
+  const j = order.indexOf(J(sim));
+  return [...order.slice(j + 1), ...order.slice(0, j)];
+};
+const isRotation = (queue, ring) => ring.some((_, k) => queue.every((p, i) => p === ring[(i + k) % ring.length]));
+
+test('9upper: 發言次序 field — always visible, three options, one help line that follows the mode, not part of any preset', () => {
+  for (const preset of ['official', 'newbie', 'quick', 'custom']) {
+    for (const speakOrder of ['judge', 'system', 'free']) {
+      const cfg = { ...config.defaults(5), preset, speakOrder };
+      const f = config.fields(cfg, 5).find((x) => x.key === 'speakOrder');
+      assert.ok(f, `${preset} hides the field`);
+      assert.equal(f.type, 'select');
+      assert.deepEqual(f.options.map((o) => o.value), ['judge', 'system', 'free']);
+      for (const o of f.options) assert.ok(o.label);
+      assert.ok(f.label && f.help && !f.help.includes('\n') && f.help.length <= 40, `help: ${f.help}`);
+    }
+  }
+  const help = (speakOrder) => config.fields({ ...config.defaults(5), speakOrder }, 5).find((x) => x.key === 'speakOrder').help;
+  assert.equal(new Set(['judge', 'system', 'free'].map(help)).size, 3, 'the help follows the chosen mode');
+  assert.ok(help('system').includes('隨機'));
+  assert.ok(help('judge').includes('諗樣'));
+  const keys = config.fields(config.defaults(5), 5).map((x) => x.key);
+  assert.ok(keys.indexOf('speakOrder') > keys.indexOf('preset') && keys.indexOf('speakOrder') < keys.indexOf('readSecs'));
+  // the time-limit field says it does not apply to 自己決定
+  const clock = (speakOrder) => config.fields({ ...config.defaults(5), speakOrder }, 5).find((x) => x.key === 'speakSecs').help;
+  assert.ok(clock('free').includes('自己決定') && !clock('system').includes('自己決定'));
+  // presets leave it alone, the engine honours it under every preset
+  for (const id of Object.keys(PRESETS)) {
+    for (const speakOrder of ['judge', 'system', 'free']) {
+      assert.equal(mk(5, 3, { preset: id, speakOrder }).state.cfg.speakOrder, speakOrder, `${id}/${speakOrder}`);
+    }
+  }
+  // the env argument of defaults / validate changes nothing about it
+  assert.ok(config.validate({ ...config.defaults(5), speakOrder: 'system' }, 5, { singleDevice: true }).ok);
+});
+
+test('9upper: 系統派 — a fresh random order every round that says nothing about who the 老實人 is', () => {
+  const N = 5;
+  const SEEDS = 500;
+  const honestAt = Array(N - 1).fill(0);
+  const firstAt = Array(N - 1).fill(0);
+  let rotations = 0;
+  for (let seed = 1; seed <= SEEDS; seed++) {
+    const sim = mk(N, seed, { speakOrder: 'system' });
+    const r = sim.state.round;
+    const ring = ringOf(sim);
+    assert.deepEqual(r.explainers.slice().sort(), ring.slice().sort(), 'every 玩家, the 諗樣 never');
+    honestAt[r.explainers.indexOf(r.honest)]++;
+    firstAt[ring.indexOf(r.explainers[0])]++;
+    if (isRotation(r.explainers, ring)) rotations++;
+  }
+  // 125 expected per cell (sd about 10): a real bias would be far outside this
+  for (const c of [...honestAt, ...firstAt]) assert.ok(c > 80 && c < 170, `uneven: honest ${honestAt} / first ${firstAt}`);
+  // the suggested 諗樣揀 queue is always a rotation; the random one is a rotation only 4 times in 24
+  assert.ok(rotations > 40 && rotations < 140, `${rotations}/${SEEDS} rotations`);
+  for (let seed = 1; seed <= 40; seed++) {
+    const sim = mk(N, seed, { speakOrder: 'judge' });
+    assert.ok(isRotation(sim.state.round.explainers, ringOf(sim)), 'judge mode keeps the round-the-table suggestion');
+  }
+});
+
+test('9upper: 系統派 — queue position and seat position of the 老實人 are independent (no tell, n = 4 and n = 3)', () => {
+  const joint = {};
+  for (let seed = 1; seed <= 900; seed++) {
+    const sim = mk(4, seed, { speakOrder: 'system' });
+    const r = sim.state.round;
+    const key = `${ringOf(sim).indexOf(r.honest)}:${r.explainers.indexOf(r.honest)}`;
+    joint[key] = (joint[key] ?? 0) + 1;
+  }
+  assert.equal(Object.keys(joint).length, 9, 'every (seat, position) pair happens');
+  for (const [k, c] of Object.entries(joint)) assert.ok(c > 55 && c < 150, `cell ${k}: ${c} of 900 (expected 100)`);
+  let honestFirst = 0;
+  for (let seed = 1; seed <= 400; seed++) {
+    const sim = mk(3, seed, { speakOrder: 'system' });
+    if (sim.state.round.explainers[0] === sim.state.round.honest) honestFirst++;
+  }
+  assert.ok(honestFirst > 170 && honestFirst < 230, `老實人 first ${honestFirst}/400 at 3 players`);
+});
+
+test('9upper: 系統派 — a new order is drawn in every round of a game', () => {
+  const sim = mk(6, 11, { speakOrder: 'system', levelMode: '2', laps: 2 });
+  const queues = new Set();
+  while (phase(sim) !== 'over') {
+    queues.add(JSON.stringify(sim.state.round.explainers.map((p) => ringOf(sim).indexOf(p))));
+    toJudge(sim);
+    sim.act(J(sim), { type: 'pick', target: sim.state.round.explainers[0] });
+    sim.act(J(sim), { type: 'next' });
+  }
+  assert.ok(queues.size >= 6, `only ${queues.size} different orders in 12 rounds`);
+});
+
+test('9upper: 系統派 — the phone deals the speakers, nobody can call out of turn, the speaker or the 諗樣 ends a turn', () => {
+  const sim = mk(5, 6, { speakOrder: 'system', callouts: 2 });
+  toExplain(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  assert.equal(sim.view(null).speakOrder, 'system');
+  assert.deepEqual(sim.view(null).turn, { pid: ex[0], spoken: [], total: 4 });
+  assert.equal(sim.act(judge, { type: 'call', target: ex[2] }), false, 'no calling out of turn');
+  assert.ok(!sim.legal(judge).some((a) => a.type === 'call'));
+  assert.equal(sim.act(ex[1], { type: 'done' }), false, 'not your turn');
+  assert.equal(sim.act(ex[0], { type: 'done', turn: 0 }), true);
+  assert.equal(sim.view(null).turn.pid, ex[1]);
+  // the 下一位 tapped at the same moment as 我講完 carries the old turn number and changes nothing
+  assert.equal(sim.act(judge, { type: 'done', turn: 0 }), false);
+  assert.equal(sim.view(null).turn.pid, ex[1]);
+  assert.equal(sim.act(judge, { type: 'done', turn: 1 }), true);
+  assert.equal(sim.view(null).turn.pid, ex[2]);
+  assert.equal(sim.act(judge, { type: 'done' }), true, 'no turn number: a plain done');
+  assert.equal(sim.view(null).turn.pid, ex[3]);
+  assert.deepEqual(sim.legal(ex[3]), [{ type: 'done' }]);
+  assert.deepEqual(sim.legal(ex[0]), []);
+  assert.equal(sim.act(ex[3], { type: 'done' }), true);
+  assert.equal(phase(sim), 'judge');
+  // 收皮啦 and 決定 work as in the other modes
+  const again = mk(5, 6, { speakOrder: 'system', callouts: 2 });
+  toExplain(again);
+  assert.equal(again.act(J(again), { type: 'callout', target: again.state.round.explainers[3] }), true);
+  assert.equal(again.act(J(again), { type: 'decide' }), true);
+  assert.equal(phase(again), 'judge');
+});
+
+test('9upper: 系統派 — speakSecs clocks every dealt turn; @next and autoAct end the turn', () => {
+  const sim = mk(4, 2, { speakOrder: 'system', speakSecs: 30 });
+  toExplain(sim);
+  const ex = sim.state.round.explainers;
+  assert.equal(sim.state.deadline, sim.now + 30000);
+  assert.ok(sim.state.timerLabel.includes(nameOf(sim, ex[0])));
+  sim.advance();
+  assert.equal(sim.view(null).turn.pid, ex[1]);
+  assert.ok(sim.state.timerLabel.includes(nameOf(sim, ex[1])));
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' });
+  assert.equal(engine.autoAct(sim.state, ex[2], sim.ctx()), null);
+  assert.deepEqual(engine.autoAct(sim.state, J(sim), sim.ctx()), { type: 'done' });
+  sim.host({ type: ACT.NEXT });                          // acknowledges the cue
+  sim.host({ type: ACT.NEXT });                          // ends the turn
+  assert.equal(sim.view(null).turn.pid, ex[2]);
+});
+
+test('9upper: 系統派 cues — the first line names the first speaker, every later turn gets its own short line', () => {
+  const sim = mk(5, 6, { speakOrder: 'system' });
+  toExplain(sim);
+  const ex = sim.state.round.explainers;
+  const ids = [];
+  const take = () => { const c = sim.cue(); if (c) ids.push(c.id); return c; };
+  let c = take();
+  assert.equal(c.id, 'r1:explain');
+  assert.ok(c.text.includes('隨機') && c.text.includes(nameOf(sim, ex[0])) && c.text.includes(sim.state.round.term.term));
+  assert.ok(c.text.includes('唔可以問人係咩身份'));
+  assert.ok(!c.text.includes(sim.state.round.term.explain));
+  assert.ok(!ex.slice(1).some((p) => c.text.includes(nameOf(sim, p))), 'only the first speaker is named up front');
+  assert.equal(sim.cueDone(), true);
+  assert.equal(sim.cue(), null);
+  sim.act(ex[0], { type: 'done' });
+  c = take();
+  assert.equal(c.id, 'r1:explain:1');
+  assert.equal(c.text, `輪到${nameOf(sim, ex[1])}。`);
+  assert.ok(c.minMs > 0);
+  sim.act(J(sim), { type: 'done' });
+  assert.equal(take().text, `輪到${nameOf(sim, ex[2])}。`);
+  sim.act(ex[2], { type: 'done' });
+  assert.equal(take().text, `最後一位，輪到${nameOf(sim, ex[3])}。`);
+  sim.act(ex[3], { type: 'done' });
+  assert.equal(take().id, 'r1:judge');
+  assert.equal(new Set(ids).size, ids.length, 'unique per step');
+  // 諗樣揀 keeps the single line of before
+  const judgeMode = mk(4, 6);
+  toExplain(judgeMode);
+  const jm = judgeMode.state.round.explainers;
+  assert.equal(judgeMode.cue().id, 'r1:explain');
+  assert.ok(judgeMode.cue().text.includes('可以叫人'));
+  judgeMode.act(jm[0], { type: 'done' });
+  assert.equal(judgeMode.cue().id, 'r1:explain', 'no per-turn line in 諗樣揀');
+});
+
+test('9upper: 自己決定 — nobody is up; players tick themselves off, the 諗樣 can tick anybody off', () => {
+  const sim = mk(5, 6, { speakOrder: 'free', speakSecs: 30 });
+  toExplain(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  assert.deepEqual(ex, ringOf(sim), 'listed in seat order from the 諗樣\'s left');
+  assert.equal(sim.view(null).speakOrder, 'free');
+  assert.deepEqual(sim.view(null).turn, { pid: null, spoken: [], total: 4 });
+  assert.equal(sim.state.deadline, null, 'no clock without anybody on the floor');
+  assert.equal(sim.view(ex[0]).deadline, undefined);
+  assert.equal(sim.act(judge, { type: 'call', target: ex[1] }), false, 'no calling in 自己決定');
+  assert.equal(sim.act(judge, { type: 'done' }), false, 'the 諗樣 must say whom');
+  assert.equal(sim.act(judge, { type: 'done', target: judge }), false);
+  assert.equal(sim.act(judge, { type: 'done', target: 'nobody' }), false);
+  assert.equal(sim.act(ex[2], { type: 'done' }), true, 'anybody, in any order');
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[2]]);
+  assert.equal(sim.act(ex[2], { type: 'done' }), false, 'once only');
+  assert.equal(sim.act(ex[0], { type: 'done', target: ex[1] }), true);
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[2], ex[0]], 'a 玩家 can only tick themselves');
+  assert.equal(sim.act(judge, { type: 'done', target: ex[1] }), true, 'the 諗樣 ticks a name');
+  assert.equal(phase(sim), 'explain');
+  assert.equal(sim.state.deadline, null);
+  assert.equal(sim.act(judge, { type: 'done', target: ex[3] }), true);
+  assert.equal(phase(sim), 'judge', 'everybody ticked → the pick');
+  assert.equal(sim.view(null).turn, null);
+  // the 諗樣 may also decide at any time, and play 收皮啦
+  const early = mk(5, 6, { speakOrder: 'free', callouts: 2 });
+  toExplain(early);
+  assert.equal(early.act(J(early), { type: 'callout', target: early.state.round.explainers[1] }), true);
+  assert.equal(early.act(early.state.round.explainers[0], { type: 'decide' }), false);
+  assert.equal(early.act(J(early), { type: 'decide' }), true);
+  assert.equal(phase(early), 'judge');
+});
+
+test('9upper: 自己決定 — legalActions, autoAct, @next and the cue', () => {
+  const sim = mk(4, 6, { speakOrder: 'free', callouts: 0 });
+  toExplain(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  assert.deepEqual(sim.legal(ex[1]), [{ type: 'done' }]);
+  assert.deepEqual(sim.legal(judge), [
+    { type: 'done', target: ex[0] }, { type: 'done', target: ex[1] }, { type: 'done', target: ex[2] }, { type: 'decide' }]);
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' });
+  assert.deepEqual(engine.autoAct(sim.state, judge, sim.ctx()), { type: 'done', target: ex[0] });
+  assert.deepEqual(sim.focus(), { pids: [judge] });
+  const c = sim.cue();
+  assert.equal(c.id, 'r1:explain');
+  assert.ok(c.text.includes('自己傾') && c.text.includes('我講完') && c.text.includes('唔可以問人係咩身份'));
+  assert.ok(!ex.some((p) => c.text.includes(nameOf(sim, p))), 'nobody is named: nobody is first');
+  sim.act(ex[0], { type: 'done' });
+  assert.deepEqual(engine.autoAct(sim.state, ex[0], sim.ctx()), null, 'already ticked');
+  assert.deepEqual(engine.autoAct(sim.state, judge, sim.ctx()), { type: 'done', target: ex[1] });
+  assert.equal(sim.cue().id, 'r1:explain', 'one line for the whole step');
+  sim.cueDone();
+  sim.host({ type: ACT.NEXT });                          // skip: ticks the first one still waiting
+  assert.deepEqual(sim.view(null).turn.spoken, [ex[0], ex[1]]);
+  sim.host({ type: ACT.NEXT });
+  assert.equal(phase(sim), 'judge');
+});
+
+test('9upper: 發言次序 hints (≤ 40 chars) and cues stay right in every mode and never leak', () => {
+  const seen = {};
+  for (const speakOrder of ['judge', 'system', 'free']) {
+    for (const callouts of [0, 1]) {
+      const sim = mk(5, 7 + callouts, { speakOrder, callouts });
+      toExplain(sim);
+      const ex = sim.state.round.explainers;
+      const H = sim.state.round.honest;
+      const check = () => {
+        for (const pid of [...sim.players.map((p) => p.id), null]) {
+          const v = sim.view(pid);
+          assert.ok(v.hint.length >= 8 && v.hint.length <= 40, `${speakOrder} hint ${v.hint.length}: ${v.hint}`);
+          if (v.myRole !== 'honest') assert.ok(!v.hint.includes('照張卡'), v.hint);
+          assert.ok(!v.hint.includes(sim.state.round.term.explain));
+          // only the 老實人 may hold a line about the card: the 諗樣 and the table never name anybody as the 老實人
+          if (pid === null || pid === J(sim)) assert.equal(v.hint.includes(nameOf(sim, H)), false, v.hint);
+          if (sim.state.phase === 'explain') (seen[`${speakOrder}|${v.myRole ?? 'table'}`] ||= new Set()).add(v.hint);
+        }
+      };
+      check();
+      if (speakOrder === 'free') {
+        for (const p of [H, ...ex.filter((x) => x !== H)]) { sim.act(p, { type: 'done' }); check(); }
+      } else {
+        for (let i = 0; i < ex.length - 1; i++) { sim.act(ex[i], { type: 'done' }); check(); }
+        sim.act(J(sim), { type: 'decide' });
+      }
+      check();
+    }
+  }
+  const only = (k) => [...seen[k]];
+  assert.ok(only('system|judge').every((h) => h.includes('電話派人')), 'the 諗樣 is told the phone deals');
+  assert.ok(only('system|table').every((h) => h.includes('隨機派人')));
+  assert.ok(only('free|judge').every((h) => h.includes('自己傾')));
+  assert.ok(only('free|honest').some((h) => h.includes('我講完')) && only('free|bluffer').some((h) => h.includes('我講完')));
+  assert.ok(only('free|honest').some((h) => h.startsWith('你講完喇')), 'after ticking off, the hint moves on');
+  assert.ok(only('system|bluffer').some((h) => h.startsWith('等電話派到你')));
+  assert.ok(only('system|bluffer').some((h) => h.startsWith('你講完喇')));
+  assert.ok(only('judge|honest').every((h) => !h.includes('電話派') && !h.includes('自己傾')), 'the official hints did not change');
+});
+
+test('9upper: leak check at every step of a scripted round — 系統派 and 自己決定', () => {
+  for (const speakOrder of ['system', 'free']) {
+    for (const over of [{ rePeek: false }, { rePeek: true, passPhone: true }]) {
+      const sim = mk(6, 12, { ...over, speakOrder, levelMode: 'judge', callouts: 2 });
+      leakCheck(sim);
+      sim.act(J(sim), { type: 'level', level: 3 }); leakCheck(sim);
+      sim.act(J(sim), { type: 'start' }); leakCheck(sim);
+      while (phase(sim) === 'read') {
+        if (over.passPhone) { sim.act(sim.state.round.reader, { type: 'peek' }); leakCheck(sim); }
+        sim.advance(); leakCheck(sim);
+      }
+      const ex = sim.state.round.explainers;
+      sim.act(ex[0], { type: 'done' }); leakCheck(sim);
+      sim.act(J(sim), { type: 'done', ...(speakOrder === 'free' ? { target: ex[3] } : {}) }); leakCheck(sim);
+      sim.act(J(sim), { type: 'callout', target: ex[2] }); leakCheck(sim);
+      sim.act(J(sim), { type: 'decide' }); leakCheck(sim);
+      sim.act(J(sim), { type: 'pick', target: ex[1] }); leakCheck(sim);
+      sim.act(J(sim), { type: 'next' }); leakCheck(sim);
+    }
+  }
+});
+
 // ---------- 收皮啦 ----------
 
 test('9upper: rule: 收皮啦 — 諗樣 only, after the peek and before the pick, once per round, never on self', () => {
@@ -1028,7 +1345,8 @@ test('9upper: focus per phase', () => {
 });
 
 test('9upper: autoAct unsticks every phase, so a dead phone cannot stop the table', () => {
-  for (const over of [{}, { passPhone: true }, { levelMode: 'judge', speakSecs: 0 }]) {
+  for (const over of [{}, { passPhone: true }, { levelMode: 'judge', speakSecs: 0 }, { speakOrder: 'system', speakSecs: 15 },
+    { speakOrder: 'free', passPhone: true }]) {
     const sim = mk(5, 4, over);
     let guard = 0;
     while (!sim.result() && guard++ < 3000) {
@@ -1074,7 +1392,8 @@ test('9upper: @next from the host never gets stuck in judge, and skips level/ter
 
 test('9upper: U1 — every phase gives every seat (and the table) a one-line hint that never leaks', () => {
   const seen = new Set();
-  for (const over of [{}, { passPhone: true }, { levelMode: 'judge', callouts: 0 }]) {
+  for (const over of [{}, { passPhone: true }, { levelMode: 'judge', callouts: 0 }, { speakOrder: 'system' },
+    { speakOrder: 'system', passPhone: true, callouts: 0 }, { speakOrder: 'free' }, { speakOrder: 'free', callouts: 0, passPhone: true }]) {
     for (let seed = 1; seed <= 4; seed++) {
       const sim = mk(5, seed, over);
       const check = (x) => {
@@ -1082,7 +1401,7 @@ test('9upper: U1 — every phase gives every seat (and the table) a one-line hin
         for (const pid of [...x.players.map((p) => p.id), null]) {
           const v = x.view(pid);
           assert.equal(typeof v.hint, 'string', `${s.phase} ${pid}`);
-          assert.ok(v.hint.length >= 8 && v.hint.length <= 48, `hint length ${v.hint.length}: ${v.hint}`);
+          assert.ok(v.hint.length >= 8 && v.hint.length <= 40, `hint length ${v.hint.length}: ${v.hint}`);
           assert.ok(!v.hint.includes('\n'));
           if (s.round.term) assert.ok(!v.hint.includes(s.round.term.explain));
           // a hint never talks about a role the viewer does not hold
@@ -1262,6 +1581,8 @@ const MODES = [
   { name: 'busy', over: { levelMode: '3', speakSecs: 20, callouts: 2, scoreFloor: true, rePeek: true, antiStreak: true } },
   { name: 'judge-picks', over: { levelMode: 'judge', laps: 1, callouts: 0 } },
   { name: 'newbie', over: { preset: 'newbie', passPhone: true, readSecs: 15 } },
+  { name: 'system-order', over: { speakOrder: 'system', speakSecs: 20, callouts: 2 } },
+  { name: 'free-order', over: { speakOrder: 'free', speakSecs: 20, passPhone: true, rePeek: true } },
 ];
 
 test('9upper: fuzz — every player count x 110 seeds terminates with a well-formed result', () => {
@@ -1324,7 +1645,8 @@ test('9upper: fuzz — every seat sometimes wins (no dead seats)', () => {
 
 test('9upper: legalActions are all accepted and each changes the state (random sample)', () => {
   const rng = mulberry32(5);
-  for (const over of [{ callouts: 2 }, { passPhone: true, levelMode: 'judge' }]) {
+  for (const over of [{ callouts: 2 }, { passPhone: true, levelMode: 'judge' }, { speakOrder: 'system', callouts: 2 },
+    { speakOrder: 'free', callouts: 2, passPhone: true }]) {
     for (let n = 3; n <= 9; n++) {
       const sim = mk(n, n * 3, over);
       for (let i = 0; i < 400 && !sim.result(); i++) {
@@ -1417,7 +1739,8 @@ test('9upper: UI renders every phase for every seat, never shows the explanation
   const mounted = [];
   try {
     const { mount } = await import('../js/games/9upper/ui.js');
-    for (const over of [{}, { passPhone: true }, { levelMode: 'judge', callouts: 2, speakSecs: 20, rePeek: true }]) {
+    for (const over of [{}, { passPhone: true }, { levelMode: 'judge', callouts: 2, speakSecs: 20, rePeek: true },
+      { speakOrder: 'system', callouts: 2, speakSecs: 20, rePeek: true }, { speakOrder: 'free', passPhone: true, rePeek: true }]) {
       for (let seed = 1; seed <= 3; seed++) {
         const sim = mk(5, seed, over);
         const seats = [...sim.players.map((p) => p.id), null];
@@ -1490,6 +1813,111 @@ test('9upper: UI renders every phase for every seat, never shows the explanation
     judge.show();
     judge.fc.pickers.at(-1).props.onConfirm([ex[0]]);
     assert.deepEqual(judge.sent.pop(), { type: 'pick', target: ex[0] });
+  } finally {
+    for (const ui of mounted) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('9upper: UI — 系統派 announces the speaker and has no 叫佢講; 自己決定 has 我講完 and name ticks', async () => {
+  const dom = installDom();
+  const mounted = [];
+  try {
+    const { mount } = await import('../js/games/9upper/ui.js');
+    const seatUi = (sim, pid) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const sfxs = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const ui = mount(root, { me: pid, players: sim.players, isHost: pid === 'p1', send: (a) => sent.push(a),
+        sfx: (n) => sfxs.push(n), toast() {}, now: () => sim.now, components: fc.components, meta, config: sim.config });
+      mounted.push(ui);
+      return { root, sent, sfxs, show() { ui.update(sim.view(pid), {}); return root.visibleText(); } };
+    };
+    const callable = (root) => root.all().filter((n) => n.className.includes('callable') && !n.hidden);
+
+    // ---- 系統派
+    const sys = mk(5, 6, { speakOrder: 'system', callouts: 1 });
+    toExplain(sys);
+    const ex = sys.state.round.explainers;
+    const jd = seatUi(sys, J(sys));
+    const first = seatUi(sys, ex[0]);
+    const second = seatUi(sys, ex[1]);
+    const table = seatUi(sys, null);
+    let t = jd.show();
+    assert.ok(t.includes(`輪到 ${nameOf(sys, ex[0])}`), 'the 諗樣 sees who is dealt');
+    assert.ok(t.includes(`下一位：${nameOf(sys, ex[1])}`));
+    assert.ok(t.includes('1. ') && t.includes('4. '), 'the dealt order is numbered');
+    assert.equal(callable(jd.root).length, 0, 'no 叫佢講 in 系統派');
+    assert.ok(!t.includes('叫佢講'));
+    assert.ok(button(jd.root, '下一位') && button(jd.root, '我決定咗'));
+    button(jd.root, '下一位').click();
+    assert.deepEqual(jd.sent.pop(), { type: 'done', turn: 0 });
+    t = first.show();
+    assert.ok(t.includes('輪到你講！'));
+    assert.deepEqual(first.sfxs, ['turn'], 'a soft chime for the one called');
+    assert.ok(button(first.root, '我講完'));
+    button(first.root, '我講完').click();
+    assert.deepEqual(first.sent.pop(), { type: 'done', turn: 0 });
+    t = second.show();
+    assert.equal(button(second.root, '我講完'), undefined, 'not their turn');
+    assert.ok(t.includes(`輪到 ${nameOf(sys, ex[0])}`) && !second.sfxs.includes('turn'));
+    t = table.show();
+    assert.ok(t.includes(`輪到 ${nameOf(sys, ex[0])}`));
+    assert.equal(buttons(table.root).length, 0, 'the table has nothing to tap');
+    // the dealt speaker advances → the next phone chimes, the old announcement is replaced
+    sys.act(ex[0], { type: 'done', turn: 0 });
+    t = second.show();
+    assert.ok(t.includes('輪到你講！') && button(second.root, '我講完'));
+    assert.deepEqual(second.sfxs, ['turn']);
+    second.show();
+    assert.deepEqual(second.sfxs, ['turn'], 'one chime per turn, not per update');
+    t = jd.show();
+    assert.ok(t.includes(`輪到 ${nameOf(sys, ex[1])}`) && t.includes(`下一位：${nameOf(sys, ex[2])}`));
+    assert.ok(t.includes('✅ 已講'));
+    for (const pid of [ex[1], ex[2]]) sys.act(pid, { type: 'done' });
+    t = jd.show();
+    assert.ok(t.includes(`輪到 ${nameOf(sys, ex[3])}`) && t.includes('之後就到諗樣揀人'), 'last speaker');
+
+    // ---- 自己決定
+    const fr = mk(5, 6, { speakOrder: 'free', callouts: 1 });
+    toExplain(fr);
+    const fx = fr.state.round.explainers;
+    const fj = seatUi(fr, J(fr));
+    const fp = seatUi(fr, fx[2]);
+    const ft = seatUi(fr, null);
+    t = fj.show();
+    assert.ok(t.includes('自己決定次序'));
+    assert.ok(!t.includes('輪到'), 'nobody is announced');
+    assert.equal(button(fj.root, '下一位'), undefined);
+    assert.ok(button(fj.root, '我決定咗'));
+    const ticks = callable(fj.root);
+    assert.equal(ticks.length, 4, 'every waiting name is a tick button for the 諗樣');
+    assert.ok(ticks.every((n) => n.textContent.includes('講完喇')));
+    ticks.find((n) => n.textContent.includes(nameOf(fr, fx[1]))).click();
+    assert.deepEqual(fj.sent.pop(), { type: 'done', target: fx[1] });
+    t = fp.show();
+    assert.ok(button(fp.root, '我講完'), 'a 玩家 ticks themselves');
+    assert.equal(callable(fp.root).length, 0);
+    button(fp.root, '我講完').click();
+    assert.deepEqual(fp.sent.pop(), { type: 'done' });
+    fr.act(fx[2], { type: 'done' });
+    t = fp.show();
+    assert.equal(button(fp.root, '我講完'), undefined, 'ticked → the button goes');
+    assert.ok(t.includes('✅ 已講'));
+    t = fj.show();
+    assert.equal(callable(fj.root).length, 3);
+    t = ft.show();
+    assert.equal(buttons(ft.root).length, 0);
+    assert.ok(t.includes('自己傾'));
+    // 諗樣揀 is unchanged: tap a name to call
+    const off = mk(5, 6);
+    toExplain(off);
+    const oj = seatUi(off, J(off));
+    t = oj.show();
+    assert.equal(callable(oj.root).length, 3, 'the waiting names (not the one talking) are 叫佢講 buttons');
+    assert.ok(t.includes('叫佢講') && button(oj.root, '下一位'));
+    assert.ok(!t.includes('輪到'));
   } finally {
     for (const ui of mounted) ui.destroy();
     dom.restore();
