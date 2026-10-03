@@ -27,8 +27,8 @@
 // and config.presets(n). Every view carries a role-independent `hint` (💡).
 // ============================================================
 
-import { HOST, ACT, seatOrder, shuffle, sample, rint } from '../../core/engine-kit.js?v=1';
-import * as S from './script.js?v=1';
+import { HOST, ACT, seatOrder, shuffle, sample, rint } from '../../core/engine-kit.js?v=20261003102525';
+import * as S from './script.js?v=20261003102525';
 
 // ---------- the rules tables (docs/research/avalon.md) ----------
 

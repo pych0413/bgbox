@@ -20,8 +20,8 @@
 // the shell's night-time mute like every other sound.
 // ============================================================
 
-import { el, fmtClock } from '../dom.js?v=20261003090241';
-import { sfx } from '../../core/sfx.js?v=20261003090241';
+import { el, fmtClock } from '../dom.js?v=20261003102525';
+import { sfx } from '../../core/sfx.js?v=20261003102525';
 
 export function Timer(props = {}) {
   let p = { warnAt: [60, 10], ...props };

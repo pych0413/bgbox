@@ -20,8 +20,8 @@
 // All wording lives in script.js. Uses only api.components + plain DOM.
 // ============================================================
 
-import { rules } from './game.js?v=1';
-import * as S from './script.js?v=1';
+import { rules } from './game.js?v=20261003102525';
+import * as S from './script.js?v=20261003102525';
 
 const T = S.T;
 const ROLE_RULE = Object.fromEntries(rules.roles.map((r) => [r.id, r]));

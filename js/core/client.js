@@ -38,14 +38,14 @@
 //   state.hostActions / hostCtl.hostAction(i, label)   the game's own host buttons (engine.hostActions)
 // ============================================================
 
-import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003090241';
-import { hasPeer } from './net.js?v=20261003090241';
-import { Room } from './room.js?v=20261003090241';
-import { createBag } from './bag.js?v=20261003090241';
-import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003090241';
-import { cryptoRng } from './engine-kit.js?v=20261003090241';
-import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003090241';
-import { GAMES } from '../games/registry.js?v=20261003090241';
+import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=20261003102525';
+import { hasPeer } from './net.js?v=20261003102525';
+import { Room } from './room.js?v=20261003102525';
+import { createBag } from './bag.js?v=20261003102525';
+import { applyInkBatch, emptyInk, normalizeInk } from './session.js?v=20261003102525';
+import { cryptoRng } from './engine-kit.js?v=20261003102525';
+import { makeStore, uid, keepAwake, isRoomCode } from './util.js?v=20261003102525';
+import { GAMES } from '../games/registry.js?v=20261003102525';
 
 const RESUME_TTL = 8 * 60 * 60 * 1000;     // a night of games
 const WELCOME_TIMEOUT = 12_000;

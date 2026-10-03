@@ -16,8 +16,8 @@
 // `onChange` receives picks in tap order; the grid itself is in seat order.
 // ============================================================
 
-import { el, restartAnim } from '../dom.js?v=20261003090241';
-import { sfx } from '../../core/sfx.js?v=20261003090241';
+import { el, restartAnim } from '../dom.js?v=20261003102525';
+import { sfx } from '../../core/sfx.js?v=20261003102525';
 
 export function PlayerPicker(props = {}) {
   let p = props;

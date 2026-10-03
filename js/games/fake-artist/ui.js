@@ -23,8 +23,8 @@
 // Flow and wording: docs/games/fake-artist.md.
 // ============================================================
 
-import * as S from './script.js?v=1';
-import { MIN_STROKE_LEN, checkEntry, penColor, strokeLength, textLen } from './game.js?v=1';
+import * as S from './script.js?v=20261003102525';
+import { MIN_STROKE_LEN, checkEntry, penColor, strokeLength, textLen } from './game.js?v=20261003102525';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);

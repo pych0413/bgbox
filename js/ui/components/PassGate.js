@@ -14,8 +14,8 @@
 // resolved promise is still the gate it asked for.
 // ============================================================
 
-import { el, lockScroll, unlockScroll } from '../dom.js?v=20261003090241';
-import { sfx } from '../../core/sfx.js?v=20261003090241';
+import { el, lockScroll, unlockScroll } from '../dom.js?v=20261003102525';
+import { sfx } from '../../core/sfx.js?v=20261003102525';
 
 let current = null;
 

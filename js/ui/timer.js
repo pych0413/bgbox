@@ -21,10 +21,10 @@
 // Honest limit (shown in the sheet): the alarm only rings while the app is open.
 // ============================================================
 
-import { el, fmtClock, toast } from './dom.js?v=20261003090241';
-import { sfx, primeAudio } from '../core/sfx.js?v=20261003090241';
-import { TIMER_PRESETS, timerLeftMs, timerCue, clampTimerSec, timerStep, fmtDuration } from './logic.js?v=20261003090241';
-import { openSheet } from './sheet.js?v=20261003090241';
+import { el, fmtClock, toast } from './dom.js?v=20261003102525';
+import { sfx, primeAudio } from '../core/sfx.js?v=20261003102525';
+import { TIMER_PRESETS, timerLeftMs, timerCue, clampTimerSec, timerStep, fmtDuration } from './logic.js?v=20261003102525';
+import { openSheet } from './sheet.js?v=20261003102525';
 
 const TICK_MS = 200;
 const LATE_ALARM_MS = 4000;    // a phone that wakes up long after zero shows 時間到 but does not ring

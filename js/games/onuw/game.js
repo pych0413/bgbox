@@ -24,8 +24,8 @@
 // notes (only the owner's own notes ever leave, through view()), votes of others.
 // ============================================================
 
-import { ACT, HOST, seatOrder, shuffle, rint } from '../../core/engine-kit.js?v=1';
-import * as S from './script.js?v=1';
+import { ACT, HOST, seatOrder, shuffle, rint } from '../../core/engine-kit.js?v=20261003102525';
+import * as S from './script.js?v=20261003102525';
 
 // ---------- roles ----------
 
