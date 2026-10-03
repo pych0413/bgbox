@@ -7,7 +7,9 @@
 //                same hold-to-peek Cover as a role card (release = hidden), so a
 //                glance from the next seat sees nothing. Games that keep the
 //                role secret even from its holder (誰是臥底) expose no own-role
-//                field; the sheet then lists every role of the game instead.
+//                field; the sheet then lists every role of the game instead. A game where
+//                cards change hands may name the heading itself with `view.hintRoleLabel`
+//                (e.g. 「你派到嘅角色」), so the sheet never claims to know the card you hold now.
 //   📖           the full rules
 //
 // The sheet follows the live view while open (a new phase updates the hint),
@@ -71,7 +73,8 @@ export function HintSheet(sh, { onRules } = {}) {
     hintEl.classList.toggle('is-empty', !text);
 
     const role = roleFor(view, game?.rules);
-    const key = sig([game?.meta?.id, role]);
+    const label = typeof view?.hintRoleLabel === 'string' && view.hintRoleLabel.trim() ? view.hintRoleLabel.trim().slice(0, 20) : '你嘅角色';
+    const key = sig([game?.meta?.id, role, label]);
     if (key === roleKey) return;
     roleKey = key;
     cover?.destroy();
@@ -82,7 +85,7 @@ export function HintSheet(sh, { onRules } = {}) {
         lockMode: 'none', ariaLabel: '㩒住睇你嘅角色', openSound: 'flip',
       });
       roleHost.replaceChildren(
-        el('div', { class: 'hint-h', text: '🎭 你嘅角色' }),
+        el('div', { class: 'hint-h', text: `🎭 ${label}` }),
         cover.el,
         el('p', { class: 'hint', text: '㩒住先見到，放手即刻冚返 — 唔好俾隔離望到。' }));
     } else {

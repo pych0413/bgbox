@@ -1,0 +1,203 @@
+/* ============================================================
+   你畫我猜 — game chrome. Loaded by the shell (meta.css = true).
+   Uses the base.css tokens (--surface, --line, --text, --accent …) and its .btn / .c-cover /
+   .c-timer / .c-canvas components; only this game's own layout lives here, every class is .dg-*.
+   ============================================================ */
+
+.dg { display: flex; flex-direction: column; gap: .75rem; }
+.dg-body { min-width: 0; }
+.dg-stack { display: flex; flex-direction: column; gap: .625rem; }
+.dg-stack > .btn, .dg-stack .c-cover { margin-bottom: 0; }
+.dg-h { margin: .25rem 0 0; font-size: 1.125rem; font-weight: 800; text-align: center; }
+.dg-note { margin: 0; text-align: center; color: var(--text-dim); font-size: .8125rem; line-height: 1.6; }
+
+/* ---------- waiting ---------- */
+.dg-wait { text-align: center; padding: 2rem 0 1.5rem; }
+.dg-wait-emoji { font-size: 3rem; line-height: 1; animation: dg-bob 2.6s ease-in-out infinite; }
+.dg-wait-text { margin: .75rem 0 0; color: var(--text-dim); font-size: .9375rem; }
+@keyframes dg-bob { 0%, 100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-.375rem) rotate(6deg); } }
+
+/* ---------- timer: smaller than the shared default so the picture keeps the room ---------- */
+.dg-timer .c-timer { padding: .125rem 0; }
+.dg-timer .c-timer-clock { font-size: 2.5rem; }
+.dg-timer .c-timer-label { font-size: .75rem; }
+
+.dg-count { text-align: center; font-size: .8125rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* ---------- choose ---------- */
+.dg-offers { display: flex; flex-direction: column; gap: .625rem; }
+.dg-offer {
+  display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: .75rem; row-gap: .125rem;
+  align-items: center; width: 100%; min-height: 4.75rem; padding: .625rem .875rem; text-align: left;
+  background: var(--surface-2); color: var(--text); font: inherit;
+  border: 1.5px solid var(--line); border-radius: var(--radius); cursor: pointer;
+  transition: transform .08s, border-color .15s;
+}
+.dg-offer:active { transform: scale(.98); border-color: var(--accent); }
+.dg-offer[disabled] { opacity: .5; pointer-events: none; }
+.dg-offer-level { grid-row: 1 / 3; font-size: .75rem; font-weight: 700; text-align: center; line-height: 1.5; min-width: 3.75rem; color: var(--text-dim); }
+.dg-offer-word { font-size: 1.5rem; font-weight: 800; letter-spacing: .04em; line-height: 1.25; overflow-wrap: anywhere; }
+.dg-offer-word.long { font-size: 1.1875rem; }
+.dg-offer-meta { font-size: .75rem; color: var(--text-dim); }
+.dg-offer.lv1 { border-left: .3125rem solid var(--ok); }
+.dg-offer.lv2 { border-left: .3125rem solid var(--cheese); }
+.dg-offer.lv3 { border-left: .3125rem solid var(--danger); }
+.dg-reroll { align-self: center; }
+.dg-reroll.armed { border-color: var(--danger); color: #ff9b86; }
+
+/* ---------- play: the length mask ---------- */
+.dg-mask { display: flex; justify-content: center; align-items: center; gap: .3125rem; padding: .125rem 0; }
+.dg-mask-cell {
+  flex: 1 1 0; min-width: 0; max-width: 3rem; height: 3rem; display: grid; place-items: center;
+  font-size: 1.5rem; font-weight: 800; border-radius: .625rem;
+  background: var(--bg-2); border: 2px solid var(--line); color: var(--text-dim);
+}
+.dg-mask-cell.on { border-color: var(--accent); color: var(--text); background: var(--surface-2); animation: dg-pop .35s cubic-bezier(.2, .9, .3, 1.3); }
+.dg-mask-gap { flex: 0 0 .75rem; }
+@keyframes dg-pop { 0% { transform: scale(.7); opacity: .3; } 100% { transform: scale(1); opacity: 1; } }
+
+.dg-hintrow { display: flex; flex-wrap: wrap; gap: .375rem; justify-content: center; }
+.dg-chip {
+  display: inline-flex; align-items: center; padding: .1875rem .75rem; border-radius: 99px; font-size: .8125rem; font-weight: 700;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+}
+.dg-chip.cat { border-color: var(--accent); color: var(--accent); }
+.dg-chip.ghost { border-style: dashed; border-color: var(--line); color: var(--text-dim); font-weight: 500; }
+.dg-chip.ok { border-color: var(--ok); color: var(--ok); }
+.dg-solved { display: contents; }
+
+/* ---------- play: the drawer's word (hidden until asked for) ---------- */
+.dg-word-chip {
+  width: 100%; min-height: 3rem; padding: .5rem .875rem; text-align: center; font: inherit; color: var(--text);
+  background: var(--bg-2); border: 1.5px dashed var(--line); border-radius: var(--radius); cursor: pointer;
+}
+.dg-word-chip.open { border-style: solid; border-color: var(--accent); background: var(--surface-2); }
+.dg-word-hidden { color: var(--text-dim); font-size: .9375rem; font-weight: 600; }
+.dg-word-text { font-size: 1.75rem; font-weight: 800; letter-spacing: .06em; line-height: 1.25; overflow-wrap: anywhere; }
+.dg-word-text.long { font-size: 1.375rem; }
+.dg-word-alt { font-size: .75rem; color: var(--text-dim); line-height: 1.4; }
+.dg-word-meta { font-size: .75rem; color: var(--accent); }
+.dg-word-face { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; padding: .25rem .5rem; }
+.dg-word-cover { aspect-ratio: auto; height: 5.5rem; }
+
+/* ---------- play: shout mode, the drawer's name chips ---------- */
+.dg-chipsbox { display: flex; flex-direction: column; gap: .375rem; }
+.dg-chips-head { font-size: .8125rem; font-weight: 700; color: var(--text-dim); text-align: center; }
+.dg-chips-head.hot { color: var(--accent); }
+.dg-chips { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; }
+.dg-chip-guesser {
+  display: inline-flex; align-items: center; gap: .5rem; min-height: 2.875rem; padding: .375rem 1rem; font: inherit; font-size: .9375rem; font-weight: 700;
+  color: var(--text); background: var(--surface-2); border: 2px solid var(--seat, var(--line)); border-radius: 99px; cursor: pointer;
+  touch-action: manipulation;
+}
+.dg-chip-guesser:active { transform: scale(.95); }
+.dg-chip-guesser.done { background: rgba(78, 201, 122, .16); border-color: var(--ok); }
+.dg-chip-guesser[disabled] { cursor: default; pointer-events: none; opacity: .75; }
+.dg-chip-dot { width: .75rem; height: .75rem; border-radius: 50%; background: var(--seat, var(--accent)); flex: none; }
+.dg-chip-state { font-size: .8125rem; }
+.dg-grace { text-align: center; font-size: .9375rem; font-weight: 800; color: var(--ok); animation: dg-pop .35s cubic-bezier(.2, .9, .3, 1.3); }
+
+/* ---------- play: typed guessing ---------- */
+.dg-inputwrap { display: flex; flex-direction: column; gap: .25rem; }
+.dg-inputrow { display: flex; gap: .5rem; }
+.dg-input {
+  flex: 1; min-width: 0; height: 3.25rem; padding: 0 .875rem; font: inherit; font-size: 1.125rem; /* >= 16px: iOS never zooms the page on focus */
+  color: var(--text); background: var(--bg-2); border: 2px solid var(--line); border-radius: var(--radius); outline: none;
+}
+.dg-input:focus { border-color: var(--accent); }
+.dg-input:disabled { opacity: .5; }
+.dg-send { width: auto; flex: none; min-height: 3.25rem; padding: 0 1.25rem; margin: 0; }
+.dg-input-note { margin: 0; text-align: center; color: var(--text-dim); font-size: .75rem; min-height: 1em; }
+.dg-youdid {
+  padding: .875rem 1rem; text-align: center; font-weight: 800; line-height: 1.5; border-radius: var(--radius);
+  background: rgba(78, 201, 122, .14); border: 1px solid var(--ok); color: var(--ok);
+}
+
+.dg-feed { display: flex; flex-direction: column; gap: .25rem; max-height: 11rem; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.dg-feed.drawer { max-height: 9rem; }
+.dg-feed-row {
+  display: flex; align-items: center; gap: .5rem; padding: .3125rem .625rem; min-height: 2.25rem; border-radius: .625rem;
+  background: var(--bg-2); font-size: .875rem;
+}
+.dg-feed-dot { width: .625rem; height: .625rem; border-radius: 50%; background: var(--seat, var(--accent)); flex: none; }
+.dg-feed-who { font-weight: 700; flex: none; max-width: 6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-feed-text { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text-dim); }
+.dg-feed-row.close .dg-feed-text, .dg-feed-row.near .dg-feed-text { color: var(--cheese-2); }
+.dg-feed-row.right { background: rgba(78, 201, 122, .12); }
+.dg-feed-row.right .dg-feed-text { color: var(--ok); font-weight: 700; }
+.dg-feed-row.me { box-shadow: inset 0 0 0 1px var(--line); }
+.dg-feed-ok {
+  flex: none; width: 2.5rem; height: 2.25rem; font: inherit; font-size: 1.0625rem; font-weight: 800; cursor: pointer;
+  color: var(--ok); background: transparent; border: 1.5px solid var(--ok); border-radius: .625rem; touch-action: manipulation;
+}
+.dg-feed-ok:active { background: rgba(78, 201, 122, .25); }
+.dg-feed-empty { text-align: center; color: var(--text-dim); font-size: .8125rem; padding: .375rem 0; }
+
+/* ---------- play: the canvas — size it for what else is on this seat's screen ---------- */
+.dg-canvas { --c-chrome: 22rem; }
+.dg-canvas.typed { --c-chrome: 34rem; }      /* the keyboard takes half the screen: keep the picture small and above it */
+.dg-canvas.reveal { --c-chrome: 30rem; }          /* the word and the points sit above it */
+.dg-canvas.drawer { --c-chrome: 36rem; }     /* timer, word, name chips and the toolbar share this screen */
+.dg .dg-canvas .c-canvas { --c-chrome: inherit; }
+
+/* ---------- foul, moderator, abandon ---------- */
+.dg-foulrow { display: flex; align-items: center; justify-content: center; gap: .5rem; }
+.dg-foul { font-size: .75rem; min-height: 2.25rem; color: var(--text-dim); }
+.dg-foul.armed { border-color: var(--danger); color: #ff9b86; }
+.dg-foul-n { font-size: .75rem; color: var(--text-dim); }
+.dg-abandon { align-self: center; color: var(--text-dim); }
+.dg-abandon.armed, .dg-void.armed { border-color: var(--danger); color: #ff9b86; }
+.dg-mod {
+  display: flex; align-items: center; justify-content: center; gap: .5rem; flex-wrap: wrap; padding: .375rem .5rem;
+  border-top: 1px dashed var(--line);
+}
+.dg-mod-tag { font-size: .6875rem; font-weight: 700; color: var(--text-dim); letter-spacing: .08em; }
+
+/* ---------- reveal ---------- */
+.dg-reveal-head { text-align: center; font-size: 1.1875rem; font-weight: 800; padding-top: .25rem; line-height: 1.5; animation: dg-pop .4s cubic-bezier(.2, .9, .3, 1.2); }
+.dg-reveal-card {
+  text-align: center; padding: .875rem 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: inset 0 .1875rem 0 var(--accent);
+}
+.dg-reveal-word { font-size: 2.25rem; font-weight: 800; letter-spacing: .06em; line-height: 1.25; overflow-wrap: anywhere; }
+.dg-reveal-word.long { font-size: 1.625rem; }
+.dg-reveal-meta { margin-top: .25rem; font-size: .8125rem; color: var(--text-dim); line-height: 1.5; }
+.dg-reveal-pts { text-align: center; font-size: .9375rem; font-weight: 700; color: var(--accent); line-height: 1.6; }
+.dg-reveal-foul { text-align: center; font-size: .875rem; font-weight: 700; color: #ff9b86; }
+.dg-late { display: flex; flex-direction: column; gap: .375rem; padding: .5rem; border: 1px dashed var(--line); border-radius: var(--radius); }
+
+/* ---------- score strip ---------- */
+.dg-scores { display: flex; flex-wrap: wrap; gap: .375rem; justify-content: center; }
+.dg-score {
+  display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem; border-radius: 99px;
+  background: var(--bg-2); border: 1.5px solid var(--line); font-size: .8125rem;
+}
+.dg-score.me { border-color: var(--seat, var(--accent)); }
+.dg-score.drawing { background: var(--surface-2); }
+.dg-score.lead { border-color: var(--cheese); }
+.dg-score-dot { width: .625rem; height: .625rem; border-radius: 50%; background: var(--seat, var(--accent)); flex: none; }
+.dg-score-name { max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.dg-score-n { font-weight: 800; font-variant-numeric: tabular-nums; }
+.dg-score-d { font-weight: 800; font-size: .75rem; color: var(--ok); }
+.dg-score.team { flex-direction: column; align-items: flex-start; gap: 0; border-radius: var(--radius); min-width: 6rem; padding: .375rem .75rem; }
+.dg-score.team.now { border-color: var(--accent); background: var(--surface-2); }
+.dg-score.team .dg-score-n { font-size: 1.25rem; }
+.dg-score-sub { font-size: .6875rem; color: var(--text-dim); max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- over ---------- */
+.dg-final { display: flex; flex-direction: column; gap: .375rem; }
+.dg-final-row { display: flex; justify-content: space-between; padding: .625rem .875rem; background: var(--bg-2); border-radius: .75rem; font-weight: 700; }
+.dg-final-row.lead { background: var(--surface-2); border: 1px solid var(--cheese); }
+.dg-final-n { font-variant-numeric: tabular-nums; }
+
+/* ---------- team foul ruling, queue preview, standings ---------- */
+.dg-ruling {
+  text-align: center; font-size: .9375rem; font-weight: 800; color: #ff9b86; padding: .5rem .75rem;
+  border: 1.5px solid var(--danger); border-radius: var(--radius); background: rgba(228, 87, 61, .1);
+  animation: dg-pop .35s cubic-bezier(.2, .9, .3, 1.3);
+}
+.dg-rule { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: center; width: 100%; }
+.dg-rule .btn { flex: 1 1 8rem; margin: 0; }
+.dg-rule-yes { border-color: var(--danger); color: #ff9b86; }
+.dg-upnext { font-size: .75rem; }
+.dg-standings .dg-h { margin-bottom: .25rem; }

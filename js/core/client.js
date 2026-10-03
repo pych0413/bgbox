@@ -29,6 +29,13 @@
 //   state.saveFailed            the host snapshot could not be written (storage full) (G9)
 //   lobby.keepSeat(pid)         keep an offline lobby seat past the 60 s grace (G3)
 //   hostCtl.voidRound()         `@void-round` for engines that support it
+//   resumeInfo() / forgetResume()  what 「返去上一局」 would resume (read through THIS app's store, so a
+//                               `?as=` testing identity sees its own), and dropping it
+//   prefs.get/set               small per-identity preferences (the name draft) in the same store
+//   state.pictures / keepsake() the drawing game's earlier pictures this game (kept as the ink epoch moves
+//                               on), and all of them incl. the current one — the results screen's souvenir
+//   state.canInk                this device's seats engine.canInk lets draw now (the narrator bar folds)
+//   state.hostActions / hostCtl.hostAction(i, label)   the game's own host buttons (engine.hostActions)
 // ============================================================
 
 import { HostTransport, ClientTransport, PROTOCOL } from './transport.js?v=1';
@@ -46,6 +53,7 @@ const LEAVE_GRACE = 200;                   // let the goodbye reach the wire bef
 const ACK_TIMEOUT = 4000;                  // an action the host has not confirmed by now did not get there (G4)
 const NARR_START_MS = 1500;                // speech that has not started by now is "stalled" (#1)
 const SNAP_SOFT_MAX = 1_500_000;           // JSON chars; past this the drawing is left out of the snapshot (G9)
+const PICTURES_MAX = 24;                   // earlier pictures kept for the results screen's keepsake
 const NOT_HOST = { ok: false, message: '淨係房主先做到呢樣' };
 const NO_PEER = '多部手機玩要上網 — 連線元件載入唔到。冇網絡可以揀「一部手機玩」。';
 
@@ -124,6 +132,9 @@ export function createApp(opts = {}) {
     mySeats: [], activeSeat: null,
     room: emptyRoom(), views: {}, table: null, focus: null, cue: null,
     ink: emptyInk(), rev: 0,
+    pictures: [],             // earlier pictures of this game ([{ epoch, strokes }]); the current one is `ink`
+    canInk: [],               // this device's seats that may draw right now (engine.canInk)
+    hostActions: [],          // host: the game's own extra buttons right now ([{ i, label }], engine.hostActions)
     // polish pass
     narration: idleNarration(),
     outbox: 0,
@@ -294,7 +305,7 @@ export function createApp(opts = {}) {
       if (hasInk()) { snap = withoutInk(snap); json = safeJSON(snap); }
       ok = !!json && store.setRaw(key, json);
     }
-    store.set('bgb:resume', { mode: state.mode, code: room.code, savedAt: now() });
+    store.set('bgb:resume', { mode: state.mode, code: room.code, savedAt: now(), gameId: room.gameId ?? null, phase: room.phase });
     if (!ok && !state.saveFailed) {
       state.saveFailed = true;
       emit('notice', '部手機儲存空間唔夠 — 呢局如果 refresh 咗可能救唔返', { kind: 'save-failed' });
@@ -334,13 +345,18 @@ export function createApp(opts = {}) {
     state.views = v.bySeat && typeof v.bySeat === 'object' ? v.bySeat : {};
     state.table = v.table ?? null;
     state.focus = v.focus ?? null;
+    state.canInk = Array.isArray(v.canInk) ? v.canInk.filter((pid) => state.mySeats.includes(pid)) : [];
     if ('cue' in v) state.cue = v.cue ?? null;
+    if ('hostActions' in v) state.hostActions = Array.isArray(v.hostActions) ? v.hostActions : [];
     if (state.mode === 'client' && typeof v.hostNow === 'number' && !clockSamples.length) clockOffset = v.hostNow - now();
     touch();
   }
 
   function applyRoom(r) {
+    const wasPlaying = state.room.phase === 'playing';
     state.room = { ...emptyRoom(), ...r };
+    // a new game began: the last one's souvenir pictures are history (its blank inkSync came first)
+    if (state.room.phase === 'playing' && !wasPlaying && state.pictures.length) state.pictures = [];
     const mode = state.room.narration?.mode ?? 'voice';
     if (state.narration.mode !== mode) setNarration({ mode });
     if (isHostish()) {
@@ -375,7 +391,7 @@ export function createApp(opts = {}) {
     if (state.mode === 'client') {
       seatRecs = seats.map((s) => ({ id: s.id, name: s.name, token: s.token }));
       store.set(`bgb:seats:${state.code}`, seatRecs);
-      store.set('bgb:resume', { mode: 'client', code: state.code, savedAt: now() });
+      store.set('bgb:resume', { mode: 'client', code: state.code, savedAt: now(), gameId: state.room.gameId ?? null, phase: state.room.phase });
       const info = compareBuilds(BUILD, typeof msg.build === 'string' ? msg.build : '');
       state.versionMismatch = !!info;
       state.versionInfo = info;
@@ -392,12 +408,30 @@ export function createApp(opts = {}) {
     touch();
   }
 
+  const copyStrokes = (strokes) => strokes.map((s) => ({ ...s, pts: Array.isArray(s.pts) ? s.pts.slice() : [] }));
+
+  /** The drawing is about to be replaced by a new picture (epoch moved on) mid-game: keep it for the results screen. */
+  function keepPicture() {
+    if (state.room.phase !== 'playing' || !state.ink.strokes.length) return;
+    state.pictures = [...state.pictures, { epoch: state.ink.epoch, strokes: copyStrokes(state.ink.strokes) }].slice(-PICTURES_MAX);
+  }
+
+  /** Every picture of this (or the game just finished): the earlier ones, then the current drawing. Copies. */
+  function keepsake() {
+    const all = state.pictures.map((p) => ({ epoch: p.epoch, strokes: copyStrokes(p.strokes) }));
+    if (state.ink.strokes.length && state.room.phase !== 'lobby') all.push({ epoch: state.ink.epoch, strokes: copyStrokes(state.ink.strokes) });
+    return all;
+  }
+
   function handleMessage(msg) {
     switch (msg?.t) {
       case 'welcome': onWelcome(msg); break;
       case 'room':
         applyRoom(msg.room);
-        if (state.room.phase === 'lobby' && state.ink.strokes.length) state.ink = emptyInk();
+        if (state.room.phase === 'lobby') {
+          if (state.ink.strokes.length) state.ink = emptyInk();
+          if (state.pictures.length) state.pictures = [];
+        }
         touch();
         break;
       case 'views': applyViews(msg); break;
@@ -408,7 +442,12 @@ export function createApp(opts = {}) {
         touch();
         break;
       case 'inkSync':
-        if (msg.ink && Array.isArray(msg.ink.strokes)) { state.ink = { epoch: msg.ink.epoch ?? 0, strokes: msg.ink.strokes }; touch(); }
+        if (msg.ink && Array.isArray(msg.ink.strokes)) {
+          const epoch = msg.ink.epoch ?? 0;
+          if (epoch !== state.ink.epoch) keepPicture();
+          state.ink = { epoch, strokes: msg.ink.strokes };
+          touch();
+        }
         break;
       case 'pong': onPong(msg); break;
       case 'notice': if (msg.text) emit('notice', String(msg.text)); break;
@@ -524,12 +563,15 @@ export function createApp(opts = {}) {
   }
 
   function wireHost(t) {
+    // every handler checks it is still THE transport: a superseded one must never feed a newer room
     t.on('message', (peerId, msg) => {
+      if (hostT !== t) return;
       if (!room) { pendingHostMsgs?.push([peerId, msg]); return; }
       room.receive(peerId, msg);
     });
-    t.on('close', (peerId) => room?.peerClosed(peerId));
+    t.on('close', (peerId) => { if (hostT === t) room?.peerClosed(peerId); });
     t.on('status', (kind) => {
+      if (hostT !== t) return;
       if (kind === 'online') setConn('online');
       else if (kind === 'reconnecting') setConn('reconnecting', '同 signalling server 斷咗，重連緊…');
       else setConn('error', '連線出咗問題，試下 refresh');
@@ -547,7 +589,7 @@ export function createApp(opts = {}) {
     Object.assign(state, {
       mode: null, conn: 'idle', connMessage: '', code: null, isHost: false,
       mySeats: [], activeSeat: null, room: emptyRoom(), views: {}, table: null, focus: null, cue: null,
-      ink: emptyInk(), rev: 0,
+      ink: emptyInk(), rev: 0, pictures: [], canInk: [], hostActions: [],
       narration: idleNarration(), outbox: 0, versionMismatch: false, versionInfo: null, claim: null, saveFailed: false,
     });
     seatRecs = [];
@@ -556,7 +598,15 @@ export function createApp(opts = {}) {
     resyncPending = false;
   }
 
+  /**
+   * Bumped by every teardown. An async entry point (host / join / claimSeat / resume) notes it before its
+   * first await and checks it after each one: if the user left — or started something else — meanwhile,
+   * it closes what it made and touches nothing (no zombie room, no PeerJS id left claimed).
+   */
+  let generation = 0;
+
   function teardown({ graceful = false } = {}) {
+    generation++;
     narrationStop();
     stopClock();
     failOutbox('offline');
@@ -595,14 +645,17 @@ export function createApp(opts = {}) {
     narrator?.prime?.();
     if (!makeHostNet && !hasPeer()) { teardown(); setConn('error', NO_PEER); throw noNetwork(); }
     teardown();
+    const gen = generation;
     state.claimable = null;
     state.mode = 'host';
     setConn('connecting', '開緊房…');
+    let t = null;
     try {
       pendingHostMsgs = [];
-      hostT = new HostTransport(makeHostNet?.());
-      wireHost(hostT);
-      const code = await hostT.open(null);
+      t = hostT = new HostTransport(makeHostNet?.());
+      wireHost(t);
+      const code = await t.open(null);
+      if (gen !== generation) { try { t.close(); } catch { /* gone */ } return null; }   // left meanwhile
       forgetPreviousHostSnapshot();
       state.code = code;
       room = new Room(roomDeps({ code, names }));
@@ -612,6 +665,7 @@ export function createApp(opts = {}) {
       return code;
     } catch (err) {
       console.error(err);
+      if (gen !== generation) { try { t?.close(); } catch { /* gone */ } throw err; }   // not ours to tear down any more
       const msg = `開唔到房：${err?.type || err?.message || '未知錯誤'}。試下 refresh 或者換個網絡。`;
       teardown();
       setConn('error', msg);
@@ -669,11 +723,13 @@ export function createApp(opts = {}) {
   }
 
   function openClient(code) {
-    clientT = new ClientTransport(makeClientNet?.());
-    clientT.on('message', handleMessage);
-    clientT.on('status', onClientStatus);
-    clientT.on('open', onClientOpen);
-    return clientT.connect(code);
+    const t = new ClientTransport(makeClientNet?.());
+    clientT = t;
+    // a transport that was closed (leave, a new join) must never write into the next session's state
+    t.on('message', (msg) => { if (clientT === t) handleMessage(msg); });
+    t.on('status', (kind) => { if (clientT === t) onClientStatus(kind); });
+    t.on('open', () => { if (clientT === t) onClientOpen(); });
+    return t.connect(code);
   }
 
   /** Wait for `waiter` (a promise settled by a host message), or give up after WELCOME_TIMEOUT. */
@@ -698,6 +754,7 @@ export function createApp(opts = {}) {
       throw new Error('填返個名先');
     }
     setConn('connecting', `連緊 ${c.split('').join('-')} …`);
+    const gen = generation;
     try {
       const welcomed = new Promise((resolve, reject) => { welcomeWaiter = { resolve, reject }; });
       welcomed.catch(() => { /* surfaced through the awaited race below */ });
@@ -706,6 +763,7 @@ export function createApp(opts = {}) {
       keepAwake(true);
     } catch (err) {
       console.error(err);
+      if (gen !== generation) throw err;   // cancelled: the user left or started something else; leave that alone
       const msg = state.connMessage && state.conn === 'error' ? state.connMessage : (err?.message || '入唔到房 — 睇下啲骰啱唔啱，房主係咪仲開緊個頁面。');
       teardown();
       setConn('error', msg);
@@ -731,6 +789,7 @@ export function createApp(opts = {}) {
     state.code = c;
     state.claim = { code: c, pid, name: known?.name ?? '', status: 'sending' };
     setConn('connecting', '問緊房主…');
+    const gen = generation;
     try {
       const asked = new Promise((resolve, reject) => { claimWaiter = { resolve, reject }; });
       asked.catch(() => { /* surfaced through the awaited race below */ });
@@ -740,6 +799,7 @@ export function createApp(opts = {}) {
       return { ok: true, status: state.mySeats.length ? 'approved' : 'waiting' };
     } catch (err) {
       console.error(err);
+      if (gen !== generation) throw err;   // cancelled meanwhile (取消): nothing of ours left to tear down
       const msg = state.connMessage && state.conn === 'error' ? state.connMessage : (err?.message || '問唔到房主');
       teardown();
       setConn('error', msg);
@@ -747,7 +807,10 @@ export function createApp(opts = {}) {
     }
   }
 
-  /** Come back after a refresh: the host's own snapshot, or this device's seat tokens. false if there is nothing to resume. */
+  /**
+   * Come back after a refresh: the host's own snapshot, or this device's seat tokens. false if there is nothing
+   * to resume; null if the user left (取消) while it was still reconnecting.
+   */
   async function resume() {
     const r = store.get('bgb:resume');
     if (!r || typeof r !== 'object' || now() - (r.savedAt ?? 0) > RESUME_TTL) return false;
@@ -765,17 +828,25 @@ export function createApp(opts = {}) {
       if (!snap || snap.v !== 2) return false;
       if (r.mode === 'host' && !makeHostNet && !hasPeer()) { setConn('error', NO_PEER); throw noNetwork(); }
       teardown();
+      const gen = generation;
       state.mode = r.mode;
       state.deviceId = snap.hostDeviceId || state.deviceId;
       store.set('bgb:device', state.deviceId);
       setConn('connecting', '恢復緊房間…');
+      let restored = null;
+      let t = null;
+      const abandon = () => { try { restored?.dispose(); } catch { /* gone */ } try { t?.close(); } catch { /* gone */ } return null; };   // null = cancelled (not "nothing to resume")
       try {
-        room = await Room.restore(snap, roomDeps({ code: snap.code ?? null }));
+        restored = await Room.restore(snap, roomDeps({ code: snap.code ?? null }));
+        if (gen !== generation) return abandon();          // left meanwhile (取消): this restore is nobody's
+        room = restored;
         if (r.mode === 'host') {
           pendingHostMsgs = [];
-          hostT = new HostTransport(makeHostNet?.());
-          wireHost(hostT);
-          state.code = await hostT.open(snap.code);
+          t = hostT = new HostTransport(makeHostNet?.());
+          wireHost(t);
+          const code = await t.open(snap.code);
+          if (gen !== generation) return abandon();
+          state.code = code;
         }
         beginHosting();
         drainPending();
@@ -783,6 +854,7 @@ export function createApp(opts = {}) {
         return true;
       } catch (err) {
         console.error(err);
+        if (gen !== generation) { abandon(); throw err; }
         const msg = `恢復唔到：${err?.type || err?.message || '未知'}`;
         teardown();
         setConn('error', msg);
@@ -790,6 +862,45 @@ export function createApp(opts = {}) {
       }
     }
     return false;
+  }
+
+  /**
+   * What resume() would come back to, without doing it: { mode, code, savedAt, gameId, phase } or null
+   * (nothing saved, older than a night, malformed, its snapshot / seat tokens gone, or already in a room).
+   * Read through this app's own store, so a `?as=` testing tab sees its own identity (G20).
+   */
+  function resumeInfo() {
+    if (state.mode) return null;
+    const r = store.get('bgb:resume');
+    if (!r || typeof r !== 'object' || !['host', 'client', 'local'].includes(r.mode)) return null;
+    const savedAt = Number(r.savedAt) || 0;
+    if (now() - savedAt > RESUME_TTL) return null;
+    const out = {
+      mode: r.mode, code: r.mode === 'local' ? null : r.code, savedAt,
+      gameId: typeof r.gameId === 'string' ? r.gameId : null,
+      phase: ['lobby', 'playing', 'results'].includes(r.phase) ? r.phase : null,
+    };
+    if (r.mode === 'client') {
+      if (!isRoomCode(r.code)) return null;
+      const saved = store.get(`bgb:seats:${r.code}`, []);
+      return Array.isArray(saved) && saved.some((s) => s && typeof s.token === 'string') ? out : null;
+    }
+    if (r.mode === 'host' && !isRoomCode(r.code)) return null;
+    return store.has(hostKey(r.code)) ? out : null;
+  }
+
+  /**
+   * 「唔要」 / a resume that failed: drop the breadcrumb, and a host's snapshot with it (nothing could ever
+   * reach that again, and it is the biggest thing in a 5 MB store). A client's seat tokens stay: typing
+   * the same code and name later still gets the old seat back. Refused (false) while in a room.
+   */
+  function forgetResume() {
+    if (state.mode) return false;
+    const r = store.get('bgb:resume');
+    if (r && typeof r === 'object' && (r.mode === 'host' || r.mode === 'local')) store.del(hostKey(r.mode === 'local' ? null : r.code));
+    store.del('bgb:resume');
+    touch();
+    return true;
   }
 
   /** Leave on purpose: the host dissolves the room, a client says goodbye. Forgets what it saved. */
@@ -943,6 +1054,8 @@ export function createApp(opts = {}) {
       return room.next();
     },
     autoAct(pid) { return isHostish() ? room.autoAct(pid) : false; },
+    /** One of the game's own host buttons (state.hostActions[k]): pass its `i` and `label`. */
+    hostAction(i, label) { return isHostish() ? room.hostAction(i, label) : false; },
     /** `@void-round`: engines that support it discard the current round (a phone died); others ignore it → false. */
     voidRound() { return isHostish() ? room.voidRound() : false; },
     /**
@@ -1026,8 +1139,14 @@ export function createApp(opts = {}) {
     on(ev, fn) { listeners[ev]?.add(fn); return this; },
     off(ev, fn) { listeners[ev]?.delete(fn); return this; },
     host, join, local, resume, leave, claimSeat, resync,
+    resumeInfo, forgetResume, keepsake,
     lobby, act, ink, setActiveSeat, results, hostCtl, narration, clock,
     game,
+    /** Small per-identity preferences (e.g. 'ct:name'), in the same store as everything else. */
+    prefs: {
+      get: (key, fallback = null) => store.get(String(key), fallback),
+      set: (key, value) => store.set(String(key), value),
+    },
     /** The registry, so the picker can draw cards without loading any module. */
     games: registry,
     /** The narrator createApp was given (the shell falls back to this one). */

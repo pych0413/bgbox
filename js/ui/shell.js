@@ -18,17 +18,18 @@
 //    Without it the shell falls back to `app.narrator`, then to a silent stub.
 //  - The shell never speaks cues itself — the app speaks them where the
 //    session runs and calls cueDone.
-//  - app.resume() performs the resume, it cannot be queried. The core already
-//    keeps a breadcrumb for it (localStorage `bgb:resume` = { mode, code, savedAt },
-//    deleted by app.leave()), so the shell only READS that to decide whether to
-//    offer 「返去上一局」, and clears it when a resume turns out to be stale.
+//  - 「返去上一局」 asks the core: app.resumeInfo() says what app.resume() would come
+//    back to, app.forgetResume() drops it. Both go through the app's own store, so a
+//    `?as=` testing tab (main.js) sees its own identity, never the plain one (G20).
+//    The same goes for the name draft (app.prefs). Device-wide preferences (mute,
+//    voice, text size, pre-flight skip) stay in plain localStorage on purpose.
 //  - Games come from `app.games` (the registry). Batch-2 games (meta.batch === 2)
 //    are probed once with app.game(id): if the module loads they are playable,
 //    if it is missing they stay greyed out as 「即將推出」.
 // ============================================================
 
 import { el, toast } from './dom.js?v=1';
-import { lsGet, lsSet, lsDel, keepAwake, isRoomCode } from '../core/util.js?v=1';
+import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=1';
 import * as sfxMod from '../core/sfx.js?v=1';
 import { createTableTimer } from './timer.js?v=1';
 import { createStatus } from './status.js?v=1';
@@ -40,10 +41,9 @@ import { mountLobby } from './screens/lobby.js?v=1';
 import { mountPlay } from './screens/play.js?v=1';
 import { mountResults } from './screens/results.js?v=1';
 
-const RESUME_KEY = 'bgb:resume';   // written by core/client.js; the shell only reads and clears it
-const RESUME_TTL = 8 * 60 * 60 * 1000;   // 8h — long enough for an evening of games
 const MUTE_KEY = 'ct:muted';             // v1 key, so the preference survives the upgrade
 const NARR_KEY = 'bgb:narr';
+const NAME_KEY = 'ct:name';              // v1 key; per identity (app.prefs) so ?as= tabs keep their own
 
 // Accent colour per game for the picker, before its module (which carries
 // meta.accent) has been loaded. The registry's inline meta has no colour.
@@ -109,12 +109,16 @@ export async function startShell(app, root, opts = {}) {
   const savedNarr = lsGet(NARR_KEY, null);
   if (savedNarr) narrator.set(savedNarr);
 
+  // per-identity preferences go through the app's store when it has one (G20)
+  const prefGet = (k, fb) => (app.prefs?.get ? app.prefs.get(k, fb) : lsGet(k, fb));
+  const prefSet = (k, v) => (app.prefs?.set ? app.prefs.set(k, v) : lsSet(k, v));
+
   // ---------- shared services handed to every screen ----------
   const sh = {
     app, root, narrator, catalog,
     route: 'home',                                   // pre-room route: home | join | local
     cameFrom: null,                                  // key of the screen this one replaced
-    drafts: { name: lsGet('ct:name', ''), joinCode: [], localNames: null, joinError: '', homeError: '' },
+    drafts: { name: prefGet(NAME_KEY, '') ?? '', joinCode: [], localNames: null, joinError: '', homeError: '' },
 
     go(route) { sh.route = route; render(); },
     rerender() { render(); },
@@ -151,7 +155,12 @@ export async function startShell(app, root, opts = {}) {
         if (!userMuted) { primeAudio(); sfx('tap'); }   // the tap itself unlocks iOS audio
       },
       /** A step that must be silent on this phone (eyes-closed night). */
-      night(on) {
+      /**
+       * `opaque`: a shared phone (several seats) — nobody taps a decoy through the dark there, and the
+       * view underneath belongs to whoever held the phone last, so it is covered completely.
+       */
+      night(on, { opaque = false } = {}) {
+        nightDim.classList.toggle('opaque', !!on && !!opaque);
         if (nightMuted === !!on) return;
         nightMuted = !!on;
         applyMute();
@@ -167,15 +176,14 @@ export async function startShell(app, root, opts = {}) {
     },
 
     saveNarration() { lsSet(NARR_KEY, narrator.settings); },
-    saveName(name) { sh.drafts.name = name; if (name) lsSet('ct:name', name); },
+    saveName(name) { sh.drafts.name = name; if (name) prefSet(NAME_KEY, name); },
 
     /** Native confirm: blocking on purpose, so it cannot be tapped through. */
     confirm: (text) => window.confirm(text),
 
     leave() {
       if (!window.confirm('真係要離開？')) return false;
-      lsDel(RESUME_KEY);
-      narrator.cancel();
+      narrator.cancel();                            // app.leave() forgets the room's resume data itself
       try { app.leave(); } catch (err) { console.error(err); }
       sh.route = 'home';
       sh.drafts.joinError = '';
@@ -203,15 +211,11 @@ export async function startShell(app, root, opts = {}) {
 
     roomLink(code) { return `${location.origin}${location.pathname}?r=${code}`; },
 
-    /** The core's own resume breadcrumb, or null if absent / stale / malformed. */
+    /** What 「返去」 would come back to: { mode, code, savedAt, gameId, phase } or null (core decides). */
     readResume() {
-      const r = lsGet(RESUME_KEY, null);
-      if (!r || typeof r !== 'object' || Date.now() - (r.savedAt ?? 0) > RESUME_TTL) return null;
-      if (r.mode !== 'local' && !isRoomCode(r.code)) return null;
-      if (!['host', 'client', 'local'].includes(r.mode)) return null;
-      return r;
+      try { return app.resumeInfo?.() ?? null; } catch (err) { console.error(err); return null; }
     },
-    clearResume() { lsDel(RESUME_KEY); },
+    clearResume() { try { app.forgetResume?.(); } catch (err) { console.error(err); } },
   };
 
   // ---------- services every screen shares ----------
@@ -226,7 +230,7 @@ export async function startShell(app, root, opts = {}) {
   sh.settingsButton = (opts) => el('button', { class: 'icon-btn sm', type: 'button', 'aria-label': '設定', onclick: () => sh.openSettings(opts) }, '⚙️');
   /** The group saved at the last start on this device: { names, colours, order } | null (BACKLOG #9). */
   sh.savedGroup = () => {
-    const g = 'savedGroup' in app.state ? app.state.savedGroup : lsGet('bgb:group', null);
+    const g = app.state.savedGroup;
     return g && typeof g === 'object' && Array.isArray(g.names) && g.names.length ? g : null;
   };
 
@@ -364,10 +368,7 @@ export async function startShell(app, root, opts = {}) {
     ).finally(schedule);
   }
 
-  // wake locks are dropped when the tab goes to the background; re-arm on return
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && app.state.mode) keepAwake(true);
-  });
+  // (wake lock on return to the foreground: core/client.js resync() re-arms it — not here too)
 
   window.addEventListener('beforeunload', (e) => {
     if (app.state.isHost && app.state.room?.phase === 'playing') {

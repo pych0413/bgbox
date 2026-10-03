@@ -5,7 +5,7 @@
 //     → { el, update(props), destroy() }
 //
 //   scoreboard  { [pid]: { played, wins, points } }
-//   history     [{ gameId, winners: [pid], summary }]   oldest first
+//   history     [{ gameId, winners: [pid], summary, void? }]   oldest first (void: 呢鋪唔計)
 //
 // Optional extras: `games` ({ [gameId]: meta }) so history rows can show the
 // game's emoji and name, `me` (highlights your row), `showHistory` (default true).
@@ -54,7 +54,7 @@ export function Scoreboard(props = {}) {
         const names = (h.winners ?? []).map((id) => byId.get(id)?.name).filter(Boolean);
         return el('li', {},
           el('span', { class: 'g', text: `${g?.emoji ?? '🎲'} ${g?.name ?? h.gameId}` }),
-          el('span', { class: 'w', text: names.length ? `🏆 ${names.join('、')}` : '冇人贏' }),
+          el('span', { class: 'w', text: h.void ? '🚫 唔計' : names.length ? `🏆 ${names.join('、')}` : '冇人贏' }),
           h.summary ? el('span', { class: 'hint s', text: h.summary }) : null);
       })));
 

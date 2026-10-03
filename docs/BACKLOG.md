@@ -83,3 +83,23 @@ New `app` surface (core/client.js) that ui/ consumes. Everything optional-chaine
 | build:fake-artist | Compact/auto-collapse the host NarratorBar while a Canvas can draw, so it never covers the sheet. | ui |
 | build:onuw | Shared phone, empty night step: room.filterFocus must keep `{ pids: [], anonymous }` for a device holding seats, and play.js shows the same anonymous decoy gate even when the called role is in the centre — otherwise a shared phone reveals that a role is absent. | core + ui (H for night games) |
 | build:onuw | Results screen: section headings (`{ h: 'title' }` entries or `result.sections`) instead of one flat list. | ui |
+| build:draw-guess | `bag.release(bankId, key)`: the engine already calls `ctx.bag?.release?.('draw', w)` for unpicked offers and voided words; today the bag consumes every offered word. | core |
+| build:draw-guess | Room must call `config.defaults(n, prev, { singleDevice })` everywhere (builder saw two arguments) so typed guessing is never kept for one shared phone. | core |
+| build:draw-guess | Host-menu extension point: `engine.hostActions?(state) → [{ label, action }]` dispatched as `@host` (draw-guess +30 s / 呢題作廢 today only show on the host seat's screen). | core + ui |
+| build:draw-guess | Optional per-game default narration mode (`meta.narrationDefault`): typed/quiet games should not default to voice. | core + games |
+| build:draw-guess | Lobby UI to move players between teams (today seat order or a random split decides). | ui (low) |
+| build:draw-guess | Optional dedicated 'ding' and 'hint' sounds in sfx.js. | core (low) |
+| qa:onuw | Room#finish honours `result.void === true`: no scoreboard played/wins, history line marked 唔計. | core |
+| qa:werewolf | Room#finish must not count non-players (the human moderator) as played: `result.spectators: [pid]` or an engine marker. | core |
+| qa:avalon / qa:fake-artist / qa:onuw | ⋯ menu 「呢鋪唔計」 (two taps / confirm) → `app.hostCtl.voidRound()`; when it returns false show a toast (e.g. 「呢輪已經計咗分，㩒下一輪就得」). Also on the stalled-seat card: 代佢做 · 呢鋪唔計 · 再等. | ui |
+| qa:werewolf | NarratorBar 讀稿 mode: debounce 下一步 ~1.5 s after a cue ends, so a double tap cannot acknowledge a line and then cut the night window short. | ui |
+| qa:onuw / qa:werewolf | 💡 sheet: read `view.roleId` for the seat's own role; allow `view.hintRoleLabel` (e.g. 「你派到嘅角色」) for games where cards change hands. | ui (low) |
+
+## Found in the batch-1 preview smoke test (2026-10-03 09:05 UTC)
+
+| item | status |
+|---|---|
+| Registry `batch` flags did not match the staged release (ONUW/werewolf/Avalon were 1, 9upper was 2), so three missing games looked playable. | fixed in 8ea1d81 |
+| 一部手機玩 setup: empty name fields show 「玩家 1…」 placeholders but 開始 refuses with 「最少要 2 個人」. Placeholders look like defaults — either use them as names when left blank or make the hint say 「填名先」. | open (ui) |
+| P2P: a headless-Chrome run saw guests fall back to the join screen 14–20 s after joining. Not reproduced in the app's browser pane on the live Pages build (host + background guest tab, lobby then a game, 141 s stable). Re-check on real iPhones during the trip test. | watch |
+| `manifest.webmanifest?v=1` in index.html is not restamped by tools/bump-version.sh. | open (tools, low) |

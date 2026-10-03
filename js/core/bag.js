@@ -5,6 +5,7 @@
 //   await bag.load('undercover');                 // dynamic import of the bank file
 //   bag.draw('undercover', (e) => e.level <= 2);  // → entry | null, never repeats until exhausted
 //   bag.stats('undercover');                      // → { used, total }
+//   bag.release('draw', '蘋果');                  // an offered-but-unused entry goes back into the pool
 //
 // Used keys are persisted per bank on this device (`bgb:bag:<bankId>` = array of
 // keys), so a bank keeps not-repeating across evenings. When the filtered pool is
@@ -125,6 +126,7 @@ export function createBag({ storage, rng = cryptoRng(), banks: extra = {}, onNot
         fresh = entries;
         const text = `「${table[id].name ?? id}」揀嘅題目用晒，已經重新洗牌`;
         notices.push(text);
+        if (notices.length > 20) notices.splice(0, notices.length - 20);   // nobody may ever take them
         try { onNotice?.(text, { kind: 'bag-reshuffle', bankId: id }); } catch (e) { console.error('[bag] onNotice threw', e); }
       }
       const pick = fresh[Math.min(fresh.length - 1, Math.floor(rng() * fresh.length))];
@@ -149,6 +151,17 @@ export function createBag({ storage, rng = cryptoRng(), banks: extra = {}, onNot
       spec(id);
       usedSets.set(id, new Set());
       saveUsed(id);
+    },
+
+    /**
+     * Put one drawn entry back (by key, e.g. a word that was offered but not chosen), so it can come
+     * up again. Returns true if it was marked used. Draw-guess offers three words and keeps one.
+     */
+    release(id, k) {
+      spec(id);
+      if (typeof k !== 'string' || !used(id).delete(k)) return false;
+      saveUsed(id);
+      return true;
     },
 
     /** Queued "pool exhausted" messages since the last call. */

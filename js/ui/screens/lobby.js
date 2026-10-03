@@ -10,7 +10,9 @@
 import { el, dieFace, sig, toast } from '../dom.js?v=1';
 import { sfx, primeAudio } from '../../core/sfx.js?v=1';
 import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
-import { fits } from '../logic.js?v=1';
+import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=1';
+
+const ORDER_HINT = '座位次序＝輪流次序，開局前用換位排好';
 import { wantsPreflight } from '../preflight.js?v=1';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
@@ -125,6 +127,8 @@ export function mountLobby(sh) {
     try { report(app.lobby.applySavedOrder()); sfx('tap'); } catch (err) { console.error(err); toast('排唔到'); }
   });
   const addNote = el('p', { class: 'hint', style: { margin: '.5rem 0 0' }, text: '有人電話冇電或者冇數據？加佢喺度，部機傳嚟傳去玩。' });
+  // G18: one phone needs no network; everyone on their own phone does
+  const localNote = el('p', { class: 'hint local-note', text: '📱 一部手機玩唔使上網。想每人用自己部手機玩，就要有網絡：返主頁揀「🏠 開房」。' });
 
   // G3: an offline lobby seat is dropped after a grace period unless the host keeps it
   const awayBox = el('div', { class: 'away-box' });
@@ -132,7 +136,7 @@ export function mountLobby(sh) {
 
   const seatsCard = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h3', { text: '玩家' }), countPill),
-    seatEditor.el, awayBox, savedOrderBtn, addRow, addNote);
+    seatEditor.el, awayBox, savedOrderBtn, addRow, addNote, localNote);
 
   // ---------- game picker ----------
   const gridHint = el('span', { class: 'hint' });
@@ -323,8 +327,7 @@ export function mountLobby(sh) {
     try { list = typeof game?.config?.presets === 'function' ? (game.config.presets(n) ?? []) : []; } catch (err) { console.error('config.presets failed', err); }
     list = list.filter((p) => p && p.label && p.cfg && typeof p.cfg === 'object');
     const cfg = room.config ?? {};
-    const same = (p) => Object.keys(p.cfg).every((k) => sig(cfg[k]) === sig(p.cfg[k]));
-    const current = list.find(same)?.id ?? null;
+    const current = list.find((p) => presetMatches(cfg, p.cfg))?.id ?? null;
     const key = sig([list, current]);
     if (key === presetsKey) return;
     presetsKey = key;
@@ -357,12 +360,7 @@ export function mountLobby(sh) {
   function paintSavedOrder(st) {
     const g = sh.savedGroup();
     const canApply = st.isHost && typeof app.lobby?.applySavedOrder === 'function' && !!g;
-    if (!canApply) { savedOrderBtn.hidden = true; return; }
-    const saved = (Array.isArray(g.order) && g.order.every((x) => typeof x === 'string') ? g.order : g.names).map(String);
-    const here = st.room.players.filter((p) => !p.spectator).map((p) => p.name);
-    const both = here.filter((name) => saved.includes(name));
-    const savedHere = saved.filter((name) => both.includes(name));
-    savedOrderBtn.hidden = both.length < 2 || sig(both) === sig(savedHere);
+    savedOrderBtn.hidden = !canApply || !savedOrderDiffers(st.room.players, g);
   }
 
   function paintNarration(st) {
@@ -446,12 +444,15 @@ export function mountLobby(sh) {
       }
 
       const mySeats = st.mySeats ?? [];
+      localNote.hidden = st.mode !== 'local';
       countPill.textContent = `${headCount(room)} 人`;
       seatEditor.update({
         players: room.players,
         me: st.activeSeat ?? mySeats[0],
         mySeats,
         isHost: st.isHost,
+        // turn-order games: the seat order IS the speaking / drawing order (build:avalon)
+        orderHint: room.gameId && turnOrderMatters(room.gameId, sh.gameMeta(room.gameId)) ? ORDER_HINT : null,
         onMove: (pid, index) => report(app.lobby.moveSeat(pid, index)),
         onColor: (pid, color) => report(app.lobby.setColor(pid, color)),
         onKick: (pid) => {

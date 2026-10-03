@@ -4,7 +4,10 @@ import { test, assert } from './lib.mjs';
 import {
   fits, teamStyle, rankRows, fmtDuration, fmtClock,
   timerLeftMs, timerCue, clampTimerSec, TIMER_PRESETS, inAppBrowser, roleFor, roleParts,
+  headingOf, resultSections, sectionsOpen, turnOrderMatters, TURN_ORDER_GAMES, pictureFileName,
+  savedOrderDiffers, savedGroupNames, presetMatches,
 } from '../js/ui/logic.js';
+import { paintStrokes, PAPER } from '../js/ui/ink.js';
 
 test('ui: picker greys out games that do not fit the head-count, and says why', () => {
   const meta = { players: [6, 12] };
@@ -127,4 +130,81 @@ test('ui: 💡 sheet finds the seat own role from the fields games use, and neve
   assert.deepEqual(roleParts('做乜：偷芝士。點贏：唔喺最高票。'), { what: '偷芝士。', win: '唔喺最高票。' });
   assert.deepEqual(roleParts('估地點'), { what: '估地點', win: '' });
   assert.deepEqual(roleParts('做乜：留意。'), { what: '留意。', win: '' });
+});
+
+test('ui: results — { h } and 「── 標題 ──」 lines start sections; a long recap starts folded except its first part', () => {
+  assert.equal(headingOf({ h: ' 夜晚記錄 ' }), '夜晚記錄');
+  assert.equal(headingOf('── 最後張牌 ──'), '最後張牌', 'the ONUW style, dashes trimmed both ends');
+  assert.equal(headingOf('──  夜晚'), '夜晚');
+  assert.equal(headingOf('阿明 ── 投咗阿花'), null, 'a dash in the middle is just text');
+  assert.equal(headingOf({ h: '' }), null);
+  assert.equal(headingOf('普通一句'), null);
+
+  const lines = ['狼人輸咗', '因為阿明投中', '── 最後張牌 ──', '阿明：狼人', { text: '阿花：預言家' }, { h: '冇嘢' }, { h: '夜晚記錄' }, '強盜換咗牌', '', 42];
+  const secs = resultSections(lines);
+  assert.deepEqual(secs, [
+    { title: null, lines: ['狼人輸咗', '因為阿明投中'] },
+    { title: '最後張牌', lines: ['阿明：狼人', '阿花：預言家'] },
+    { title: '夜晚記錄', lines: ['強盜換咗牌', '42'] },
+  ], 'lead lines untitled; an empty heading is dropped; { text } and odd values become text');
+  assert.deepEqual(resultSections(['a', 'b']), [{ title: null, lines: ['a', 'b'] }], 'no headings: one plain list, as before');
+  assert.deepEqual(resultSections(null), []);
+  assert.deepEqual(resultSections([{ h: 'A' }, 'x']), [{ title: 'A', lines: ['x'] }], 'a recap may start with a heading');
+
+  assert.deepEqual(sectionsOpen(secs), [true, true, true], 'short: everything open');
+  const long = [{ title: null, lines: ['1', '2', '3'] }, { title: 'A', lines: ['4', '5', '6'] }, { title: 'B', lines: ['7', '8', '9'] }];
+  assert.deepEqual(sectionsOpen(long), [true, false, false], 'long: only the first section');
+});
+
+test('ui: turn-order games get the 「座位次序＝輪流次序」 lobby hint; meta.turnOrder overrides the list', () => {
+  for (const id of ['undercover', 'spyfall', '9upper', 'avalon', 'werewolf', 'fake-artist', 'draw-guess']) {
+    assert.equal(turnOrderMatters(id, {}), true, id);
+  }
+  assert.ok(TURN_ORDER_GAMES.length === 7);
+  assert.equal(turnOrderMatters('cheese-thief', {}), false);
+  assert.equal(turnOrderMatters('custom', undefined), false);
+  assert.equal(turnOrderMatters('custom', { turnOrder: true }), true, 'a game can opt in');
+  assert.equal(turnOrderMatters('spyfall', { turnOrder: false }), false, 'and out');
+});
+
+test('ui: keepsake — a picture paints like the live board onto paper; file names are safe', () => {
+  const calls = [];
+  const g = new Proxy({}, {
+    get: (t, k) => (k in t ? t[k] : (...a) => { calls.push([k, ...a]); }),
+    set: (t, k, v) => { t[k] = v; calls.push([`=${String(k)}`, v]); return true; },
+  });
+  const strokes = [
+    { id: 'a', pid: 'p2', pts: [[0, 0], [100, 100], [200, 50]], end: true },
+    { id: 'b', pid: 'p3', pts: [[500, 500]], end: true, color: '#e4573d', width: 20 },
+    { id: 'c', pid: 'p2', pts: [], end: true },
+    { id: 'd', pid: 'p2', pts: [[10, 10], [20, 20]], end: true, eraser: true, width: 27 },
+  ];
+  const n = paintStrokes(g, strokes, { colorOf: (pid) => (pid === 'p2' ? '#2e7de0' : null) });
+  assert.equal(n, 3, 'empty strokes are skipped');
+  assert.deepEqual(calls.slice(0, 2), [['=fillStyle', PAPER], ['fillRect', 0, 0, 1000, 1000]], 'paper first, over the whole 0–1000 square');
+  const colours = calls.filter((c) => c[0] === '=strokeStyle').map((c) => c[1]);
+  assert.deepEqual(colours, ['#2e7de0', '#e4573d', PAPER], 'colorOf for strokes without colour; own colour wins; the eraser paints paper');
+  assert.ok(calls.some((c) => c[0] === 'quadraticCurveTo'), 'smoothed like the live board');
+  const bare = [];
+  paintStrokes(new Proxy({}, { get: () => (...a) => bare.push(a), set: () => true }), strokes, { paper: false });
+  assert.ok(!bare.some((a) => a[2] === 1000 && a[3] === 1000), 'paper: false leaves the background alone');
+
+  const d = new Date(2026, 9, 3);
+  assert.equal(pictureFileName('假畫家', 0, d), '假畫家-2026-10-03.png');
+  assert.equal(pictureFileName('瞎掰王 9upper', 2, d), '瞎掰王9upper-2026-10-03-3.png', 'spaces go; the index counts from 1 after the first');
+  assert.equal(pictureFileName('a/b:c*?', 0, d), 'abc-2026-10-03.png');
+  assert.equal(pictureFileName('', 0, d), '桌遊盒-2026-10-03.png');
+});
+
+test('ui: lobby / home helpers the screens now share — saved order, saved names, preset match', () => {
+  const g = { names: ['甲', '乙', '丙'], order: ['甲', '乙', '丙'] };
+  const seat = (names) => names.map((name, i) => ({ id: `p${i}`, name, spectator: false }));
+  assert.equal(savedOrderDiffers(seat(['乙', '甲', '丁']), g), true);
+  assert.equal(savedOrderDiffers(seat(['甲', '丁', '乙']), g), false, 'the same relative order');
+  assert.equal(savedOrderDiffers(seat(['甲']), g), false, 'fewer than two of them here');
+  assert.deepEqual(savedGroupNames(g), ['甲', '乙', '丙']);
+  assert.equal(savedGroupNames({ names: ['甲'] }), null);
+  assert.equal(presetMatches({ a: 1, b: [1, 2], c: 3 }, { a: 1, b: [1, 2] }), true);
+  assert.equal(presetMatches({ a: 1, b: [2, 1] }, { b: [1, 2] }), false);
+  assert.equal(presetMatches({}, null), false);
 });

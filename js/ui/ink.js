@@ -188,6 +188,33 @@ export function paceCount(backlog) {
   return Math.max(1, Math.ceil(backlog * PACE));
 }
 
+/**
+ * Paint a whole picture at once — the keepsake PNG and anything else that is not live.
+ * `g` must already map 0–1000 logical units onto its pixels (setTransform). Same smoothing and
+ * styles as the live board, so the souvenir looks exactly like what the table saw.
+ * @returns {number} strokes painted
+ */
+export function paintStrokes(g, strokes, { colorOf, paper = true } = {}) {
+  if (paper) {
+    g.fillStyle = PAPER;
+    g.fillRect(0, 0, SIZE, SIZE);
+  }
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  let n = 0;
+  for (const s of Array.isArray(strokes) ? strokes : []) {
+    if (!s || !Array.isArray(s.pts) || !s.pts.length) continue;
+    const style = resolveStyle(s, { colorOf });
+    g.strokeStyle = g.fillStyle = style.color;
+    g.lineWidth = style.width;
+    const st = pathState();
+    advancePath(g, st, s.pts, s.pts.length, style.width);
+    finishPath(g, st);
+    n++;
+  }
+  return n;
+}
+
 // ---------- batching ----------
 
 /**

@@ -1,0 +1,192 @@
+/* ============================================================
+   假畫家 — game chrome. Loaded by the shell (meta.css = true).
+   Uses the base.css tokens (--surface, --line, --text, --accent …) and its
+   .btn / .c-cover / .c-timer / .c-votepanel / .c-canvas components; only the
+   game's own layout lives here, every class is .fk-*.
+   ============================================================ */
+
+.fk { display: flex; flex-direction: column; gap: .75rem; }
+.fk-body { min-width: 0; }
+.fk-stack { display: flex; flex-direction: column; gap: .75rem; }
+.fk-stack > .btn, .fk-stack .c-cover { margin-bottom: 0; }
+
+.fk-h { margin: .25rem 0 0; font-size: 1.125rem; font-weight: 800; text-align: center; }
+.fk-note { margin: 0; text-align: center; color: var(--text-dim); font-size: .8125rem; line-height: 1.6; }
+.fk-err { margin: 0; min-height: 1.25rem; text-align: center; color: #ff9b86; font-size: .8125rem; }
+
+/* ---------- the public theme card ---------- */
+
+.fk-theme {
+  text-align: center; padding: .75rem 1rem .875rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: inset 0 .1875rem 0 var(--accent);
+}
+.fk-theme-kicker { font-size: .75rem; letter-spacing: .06em; color: var(--text-dim); }
+.fk-theme-text { margin: .125rem 0; font-size: 1.875rem; font-weight: 800; line-height: 1.25; letter-spacing: .04em; overflow-wrap: anywhere; }
+.fk-theme-sub { font-size: .8125rem; color: var(--text-dim); }
+.fk-theme.empty .fk-theme-text { color: var(--text-dim); }
+
+/* ---------- waiting ---------- */
+
+.fk-wait { text-align: center; padding: 1.5rem 0 1rem; }
+.fk-wait-emoji { font-size: 3rem; line-height: 1; animation: fk-bob 2.6s ease-in-out infinite; }
+.fk-wait-text { margin: .75rem 0 0; color: var(--text-dim); font-size: .9375rem; line-height: 1.6; }
+@keyframes fk-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-.375rem); } }
+
+/* ---------- text entry (question master, typed guess) ---------- */
+
+.fk-field { display: flex; flex-direction: column; gap: .25rem; font-size: .8125rem; color: var(--text-dim); }
+.fk-input {
+  width: 100%; min-height: 3.25rem; padding: 0 .875rem;
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: max(16px, 1.0625rem); /* >= 16px: iOS zooms smaller inputs */
+  border: 1.5px solid var(--line); border-radius: var(--radius); outline: none;
+}
+.fk-input:focus { border-color: var(--accent); }
+
+/* ---------- the hold-to-peek card face (same four lines for every role) ---------- */
+
+.fk-face {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem;
+  width: 100%; height: 100%; text-align: center;
+}
+.fk-face-role { font-size: 1rem; font-weight: 800; color: var(--accent); }
+.fk-face-theme { font-size: .8125rem; color: var(--text-dim); }
+.fk-face-word { font-size: 2.25rem; font-weight: 800; line-height: 1.2; letter-spacing: .04em; overflow-wrap: anywhere; }
+.fk-face-word.long { font-size: 1.5rem; }
+.fk-face-word.x { color: var(--text-dim); font-size: 2.75rem; }
+.fk-face-note { font-size: .75rem; color: var(--text-dim); line-height: 1.4; }
+
+/* the card kept under the board while drawing / voting: shorter than the dealing card */
+.fk-stack > .c-cover:last-child { aspect-ratio: 5 / 2; }
+
+/* ---------- progress pips ---------- */
+
+.fk-progress { display: flex; align-items: center; justify-content: center; gap: .625rem; font-size: .8125rem; color: var(--text-dim); }
+.fk-progress-pips { display: inline-flex; gap: .25rem; }
+.fk-progress-pips i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--line); }
+.fk-progress-pips i.on { background: var(--accent); }
+
+/* ---------- seat dots ---------- */
+
+.fk-dot { display: inline-block; width: .75rem; height: .75rem; border-radius: 50%; background: var(--seat, var(--accent)); flex: none; vertical-align: -.0625rem; box-shadow: 0 0 0 1.5px rgba(255,255,255,.35); }
+.fk-dot.lg { width: 1.25rem; height: 1.25rem; vertical-align: -.1875rem; }
+
+/* ---------- drawing ---------- */
+
+.fk-turn {
+  text-align: center; font-size: 1.375rem; font-weight: 800; line-height: 1.3;
+  padding: .5rem .75rem; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.fk-turn.mine { border-color: var(--accent); background: var(--surface-2); animation: fk-pop .35s cubic-bezier(.2, .9, .3, 1.3); }
+.fk-turn-sub { margin-top: -.375rem; text-align: center; font-size: .8125rem; color: var(--text-dim); }
+@keyframes fk-pop { from { transform: scale(.96); opacity: .5; } to { transform: none; opacity: 1; } }
+
+.fk-board { display: flex; flex-direction: column; gap: .5rem; align-items: center; }
+.fk-board-holder { width: 100%; }
+.fk-board.compact .c-canvas { --c-chrome: 38rem; }   /* a small picture, so the ballot fits under it without scrolling */
+.fk-board-tag { font-size: .875rem; font-weight: 700; text-align: center; color: var(--text); }
+.fk-retry { align-self: center; }
+
+.fk-order { display: flex; flex-wrap: wrap; gap: .375rem; justify-content: center; }
+.fk-order-chip {
+  display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem; max-width: 100%;
+  background: var(--bg-2); border: 1.5px solid var(--line); border-radius: 99px; font-size: .8125rem;
+}
+.fk-order-chip.now { border-color: var(--seat, var(--accent)); background: var(--surface-2); box-shadow: 0 0 0 1px var(--seat, var(--accent)) inset; font-weight: 700; }
+.fk-order-chip.me .fk-order-name { text-decoration: underline; text-underline-offset: .2em; }
+.fk-order-n { color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: .75rem; text-align: center; }
+.fk-order-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fk-order-strokes { color: var(--text-dim); font-size: .625rem; letter-spacing: .08em; }
+
+.fk-timer { margin-top: -.375rem; }
+.fk-timer .c-timer { padding: 0; }
+.fk-timer .c-timer-clock { font-size: 1.875rem; line-height: 1.2; }
+
+/* ---------- tally / verdict ---------- */
+
+.fk-verdict {
+  padding: .75rem 1rem; text-align: center; font-size: 1.1875rem; font-weight: 800; line-height: 1.4;
+  border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line);
+  animation: fk-pop .45s cubic-bezier(.2, .9, .3, 1.3);
+}
+.fk-verdict.caught { background: rgba(78, 201, 122, .12); border-color: rgba(78, 201, 122, .5); }
+.fk-verdict.escaped { background: rgba(228, 87, 61, .12); border-color: rgba(228, 87, 61, .45); }
+.fk-verdict.revote { background: rgba(245, 197, 24, .12); border-color: rgba(245, 197, 24, .5); }
+.fk-linger { height: .25rem; border-radius: 99px; background: var(--line); overflow: hidden; }
+.fk-linger i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; animation: fk-linger 4.5s linear forwards; }
+@keyframes fk-linger { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* ---------- the guess ---------- */
+
+.fk-judge { padding: .875rem 1rem; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.fk-judge-label { font-size: .75rem; color: var(--text-dim); letter-spacing: .06em; }
+.fk-judge-word { margin-top: .125rem; font-size: 2.25rem; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.fk-judgebtns { display: grid; grid-template-columns: 1fr 1fr; gap: .625rem; }
+.fk-judgebtns .btn { margin-bottom: 0; }
+.fk-judgebtns .btn.armed { box-shadow: 0 0 0 2px var(--accent); }
+
+/* ---------- result ---------- */
+
+.fk-result-head {
+  padding: .75rem 1rem; text-align: center; font-size: 1.1875rem; font-weight: 800; line-height: 1.45;
+  border-radius: var(--radius); background: rgba(78, 201, 122, .12); border: 1px solid rgba(78, 201, 122, .5);
+  animation: fk-pop .5s cubic-bezier(.2, .9, .3, 1.3);
+}
+.fk-result-head.fake { background: rgba(228, 87, 61, .12); border-color: rgba(228, 87, 61, .5); }
+
+.fk-facts { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; }
+.fk-fact {
+  display: inline-flex; align-items: center; gap: .375rem; padding: .375rem .75rem;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 99px; font-size: .875rem;
+}
+.fk-fact.big { flex-basis: 100%; justify-content: center; border-radius: var(--radius); background: var(--surface); padding: .625rem .75rem; }
+.fk-fact.big strong { font-size: 1.75rem; }
+.fk-fact-label { color: var(--text-dim); font-size: .75rem; }
+
+.fk-legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; justify-content: center; }
+.fk-legend { display: flex; flex-wrap: wrap; gap: .375rem; justify-content: center; }
+.fk-legend-chip {
+  display: inline-flex; align-items: center; gap: .375rem; min-height: 2.25rem; padding: .25rem .75rem;
+  font: inherit; font-size: .8125rem; font-weight: 600; color: var(--text);
+  background: var(--bg-2); border: 1.5px solid var(--line); border-radius: 99px; cursor: pointer;
+}
+.fk-legend-chip.on { border-color: var(--seat, var(--accent)); background: var(--surface-2); box-shadow: 0 0 0 1px var(--seat, var(--accent)) inset; }
+.fk-legend-chip:active { transform: scale(.96); }
+
+.fk-turns { display: flex; flex-direction: column; gap: .375rem; padding: .625rem .75rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.fk-turns-title { font-size: .75rem; color: var(--text-dim); font-weight: 700; }
+.fk-turns-lap { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
+.fk-turns-lapn { font-size: .75rem; color: var(--text-dim); min-width: 3rem; }
+.fk-turns-chip { display: inline-flex; align-items: center; gap: .3125rem; padding: .1875rem .5rem; font-size: .8125rem; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; }
+.fk-turns-chip.skipped { opacity: .55; }
+
+.fk-reveal-lines { display: flex; flex-direction: column; gap: .375rem; }
+.fk-reveal-line { padding: .5rem .75rem; background: var(--bg-2); border-radius: .75rem; font-size: .9375rem; line-height: 1.55; }
+
+.fk-deltas { display: flex; flex-direction: column; gap: .25rem; }
+.fk-delta { display: flex; align-items: center; gap: .5rem; padding: .375rem .75rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: .75rem; font-size: .9375rem; }
+.fk-delta.up { border-color: var(--seat, var(--accent)); }
+.fk-delta-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fk-delta-d { font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ok); min-width: 2rem; text-align: right; }
+.fk-delta-t { color: var(--text-dim); font-size: .8125rem; min-width: 3rem; text-align: right; }
+
+/* ---------- scores ---------- */
+
+.fk-scores { display: flex; flex-wrap: wrap; gap: .375rem; margin-top: .25rem; }
+.fk-score {
+  display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem; max-width: 100%;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 99px; font-size: .8125rem;
+}
+.fk-score-dot { width: .625rem; height: .625rem; border-radius: 50%; background: var(--seat, var(--accent)); flex: none; }
+.fk-score-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fk-score-n { font-weight: 800; font-variant-numeric: tabular-nums; }
+.fk-score-d { font-weight: 800; color: var(--ok); }
+.fk-score.me { border-color: var(--accent); }
+.fk-score.qm { opacity: .85; }
+.fk-score.lead { background: var(--surface-2); border-color: var(--cheese, var(--accent)); }
+
+.fk-final { display: flex; flex-direction: column; gap: .375rem; }
+.fk-final-row { display: flex; justify-content: space-between; padding: .625rem .875rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: .75rem; font-size: 1rem; }
+.fk-final-row.lead { border-color: var(--cheese, var(--accent)); background: var(--surface-2); font-weight: 800; }
+.fk-final-n { font-variant-numeric: tabular-nums; }
