@@ -92,6 +92,26 @@
         "5311"
       ],
       "port": 5311
+    },
+    {
+      "name": "ct-nightfix",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5337"
+      ],
+      "port": 5337
+    },
+    {
+      "name": "net-robust",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5333"
+      ],
+      "port": 5333
     }
   ]
 }

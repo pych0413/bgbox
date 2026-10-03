@@ -380,8 +380,17 @@ export function mount(root, api) {
     };
   }
 
-  function explainBody(role) {
+  /**
+   * `explain`. Three ways to order it (view.speakOrder):
+   *  judge   諗樣揀 — rows are 「叫佢講」 buttons for the 諗樣; the speaker taps 我講完, the 諗樣 may tap 下一位
+   *  system  系統派 — the phone announces who speaks (and who is next); nobody can call out of turn
+   *  free    自己決定 — nobody is "up": a 玩家 ticks themselves off with 我講完, the 諗樣 taps a name to tick it off
+   */
+  function explainBody(role, mode) {
+    const free = mode === 'free';
+    const system = mode === 'system';
     const list = h('div', { class: 'g9-speakers' });
+    const announce = system ? h('div', { class: 'g9-announce' }) : null;
     const timer = makeTimer();
     const banner = makeCalloutBanner();
     const callRow = role === 'judge' ? makeCalloutRow() : null;
@@ -390,61 +399,94 @@ export function mount(root, api) {
     const turnKey = (v) => (v?.turn ? `${v.turn.spoken.length}|${v.turn.pid}` : '');
     let sentTurn = '';   // one 「done」 per turn, whoever taps it
     const sendDone = () => {
-      const k = turnKey(view);
+      const v = view;
+      if (!v?.turn) return;
+      if (free) { guard.fire(() => api.send({ type: 'done' })); return; }   // my own 我講完
+      const k = turnKey(v);
       if (!k || sentTurn === k) return;
-      guard.fire(() => { sentTurn = k; api.send({ type: 'done' }); });
+      // the turn number rides along, so a 我講完 and a 下一位 tapped together end one turn, not two
+      guard.fire(() => { sentTurn = k; api.send({ type: 'done', turn: v.turn.spoken.length }); });
     };
     const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', text: '我講完' });
     doneBtn.addEventListener('click', sendDone);
-    const nextBtn = h('button', { class: 'btn btn-ghost', type: 'button', text: '下一位' });
-    nextBtn.addEventListener('click', sendDone);
+    const nextBtn = role === 'judge' && !free ? h('button', { class: 'btn btn-ghost', type: 'button', text: '下一位' }) : null;
+    nextBtn?.addEventListener('click', sendDone);
     const decideBtn = h('button', { class: 'btn btn-primary', type: 'button', text: '我決定咗，要揀人' });
     decideBtn.addEventListener('click', () => api.send({ type: 'decide' }));
-    const judgeNote = role === 'judge'
-      ? h('p', { class: 'g9-note', text: '㩒名叫佢講，次序由你話事。可以問任何關於個詞嘅嘢，但唔可以問人係咩身份。' })
-      : null;
+    const ASK = '可以問任何關於個詞嘅嘢，但唔可以問人係咩身份。';
+    const noteText = role === 'judge'
+      ? { judge: `㩒名叫佢講，次序由你話事。${ASK}`,
+        system: `電話隨機派人，次序同邊個係老實人冇關。有人講完就㩒「下一位」。${ASK}`,
+        free: `大家自己傾邊個先講，講完㩒佢個名。${ASK}` }[mode]
+      : role === 'player'
+        ? { system: '電話隨機派人，次序同邊個係老實人冇關。', free: '大家自己傾好邊個先講；講完㩒「我講完」。' }[mode]
+        : { system: '電話隨機派人，次序同邊個係老實人冇關。', free: '大家自己傾好邊個先講。' }[mode];
+    const noteEl = noteText ? h('p', { class: 'g9-note', text: noteText }) : null;
     let listSig = '';
+    let announceKey = '';
 
     const el = h('div', { class: 'g9-stack' },
-      h('h2', { class: 'g9-h', text: '輪流解釋' }),
-      list, judgeNote, timer.el, banner.el,
+      h('h2', { class: 'g9-h', text: free ? '自己決定次序' : '輪流解釋' }),
+      announce, list, noteEl, timer.el, banner.el,
       doneBtn,
-      role === 'judge' ? h('div', { class: 'g9-judgebtns' }, nextBtn, decideBtn) : null,
+      role === 'judge' ? h('div', { class: 'g9-judgebtns' + (free ? ' solo' : '') }, nextBtn, decideBtn) : null,
       callRow?.el,
       card?.el);
+
+    /** 系統派: 「輪到 阿B」 big, 「下一位：阿C」 small. A new line (and a soft chime for the one called) per turn. */
+    function paintAnnounce(v) {
+      const now = v.turn?.pid ?? null;
+      const spoken = v.turn?.spoken ?? [];
+      const next = v.explainers.find((p) => !spoken.includes(p) && p !== now) ?? null;
+      const key = `${now}|${next}|${v.me}`;
+      if (key === announceKey) return;
+      announceKey = key;
+      announce.classList.toggle('me', now !== null && now === v.me);
+      announce.replaceChildren(
+        h('div', { class: 'g9-announce-main', text: now ? (now === v.me ? '🎤 輪到你講！' : `🎤 輪到 ${nameOf(now)}`) : '' }),
+        h('div', { class: 'g9-announce-next', text: next ? `下一位：${nameOf(next)}` : '之後就到諗樣揀人' }));
+      if (now !== null && now === v.me) api.sfx('turn');
+    }
+
     return {
       el,
       update(v, c) {
         const spoken = v.turn?.spoken ?? [];
         const now = v.turn?.pid ?? null;
+        if (announce) paintAnnounce(v);
         const sig = JSON.stringify([v.explainers, spoken, now, v.callouts.used, v.me]);
         if (sig !== listSig) {
           listSig = sig;
-          list.replaceChildren(...v.explainers.map((pid) => {
+          list.replaceChildren(...v.explainers.map((pid, i) => {
             const state = spoken.includes(pid) ? 'done' : pid === now ? 'now' : 'todo';
             const called = v.callouts.used.includes(pid);
-            const canCall = role === 'judge' && state === 'todo';
-            const row = h(canCall ? 'button' : 'div', {
-              class: `g9-speaker ${state}${canCall ? ' callable' : ''}`, style: `--seat:${colorOf(pid)}`,
-              type: canCall ? 'button' : null,
+            const act = role === 'judge' && state === 'todo' ? (free ? 'done' : system ? null : 'call') : null;
+            const row = h(act ? 'button' : 'div', {
+              class: `g9-speaker ${state}${act ? ' callable' : ''}`, style: `--seat:${colorOf(pid)}`,
+              type: act ? 'button' : null,
             },
             h('span', { class: 'g9-speaker-dot' }),
-            h('span', { class: 'g9-speaker-name', text: seatName(pid, v.me) }),
+            h('span', { class: 'g9-speaker-name', text: (system ? `${i + 1}. ` : '') + seatName(pid, v.me) }),
             h('span', { class: 'g9-speaker-state',
-              text: state === 'done' ? '✅ 已講' : state === 'now' ? '🎤 講緊' : canCall ? '👉 叫佢講' : '⏳ 等緊' }),
+              text: state === 'done' ? '✅ 已講' : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
             called ? h('span', { class: 'g9-speaker-call', text: '🛑' }) : null);
-            if (canCall) row.addEventListener('click', () => { api.sfx('tap'); api.send({ type: 'call', target: pid }); });
+            if (act) {
+              row.addEventListener('click', () => {
+                api.sfx('tap');
+                api.send(act === 'call' ? { type: 'call', target: pid } : { type: 'done', target: pid });
+              });
+            }
             return row;
           }));
         }
         timer.update(v, c, [10]);
         banner.update(v);
         const k = turnKey(v);
-        const mySpeak = role === 'player' && now === v.me;
-        doneBtn.hidden = !mySpeak;
+        const mine = role === 'player' && (free ? !spoken.includes(v.me) : now === v.me);
+        doneBtn.hidden = !mine;
         if (sentTurn !== k) sentTurn = '';
-        doneBtn.disabled = guard.busy && sentTurn === k;
-        nextBtn.disabled = guard.busy && sentTurn === k;
+        doneBtn.disabled = guard.busy && (free || sentTurn === k);
+        if (nextBtn) nextBtn.disabled = guard.busy && sentTurn === k;
         if (callRow) callRow.update(v);
         if (card) card.set(faceFor(v));
       },
@@ -557,7 +599,7 @@ export function mount(root, api) {
           : waitingBody((x) => `${nameOf(x.judge)} 揀緊題目難度…`);
       case 'term': return termBody(role);
       case 'read': return readBody(role, sub);
-      case 'explain': return explainBody(role);
+      case 'explain': return explainBody(role, v.speakOrder ?? 'judge');
       case 'judge': return judgeBody(role);
       case 'reveal': return revealBody(role);
       default: return overBody();
@@ -587,7 +629,7 @@ export function mount(root, api) {
 
       const role = view.me === view.judge ? 'judge' : view.me ? 'player' : 'table';
       const sub = view.phase === 'read' ? readSub(view, role) : '';
-      const key = `${view.phase}|${view.round.n}|${role}|${sub}`;
+      const key = `${view.phase}|${view.round.n}|${role}|${sub}|${view.speakOrder}`;
       if (key !== bodyKey) {
         body?.destroy();
         body = makeBody(view, role, sub);

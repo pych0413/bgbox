@@ -17,6 +17,12 @@ const MISS_PENALTY = 3;        // 收皮啦 on the honest player
 const MAX_SWAPS = 3;           // 換題 per round (the rulebook just says "redraw"; this only stops endless fishing)
 const OFFICIAL_READ = 9;       // printed rulebook: the eyes-closed peek lasts 9 seconds
 const LEVEL_MODES = ['mix', 'judge', '1', '2', '3'];
+// Who decides the order in which the 玩家 explain (rulebook: the 諗樣, so that is the default):
+//   judge  諗樣揀 — the queue is only a suggestion; the 諗樣 may call anybody at any time
+//   system 系統派 — a fresh random order every round, drawn independently of who the 老實人 is; the phones announce
+//          who speaks next, the speaker (or the 諗樣) ends the turn, nobody can call out of order
+//   free   自己決定 — the table sorts it out loud; the app only ticks people off (「我講完」, or the 諗樣 taps a name)
+const SPEAK_ORDERS = ['judge', 'system', 'free'];
 const RANGES = { laps: [0, 3], readSecs: [5, 30], speakSecs: [0, 300], callouts: [0, 2] };
 const BOOLS = ['passPhone', 'scoreFloor', 'rePeek', 'antiStreak'];
 
@@ -82,7 +88,8 @@ export const rules = {
       '1. 諗樣係公開嘅，每輪向左傳。題目大家一齊睇（難度隨機，或者由設定決定）。\n'
       + '2. 有人已經識呢個詞？出聲，諗樣㩒「換題」，身份唔變。\n'
       + '3. 睇卡 9 秒：每個人㩒住自己張卡。老實人見到真正解釋，其他人（包括諗樣）見到另一段字，大家望電話嘅時間一樣長。\n'
-      + '4. 解釋：諗樣叫人講，次序由佢話事。老實人照實講，9upper 即場作。諗樣可以問任何關於個詞嘅問題，但唔可以問人係咩身份；其他人都可以互相追問。\n'
+      + '4. 解釋：諗樣叫人講，次序由佢話事（設定可以改成「系統派」：電話每輪隨機派人；或者「自己決定」：大家自己傾）。'
+      + '老實人照實講，9upper 即場作。諗樣可以問任何關於個詞嘅問題，但唔可以問人係咩身份；其他人都可以互相追問。\n'
       + '5. 諗樣覺得夠，隨時可以揀邊個係老實人（唔使等晒所有人講完）。\n'
       + '6. 揭曉身份、真正解釋同分數，下一位做諗樣。' },
     { title: '計分', body:
@@ -125,8 +132,8 @@ export const PRESETS = Object.freeze({
 const PRESET_IDS = ['official', 'newbie', 'quick', 'custom'];
 
 const DEFAULTS = Object.freeze({
-  preset: 'official', levelMode: 'mix', laps: 0, readSecs: OFFICIAL_READ, passPhone: false, speakSecs: 0,
-  callouts: 1, scoreFloor: false, rePeek: false, antiStreak: false, topics: Object.freeze({ cats: Object.freeze([]) }),
+  preset: 'official', levelMode: 'mix', laps: 0, readSecs: OFFICIAL_READ, passPhone: false, speakOrder: 'judge',
+  speakSecs: 0, callouts: 1, scoreFloor: false, rePeek: false, antiStreak: false, topics: Object.freeze({ cats: Object.freeze([]) }),
 });
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -154,6 +161,7 @@ function keyOk(key, v) {
   }
   if (key === 'preset') return PRESET_IDS.includes(String(v));
   if (key === 'levelMode') return LEVEL_MODES.includes(String(v));
+  if (key === 'speakOrder') return SPEAK_ORDERS.includes(String(v));
   if (BOOLS.includes(key)) return typeof v === 'boolean';
   if (key === 'topics') {
     if (Array.isArray(v)) return allStrings(v);
@@ -169,7 +177,7 @@ function clean(cfg) {
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in c) || !keyOk(key, c[key])) continue;
     if (key in RANGES) out[key] = asInt(c[key]);
-    else if (key === 'preset' || key === 'levelMode') out[key] = String(c[key]);
+    else if (key === 'preset' || key === 'levelMode' || key === 'speakOrder') out[key] = String(c[key]);
     else if (key === 'topics') out[key] = { cats: catsOf(c[key]).slice() };
     else out[key] = c[key];
   }
@@ -207,6 +215,17 @@ function presetHelp(id, n) {
 
 const PRESET_LABEL = { official: '官方玩法', newbie: '新手（第一次玩）', quick: '快玩', custom: '自訂' };
 
+/** One line under the 發言次序 select: what the chosen mode does at the table. */
+function orderHelp(mode) {
+  switch (mode) {
+    case 'system': return '電話每輪隨機派人（同邊個係老實人冇關）；講完㩒「我講完」。';
+    case 'free': return '大家自己傾邊個先講；講完㩒「我講完」，或者諗樣㩒佢個名。';
+    default: return '說明書玩法：諗樣㩒名叫人解釋，次序由佢話事。';
+  }
+}
+
+const ORDER_SUMMARY = { judge: '發言次序：諗樣揀', system: '發言次序：系統隨機派', free: '發言次序：自己決定' };
+
 export const config = {
   defaults(n, prev, env) {
     const out = clean(prev);
@@ -222,7 +241,7 @@ export const config = {
     const c = isObj(cfg) ? cfg : {};
     const label = {
       preset: '玩法', levelMode: '題目難度', laps: '做諗樣次數', readSecs: '睇卡時間', passPhone: '一部手機輪流睇',
-      speakSecs: '解釋時限', callouts: '收皮啦張數', scoreFloor: '分數下限', rePeek: '再睇一次',
+      speakOrder: '發言次序', speakSecs: '解釋時限', callouts: '收皮啦張數', scoreFloor: '分數下限', rePeek: '再睇一次',
       antiStreak: '老實人唔連續做', topics: '題目類別',
     };
     for (const key of Object.keys(DEFAULTS)) {
@@ -232,6 +251,7 @@ export const config = {
     if (m.readSecs < OFFICIAL_READ) warnings.push(`睇卡時間短過官方嘅 ${OFFICIAL_READ} 秒，老實人可能睇唔切。`);
     if (totalRoundsFor(m, n) > 20) warnings.push(`一共 ${totalRoundsFor(m, n)} 輪，會玩好耐。`);
     if (m.callouts === 2 && n === 3) warnings.push('3 個人玩，出兩張收皮啦一定會中老實人。');
+    if (m.speakOrder === 'free' && m.speakSecs > 0) warnings.push('「自己決定」次序冇人輪緊，解釋時限唔會生效。');
     if (m.antiStreak && n <= 4) warnings.push('3–4 個人玩，「老實人唔連續做」唔會生效（會等於話俾諗樣知邊個係老實人）。');
     return { ok: true, message: '', warnings };
   },
@@ -260,11 +280,18 @@ export const config = {
       );
     }
     out.push(
+      { key: 'speakOrder', label: '發言次序', type: 'select', help: orderHelp(m.speakOrder),
+        options: [
+          { value: 'judge', label: '諗樣揀（說明書玩法）' },
+          { value: 'system', label: '系統派（每輪隨機）' },
+          { value: 'free', label: '自己決定（大家自己傾）' },
+        ] },
       { key: 'readSecs', label: '睇卡時間（秒）', type: 'seconds', min: 5, max: 30, step: 1,
         help: `說明書係 ${OFFICIAL_READ} 秒。每個人睇嘅時間一樣長。` },
       { key: 'passPhone', label: '一部手機輪流睇', type: 'bool',
         help: '得一部手機就開：睇卡嗰陣逐個傳，每人睇同樣秒數。' },
-      { key: 'speakSecs', label: '每人解釋時限（秒）', type: 'seconds', min: 0, max: 300, help: '0＝唔限時。' },
+      { key: 'speakSecs', label: '每人解釋時限（秒）', type: 'seconds', min: 0, max: 300,
+        help: m.speakOrder === 'free' ? '0＝唔限時。「自己決定」次序唔計時。' : '0＝唔限時。' },
       { key: 'scoreFloor', label: '分數唔會低過 0', type: 'bool' },
       { key: 'rePeek', label: '老實人解釋途中可以再睇', type: 'bool', help: '說明書係睇一次就冇得再睇。' },
       { key: 'antiStreak', label: '老實人唔連續做', type: 'bool',
@@ -282,6 +309,7 @@ export const config = {
     lines.push({
       judge: '難度：諗樣自己揀', mix: '難度：隨機', 1: '難度：⭐ 簡單', 2: '難度：⭐⭐ 中等', 3: '難度：⭐⭐⭐ 困難',
     }[m.levelMode]);
+    lines.push(ORDER_SUMMARY[m.speakOrder]);
     lines.push(m.passPhone ? `一部手機輪流睇，每人 ${m.readSecs} 秒` : `睇卡 ${m.readSecs} 秒`);
     if (m.speakSecs > 0) lines.push(`每人解釋限時 ${m.speakSecs} 秒`);
     lines.push(m.callouts > 0 ? `收皮啦 ${m.callouts} 張` : '唔玩收皮啦');
@@ -392,8 +420,9 @@ function endPeek(s, ctx) {
   else startExplain(s, ctx);
 }
 
+/** Per-speaker clock. Only when somebody is actually on the floor: 「自己決定」 has no current speaker, so no clock. */
 function setTurnTimer(s, ctx) {
-  if (s.cfg.speakSecs > 0) {
+  if (s.cfg.speakSecs > 0 && speaker(s)) {
     s.deadline = ctx.now + s.cfg.speakSecs * 1000;
     s.timerLabel = `${nameOf(s, speaker(s))} 講緊`;
   } else clearTimer(s);
@@ -404,7 +433,7 @@ function startExplain(s, ctx) {
   s.phase = 'explain';
   r.reader = null;
   r.spoken = [];
-  r.speaker = r.explainers[0];
+  r.speaker = s.cfg.speakOrder === 'free' ? null : r.explainers[0];
   setTurnTimer(s, ctx);
 }
 
@@ -414,11 +443,18 @@ function toJudge(s) {
   clearTimer(s);
 }
 
-function endTurn(s, ctx) {
+/**
+ * Close a turn. judge / system: the current speaker is done and the next one in the queue is up.
+ * free: nobody is "up" — `who` (default: the first one still waiting) is ticked off the list.
+ */
+function endTurn(s, ctx, who = null) {
   const r = s.round;
-  if (r.speaker && !r.spoken.includes(r.speaker)) r.spoken.push(r.speaker);
-  r.speaker = r.explainers.find((p) => !r.spoken.includes(p)) ?? null;
-  if (!r.speaker) toJudge(s);
+  const free = s.cfg.speakOrder === 'free';
+  const done = free ? who ?? r.explainers.find((p) => !r.spoken.includes(p)) : r.speaker;
+  if (done && !r.spoken.includes(done)) r.spoken.push(done);
+  const next = r.explainers.find((p) => !r.spoken.includes(p)) ?? null;
+  r.speaker = free ? null : next;
+  if (!next) toJudge(s);
   else setTurnTimer(s, ctx);
 }
 
@@ -426,6 +462,21 @@ function endTurn(s, ctx) {
 function callSpeaker(s, ctx, target) {
   s.round.speaker = target;
   setTurnTimer(s, ctx);
+}
+
+/**
+ * The speaking queue of a round (every 玩家, the 諗樣 never).
+ *  judge:  round the table from a random 玩家 — only a suggestion, the 諗樣 calls whoever he likes (backlog #20)
+ *  system: a fully random order, drawn BEFORE and independently of the 老實人, so the position in the queue says
+ *          nothing about who holds the real card (nothing rotates, nothing is "fair" in a way that could be read)
+ *  free:   seat order from the 諗樣's left, only the order of the list on screen — nobody is called
+ */
+function speakingQueue(s, ctx, ring, first) {
+  switch (s.cfg.speakOrder) {
+    case 'system': return shuffle(ctx.rng, ring);
+    case 'free': return ring.slice();
+    default: return [...ring.slice(first), ...ring.slice(0, first)];
+  }
 }
 
 function chooseHonest(s, ctx, explainers) {
@@ -442,7 +493,7 @@ function startRound(s, ctx) {
   const judge = s.judges[s.roundNo - 1];
   const ring = after(s.order, judge);
   const first = rint(ctx.rng, ring.length);              // backlog #20: first speaker random over every 玩家
-  const explainers = [...ring.slice(first), ...ring.slice(0, first)];
+  const explainers = speakingQueue(s, ctx, ring, first);
   s.round = {
     n: s.roundNo, judge, explainers, readers: ring,
     honest: chooseHonest(s, ctx, ring),
@@ -537,9 +588,16 @@ function rawCue(s) {
     case 'read':
       return { id: `r${r.n}:read`, minMs: 1500,
         text: S.cueRead({ readSecs: s.cfg.readSecs, pass: s.cfg.passPhone, first: nm(r.readers[0]) }) };
-    case 'explain':
+    case 'explain': {
+      const k = r.spoken.length;
+      // 系統派: the phone announces every speaker (one cue per turn; a new id each time somebody finishes)
+      if (s.cfg.speakOrder === 'system' && k > 0 && r.speaker) {
+        return { id: `r${r.n}:explain:${k}`, minMs: 1200,
+          text: S.cueNextSpeaker({ name: nm(r.speaker), last: k === r.explainers.length - 1 }) };
+      }
       return { id: `r${r.n}:explain`, minMs: 2500,
-        text: S.cueExplain({ term: r.term.term, first: nm(r.explainers[0]), judge: nm(r.judge) }) };
+        text: S.cueExplain({ mode: s.cfg.speakOrder, term: r.term.term, first: nm(r.explainers[0]), judge: nm(r.judge) }) };
+    }
     case 'judge':
       return { id: `r${r.n}:judge`, text: S.cueJudge({ judge: nm(r.judge) }), minMs: 2500 };
     case 'reveal':
@@ -613,12 +671,24 @@ function act(state, msg, ctx) {
     case 'peek':
       if (s.phase === 'read' && s.cfg.passPhone && pid === r.reader && !r.readStarted) startPeek(s, ctx);
       return s;
-    case 'done':
-      if (s.phase === 'explain' && (isJudge || pid === speaker(s))) endTurn(s, ctx);
+    case 'done': {
+      if (s.phase !== 'explain') return s;
+      if (s.cfg.speakOrder === 'free') {
+        // nobody is up: a 玩家 ticks themselves off (「我講完」); the 諗樣 may tick anybody off (flat phone, one shared phone)
+        const who = isJudge ? a.target : pid;
+        if (isTarget(who) && !r.spoken.includes(who)) endTurn(s, ctx, who);
+        return s;
+      }
+      if (!isJudge && pid !== speaker(s)) return s;
+      // the UI sends the turn it saw, so the speaker's 我講完 and the 諗樣's 下一位 tapped together end ONE turn, not two
+      if (typeof a.turn === 'number' && a.turn !== r.spoken.length) return s;
+      endTurn(s, ctx);
       return s;
+    }
     case 'call':
-      if (s.phase === 'explain' && isJudge && isTarget(a.target) && a.target !== r.speaker
-        && !r.spoken.includes(a.target)) callSpeaker(s, ctx, a.target);
+      // only 諗樣揀: in 系統派 and 自己決定 nobody can pick the next speaker
+      if (s.phase === 'explain' && s.cfg.speakOrder === 'judge' && isJudge && isTarget(a.target)
+        && a.target !== r.speaker && !r.spoken.includes(a.target)) callSpeaker(s, ctx, a.target);
       return s;
     case 'decide':
       if (s.phase === 'explain' && isJudge) toJudge(s);
@@ -716,6 +786,7 @@ function view(state, pid) {
     turn: s.phase === 'explain'
       ? { pid: r.speaker, spoken: r.spoken.slice(), total: r.explainers.length }
       : null,
+    speakOrder: s.cfg.speakOrder,
     callouts: {
       max: s.cfg.callouts, left: Math.max(0, s.cfg.callouts - r.called.length), used: r.called.slice(),
     },
@@ -759,6 +830,8 @@ function view(state, pid) {
     readStarted: r.readStarted,
     readDone: !!seat && r.readDone.includes(seat),
     speakingNow: !!seat && speaker(s) === seat,
+    speakOrder: s.cfg.speakOrder,
+    spokenMe: !!seat && s.phase === 'explain' && r.spoken.includes(seat),
     callouts: s.cfg.callouts,
     judgeName: nameOf(s, r.judge),
     readerName: r.reader ? nameOf(s, r.reader) : '',
@@ -808,11 +881,16 @@ function legalActions(state, pid) {
       if (s.cfg.passPhone && pid === r.reader && !r.readStarted) out.push({ type: 'peek' });
       break;
     case 'explain':
-      if (isJudge || pid === speaker(s)) out.push({ type: 'done' });
+      if (s.cfg.speakOrder === 'free') {
+        if (isJudge) for (const t of r.explainers) if (!r.spoken.includes(t)) out.push({ type: 'done', target: t });
+        if (!isJudge && !r.spoken.includes(pid)) out.push({ type: 'done' });
+      } else if (isJudge || pid === speaker(s)) out.push({ type: 'done' });
       if (isJudge) {
         out.push({ type: 'decide' });
-        for (const t of r.explainers) {
-          if (t !== r.speaker && !r.spoken.includes(t)) out.push({ type: 'call', target: t });
+        if (s.cfg.speakOrder === 'judge') {
+          for (const t of r.explainers) {
+            if (t !== r.speaker && !r.spoken.includes(t)) out.push({ type: 'call', target: t });
+          }
         }
         callouts();
       }
@@ -842,7 +920,12 @@ function autoAct(state, pid, ctx) {
     case 'level': return isJudge ? { type: 'level', level: 1 + rnd(3) } : null;
     case 'term': return isJudge ? { type: 'start' } : null;
     case 'read': return s.cfg.passPhone && pid === r.reader && !r.readStarted ? { type: 'peek' } : null;
-    case 'explain': return isJudge || pid === speaker(s) ? { type: 'done' } : null;
+    case 'explain':
+      if (s.cfg.speakOrder === 'free') {
+        if (isJudge) return { type: 'done', target: r.explainers.find((p) => !r.spoken.includes(p)) };
+        return r.spoken.includes(pid) ? null : { type: 'done' };
+      }
+      return isJudge || pid === speaker(s) ? { type: 'done' } : null;
     case 'judge': return isJudge ? { type: 'pick', target: r.explainers[rnd(r.explainers.length)] } : null;
     case 'reveal': return isJudge ? { type: 'next' } : null;
     default: return null;

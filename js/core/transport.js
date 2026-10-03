@@ -88,12 +88,14 @@ class Emitter {
  * Host side. Events:
  *   'message' (peerId, msg)   a well-formed message from a remote device
  *   'open'    (peerId)        a data channel opened
- *   'close'   (peerId)        a data channel closed
+ *   'close'   (peerId)        a data channel closed — or went silent past the heartbeat (net.js)
  *   'status'  (kind, err?)    'online' | 'reconnecting' | 'error'  (signalling server)
+ * `opts` ({ log, timers, … }) go to the default HostNet; an injected net ignores them.
  */
 export class HostTransport extends Emitter {
-  constructor(net = new HostNet()) {
+  constructor(net = null, opts = {}) {
     super();
+    net ??= new HostNet(opts);
     this.net = net;
     this.code = null;
     this.chunkSeq = 0;
@@ -118,22 +120,28 @@ export class HostTransport extends Emitter {
     return ok;
   }
 
+  /** The page is back (visible / pageshow / online): fresh heartbeat windows, signalling back now. */
+  resume(reason) { this.net.resume?.(reason); }
+
   close() { this.net.close(); }
 }
 
 /**
  * Client side. Events:
  *   'message' (msg)
+ *   'rx' ()                   any wire message arrived, chunk parts included — the host is alive (heartbeat)
  *   'open' ()                 data channel open — fires on every (re)connect, so say hello again
  *   'status' (kind, err?)     'online' | 'offline' | 'reconnecting' | 'host-gone' | 'error'
  */
 export class ClientTransport extends Emitter {
-  constructor(net = new ClientNet()) {
+  constructor(net = null, opts = {}) {
     super();
+    net ??= new ClientNet(opts);
     this.net = net;
     const unpack = makeUnpacker();
     net.on('message', (msg) => {
       if (!isMessage(msg)) return;
+      this.emit('rx');
       if (msg.t !== 'chunk') { this.emit('message', msg); return; }
       const whole = unpack.feed(msg);
       if (whole) this.emit('message', whole);
@@ -146,6 +154,12 @@ export class ClientTransport extends Emitter {
   connect(code) { return this.net.connect(code); }
 
   send(msg) { return this.net.send(msg); }
+
+  /** The host went quiet: drop the channel and dial again now. false if the net cannot (or is closed). */
+  reset(reason) { return typeof this.net.reset === 'function' ? !!this.net.reset(reason) : false; }
+
+  /** The page came back / the network returned: if there is no channel, dial now (not in up to 6 s). */
+  nudge(reason) { return typeof this.net.nudge === 'function' ? !!this.net.nudge(reason) : false; }
 
   close() { this.net.close(); }
 }

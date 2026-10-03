@@ -21,7 +21,8 @@
 //                   ink    { pid, stroke, pts, end?, color?, width?, eraser? | op }
 //                   lobby  { op: 'color' | 'leave' | 'addSeat', ... }
 //                   sync   {}  "send me everything again" (the page came back to the foreground)
-//                   ping   { c }   (not `t`: that is the message type)      bye {}
+//                   ping   { c, hb? }   (`c`, not `t`: that is the message type; hb: 1 = on the 4 s heartbeat,
+//                          so the host may close it after 15 s of silence — net.js)      bye {}
 //   host → client   welcome { v, build, device, seats: [{ id, name, token }], room, views }   (re-sent when the seat list changes)
 //                   room    { room }                              public room view; `stalled`, `claims`, `versionMismatch` only for the host
 //                   views   { rev, hostNow, bySeat, table, focus, canInk }   this device's seats only (canInk: those
@@ -58,7 +59,8 @@ const HISTORY_MAX = 100;
 const ACTION_MAX_BYTES = 8192;
 const INK_RESYNC_MIN_MS = 1000;
 const SYNC_MIN_MS = 1000;                 // a device may ask for a full resync at most this often
-export const LOBBY_GRACE_MS = 60_000;     // an offline lobby seat is dropped after this (unless kept)
+export const LOBBY_GRACE_MS = 180_000;    // an offline lobby seat is dropped after this (unless kept): a phone that
+                                          // auto-locked for a minute or two keeps its seat and its place in the order
 export const TIMER_MIN_MS = 1000;
 export const TIMER_MAX_MS = 3 * 60 * 60 * 1000;
 export const TIMER_LINGER_MS = 60_000;    // a timer that rang stays on screen this long, then clears itself
@@ -1228,6 +1230,26 @@ export class Room {
   poke() {
     this.session?.poke();
     this.#batch(() => { this.#refreshStalls(); this.#armTimer(); this.#refreshLobbyGc(); });
+  }
+
+  /**
+   * The host's own page was hidden (phone locked, another app) for `awayMs`. It could hear nobody meanwhile, so
+   * that time does not count against offline lobby seats (G3): their grace clock stops while the host is away.
+   * Then everything is re-checked, as poke().
+   */
+  hostBack(awayMs) {
+    const ms = Math.max(0, Number(awayMs) || 0);
+    if (this.#disposed) return;
+    this.session?.poke();
+    this.#batch(() => {
+      if (ms) {
+        const now = this.nowFn();
+        for (const p of this.players) if (!p.connected && p.offlineSince != null) p.offlineSince = Math.min(now, p.offlineSince + ms);
+        if (this.lobbySince != null) this.lobbySince = Math.min(now, this.lobbySince + ms);
+        this.#mark();
+      }
+      this.#refreshStalls(); this.#armTimer(); this.#refreshLobbyGc();
+    });
   }
 
   // ============================================================
