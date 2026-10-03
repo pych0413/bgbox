@@ -14,29 +14,29 @@
 // never inside view().
 // ============================================================
 
-import { makeStore } from './util.js?v=1';
-import { cryptoRng, clone } from './engine-kit.js?v=1';
+import { makeStore } from './util.js?v=20261003075532';
+import { cryptoRng, clone } from './engine-kit.js?v=20261003075532';
 
 /** Bank id → file, key function, loader. Literal import() strings so tooling can stamp ?v=. */
 export const BANKS = {
   undercover: {
     file: 'undercover-words.js',
-    load: () => import('../data/undercover-words.js?v=1'),
+    load: () => import('../data/undercover-words.js?v=20261003075532'),
     key: (e) => [e.a, e.b].sort().join('|'),
   },
   spyfall: {
     file: 'spyfall-locations.js',
-    load: () => import('../data/spyfall-locations.js?v=1'),
+    load: () => import('../data/spyfall-locations.js?v=20261003075532'),
     key: (e) => e.name,
   },
   draw: {
     file: 'draw-words.js',
-    load: () => import('../data/draw-words.js?v=1'),
+    load: () => import('../data/draw-words.js?v=20261003075532'),
     key: (e) => e.w,
   },
   '9upper': {
     file: '9upper-terms.js',
-    load: () => import('../data/9upper-terms.js?v=1'),
+    load: () => import('../data/9upper-terms.js?v=20261003075532'),
     key: (e) => e.term,
   },
 };

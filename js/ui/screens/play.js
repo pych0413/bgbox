@@ -14,9 +14,9 @@
 // half-picked target can leak from one seat's screen to the next on a shared phone.
 // ============================================================
 
-import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=1';
-import { sfx } from '../../core/sfx.js?v=1';
-import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=1';
+import { el, toast, lockScroll, unlockScroll } from '../dom.js?v=20261003075532';
+import { sfx } from '../../core/sfx.js?v=20261003075532';
+import { components, NarratorBar, PassGate, RulesSheet, closeAllCovers } from '../components/index.js?v=20261003075532';
 
 const cssLoaded = new Set();
 
@@ -24,7 +24,7 @@ const cssLoaded = new Set();
 function ensureGameCss(id) {
   if (cssLoaded.has(id)) return;
   cssLoaded.add(id);
-  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=1` }));
+  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=20261003075532` }));
 }
 
 export function mountPlay(sh) {

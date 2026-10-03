@@ -9,7 +9,7 @@
 // component (DESIGN §11) replaces this file without changing the props.
 // ============================================================
 
-import { el } from '../dom.js?v=1';
+import { el } from '../dom.js?v=20261003075532';
 
 export function Canvas(props = {}) {
   const note = el('div', { class: 'c-canvas-note' },

@@ -14,8 +14,8 @@
 // Ties share a rank.
 // ============================================================
 
-import { el, sig } from '../dom.js?v=1';
-import { rankRows } from '../logic.js?v=1';
+import { el, sig } from '../dom.js?v=20261003075532';
+import { rankRows } from '../logic.js?v=20261003075532';
 
 const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
 

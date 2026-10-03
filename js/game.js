@@ -6,8 +6,8 @@
 // phone literally never receives another player's card.
 // ============================================================
 
-import { uid, shuffle, rollDie, hhmm } from './util.js?v=202609190342';
-import { buildDeck, validateRoles } from './roles.js?v=202609190342';
+import { uid, shuffle, rollDie, hhmm } from './util.js?v=20261003075532';
+import { buildDeck, validateRoles } from './roles.js?v=20261003075532';
 
 const MAX_LOG = 60;
 

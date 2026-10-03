@@ -14,10 +14,10 @@
 // `color` / `teamLabel` itself.
 // ============================================================
 
-import { el, sig } from '../dom.js?v=1';
-import { teamStyle } from '../logic.js?v=1';
-import { sfx } from '../../core/sfx.js?v=1';
-import { Cover } from './Cover.js?v=1';
+import { el, sig } from '../dom.js?v=20261003075532';
+import { teamStyle } from '../logic.js?v=20261003075532';
+import { sfx } from '../../core/sfx.js?v=20261003075532';
+import { Cover } from './Cover.js?v=20261003075532';
 
 export { teamStyle };
 

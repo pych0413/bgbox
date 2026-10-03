@@ -11,7 +11,7 @@
 // the Room directly.
 // ============================================================
 
-import { HostNet, ClientNet } from './net.js?v=1';
+import { HostNet, ClientNet } from './net.js?v=20261003075532';
 
 export const PROTOCOL = 2;
 

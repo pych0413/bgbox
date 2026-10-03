@@ -14,9 +14,9 @@
 //  - sleepers get a big decoy button; tapping it is the "ack" action.
 // ============================================================
 
-import { el } from '../../ui/dom.js?v=1';
-import { rules } from './game.js?v=1';
-import { CLOCK } from './script.js?v=1';
+import { el } from '../../ui/dom.js?v=20261003075532';
+import { rules } from './game.js?v=20261003075532';
+import { CLOCK } from './script.js?v=20261003075532';
 
 const ROLES = Object.fromEntries(rules.roles.map((r) => [r.id, r]));
 
