@@ -27,6 +27,14 @@ const NEED_CONFIRM = {
   redeal: '重新派牌（唔加回合數）？大家要重新睇牌，骰唔會變。',
   end: '結束遊戲？會去結果頁，所有角色同骰都會公開。',
 };
+/**
+ * One phone (re-run #2 F2): a stray tap on the phone everybody handles must not wipe the round, so these take a second
+ * tap there too. Phones of their own: unchanged (one tap; 全體搖骰 asks only when a cup is locked).
+ */
+const SHARED_CONFIRM = {
+  'next-round': '下一回合？大家嘅骰會清晒、重新派牌。',
+  'roll-all': '全體搖骰？大家嘅骰會重新搖。',
+};
 
 function h(tag, attrs, ...kids) {
   const n = document.createElement(tag);
@@ -122,6 +130,11 @@ export function mount(root, api) {
 
   // ---------- no-card note (moderator / spectator / the table) ----------
   const noteCard = h('section', { class: 'cu-card cu-notecard', hidden: true });
+  // re-run #2 F1: the phone lies in the middle after 開盅 / 開角色 — one tap hands it to the host for the controls
+  const hostBtn = h('button', { type: 'button', class: 'cu-btn cu-tohost' });
+  const hostNote = h('small', { class: 'cu-hint' });
+  const tableCtl = h('section', { class: 'cu-card cu-tablectl', hidden: true }, hostBtn, hostNote);
+  hostBtn.addEventListener('click', () => toHost('主持掣'));
 
   // ---------- showdown (dice revealed) ----------
   const showList = h('ul', { class: 'cu-show' });
@@ -143,13 +156,19 @@ export function mount(root, api) {
     revealDice: ctlButton('👁 開晒啲骰', (b) => sendHost('reveal-dice', b)),
     revealRoles: ctlButton('🔓 開晒角色', (b) => sendHost('reveal-roles', b), 'danger'),
     redeal: ctlButton('🃏 重新派牌', (b) => sendHost('redeal', b)),
-    nextRound: ctlButton('➡️ 下一回合（重新派牌）', () => send({ type: 'next-round' }), 'primary'),
+    nextRound: ctlButton('➡️ 下一回合（重新派牌）', (b) => sendHost('next-round', b), 'primary'),
     end: ctlButton('🏁 結束遊戲', (b) => sendHost('end', b), 'quiet'),
   };
-  const ctlCard = h('section', { class: 'cu-card', hidden: true },
-    h('div', { class: 'cu-head' }, h('h3', { text: '主持控制' })),
+  // re-run #2 F2: on a shared phone the host's own walk turn (his card and dice) folds the controls behind one button, so a
+  // tap meant for the card or 「✓ 搞掂」 never lands on 下一回合 / 全體搖骰
+  const ctlToggle = h('button', { type: 'button', class: 'cu-btn quiet cu-ctltoggle', hidden: true, 'aria-expanded': 'false' });
+  const ctlBody = h('div', { class: 'cu-ctlbody' },
     h('div', { class: 'cu-grid' }, btns.rollAll, btns.unlockDice, btns.revealDice, btns.redeal),
     btns.revealRoles, btns.nextRound, btns.end);
+  const ctlCard = h('section', { class: 'cu-card', hidden: true },
+    h('div', { class: 'cu-head' }, h('h3', { text: '主持控制' })), ctlToggle, ctlBody);
+  let ctlOpen = false;       // the folded controls were opened (this walk turn only)
+  ctlToggle.addEventListener('click', () => { ctlOpen = !ctlOpen; if (last) render(last); });
 
   // ---------- deck + log ----------
   const deckList = h('ul', { class: 'cu-deck' });
@@ -162,7 +181,7 @@ export function mount(root, api) {
 
   // the cup stays ABOVE the role card; once the host opens the dice, the 開盅 list sits right under the cup, on the
   // first screen, instead of below the role card where nobody would scroll to it
-  wrap.append(status, noteCard, diceCard, showCard, roleCard, tableCard, ctlCard, deckCard, logCard);
+  wrap.append(status, noteCard, tableCtl, diceCard, showCard, roleCard, tableCard, ctlCard, deckCard, logCard);
 
   /** A host button; `onclick(button)` gets the button itself, for the in-page confirm on it. */
   function ctlButton(label, onclick, kind = '') {
@@ -183,7 +202,8 @@ export function mount(root, api) {
 
   // ---------- actions ----------
   function sendHost(type, node) {
-    if (NEED_CONFIRM[type] && !confirmed(NEED_CONFIRM[type], node, type)) return;
+    const ask = NEED_CONFIRM[type] ?? (shared() ? SHARED_CONFIRM[type] : null);
+    if (ask && !confirmed(ask, node, type)) return;
     send({ type });
     // §7.1 #22: on a shared phone the dice / roles are shown from the table screen, never by laying the host's own
     // seat (card, cup, controls) face up
@@ -211,6 +231,18 @@ export function mount(root, api) {
     return { kind: 'table', pid: null };
   }
 
+  /**
+   * The host's seat holds the controls; on a shared phone it is handed over as a PUBLIC card (re-run #2 F1: 「輪到 阿聰」,
+   * nothing secret is face up there — the card and the cup are covered), except when the host is a moderator who sees
+   * every role (modSees): those 👁 tags are on that screen, so it is the private 「交俾 阿聰 · 其他人唔好望」.
+   */
+  const hostIsSecret = () => api.config?.modSees === true && api.config?.hostPlays === false;
+  function toHost(why) {
+    const pid = last?.host;
+    if (!pid) return false;
+    try { return api.handTo?.(pid, { open: !hostIsSecret(), why }) === true; } catch (err) { console.error(err); return false; }
+  }
+
   /** 「✓ 搞掂」: this seat is done with its card and dice; the shell's walk (or handTo) moves the phone on. */
   function handOn() {
     const v = last;
@@ -222,13 +254,13 @@ export function mount(root, api) {
     sentTimer = setTimeout(() => { sentDeal = null; if (last) render(last); }, 3500);
     render(v);
     send({ type: 'seen' });
-    if (to.kind === 'host') {
-      try { api.handTo?.(to.pid, { why: '大家睇完牌' }); } catch (err) { console.error(err); }
-    }
+    if (to.kind === 'host') toHost('大家睇完牌');
   }
 
   function rollAll(node) {
-    if (last?.seats.some((s) => s.diceLocked) && !confirmed('有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？', node, 'roll-all')) return;
+    const locked = last?.seats.some((s) => s.diceLocked);
+    const ask = locked ? '有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？' : shared() ? SHARED_CONFIRM['roll-all'] : null;
+    if (ask && !confirmed(ask, node, 'roll-all')) return;
     if (!last?.me?.playing) sfx('roll');   // a moderator has no cup to rattle
     send({ type: 'roll-all' });
   }
@@ -445,7 +477,7 @@ export function mount(root, api) {
       noteCard.textContent = me
         ? (v.all ? '你係主持 🎙️ 今次你唔攞牌、唔擲骰。你睇到所有人嘅角色（下面）。' : '你係主持 🎙️ 今次你唔攞牌、唔擲骰，由你控制場面。')
         // the table screen of a shared phone (§7.1): nobody's card or cup, only what is public
-        : api.atTable === true && shared() ? '📱 部機喺枱中間：開咗嘅骰同角色喺度一齊睇。'
+        : atTableHere() ? '📱 部機喺枱中間：開咗嘅骰同角色喺度一齊睇。'
           : '你喺度睇緊 👀 下一局先加入到。';
       return;
     }
@@ -462,6 +494,19 @@ export function mount(root, api) {
     card?.update(cardProps(v));
   }
 
+  const atTableHere = () => api.atTable === true && shared() && api.me == null;
+
+  /** The table screen: 「🎛 主持掣 · 交俾 阿聰」 when the host's seat is on this phone (re-run #2 F1). */
+  function syncTableCtl(v) {
+    const mine = Array.isArray(api.mySeats) ? api.mySeats : [];
+    const show = atTableHere() && v.phase === 'play' && !!v.host && mine.includes(v.host);
+    tableCtl.hidden = !show;
+    if (!show) return;
+    const name = playerFor(v.host)?.name ?? v.seats.find((s) => s.id === v.host)?.name ?? '?';
+    hostBtn.textContent = `🎛 主持掣 · 交俾 ${name}`;
+    hostNote.textContent = '再搖骰、開角色、下一回合都喺度。';
+  }
+
   /** Shared phone, this seat's walk turn, after its first peek: 「✓ 搞掂 · 交俾 阿明」 under the card (#15). */
   function syncDone(v) {
     const show = inWalk(v) && peekedDeal === v.dealId;
@@ -472,13 +517,22 @@ export function mount(root, api) {
     doneBtn.textContent = to.kind === 'next' ? `✓ 搞掂 · 交俾 ${name}`
       : to.kind === 'host' ? `✓ 搞掂 · 交返俾房主 ${name}` : '✓ 搞掂 · 擺返中間';
     doneBtn.disabled = sentDeal === v.dealId;
-    doneNote.textContent = v.me.mayRoll && !v.revealDice ? '要搖骰就而家搖、鎖埋先交' : '';
+    // re-run #2 F3: with 「只有主持搖」 the host's own turn is the moment for 全體搖骰 — then every seat sees its dice on
+    // its own turn of the walk, with no extra trip to the phone afterwards
+    doneNote.textContent = v.me.mayRoll && v.selfRoll && !v.revealDice ? '要搖骰就而家搖、鎖埋先交'
+      : v.controller && !v.selfRoll && !v.revealDice ? '要全體搖骰就而家㩒「🎛 主持掣」，大家輪住睇牌就見到自己嘅骰' : '';
     doneNote.hidden = !doneNote.textContent;
   }
 
   function syncControls(v) {
     ctlCard.hidden = !v.controller || v.phase !== 'play';
     if (ctlCard.hidden) return;
+    const fold = inWalk(v);
+    if (!fold) ctlOpen = false;
+    ctlToggle.hidden = !fold;
+    ctlToggle.textContent = ctlOpen ? '🎛 收埋主持掣' : '🎛 主持掣（睇完牌先用）';
+    ctlToggle.setAttribute('aria-expanded', ctlOpen ? 'true' : 'false');
+    ctlBody.hidden = fold && !ctlOpen;
     const can = v.can;
     btns.rollAll.disabled = !can.rollAll;
     btns.unlockDice.disabled = !can.unlockDice;
@@ -506,6 +560,7 @@ export function mount(root, api) {
     if (lastCtx.paused) status.textContent += '（暫停緊）';
 
     syncMine(view);
+    syncTableCtl(view);
     syncShowdown(view);
     syncRoster(view);
     syncControls(view);

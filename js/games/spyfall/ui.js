@@ -44,6 +44,7 @@ const WITH_CARD = new Set(['reveal', 'play', 'vote', 'tally', 'guess']);
 const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
 const END_DELAY_S = 2;       // the 睇完 button wakes up this many seconds after the reveal appears (counted down on screen)
 const SEEN_RETRY_MS = 4000;  // a 睇完 the host never confirmed comes back as a button after this long
+const GUESS_UNDO_S = 3;      // one phone: a picked place is sent after this many seconds unless 撤銷 is tapped (re-run N3)
 
 export function mount(root, api) {
   const { RoleCard, Timer, PlayerPicker } = api.components;
@@ -57,6 +58,7 @@ export function mount(root, api) {
     mode: 'main',            // play actions: 'main' | 'accuse' | 'spy'
     sel: [],                 // accusation picker selection
     pick: null,              // location chosen by the guessing spy
+    pending: null,           // one phone: { loc, left, n } — picked, sent when `left` reaches 0 unless 撤銷 (re-run N3)
     sentReady: false,
     seat: null,
     endFor: 0,               // round whose reveal has started its delay
@@ -520,19 +522,66 @@ export function mount(root, api) {
     renderList(view);
   }
 
+  /**
+   * One phone (re-run N3): the guess is a public step — the phone lies in the middle — so the table must not watch the
+   * spy try places out. One tap picks; nothing is highlighted and the place is never printed; it goes out after
+   * GUESS_UNDO_S seconds unless 撤銷 is tapped (a slip of the finger). The reveal names it.
+   */
+  const isGuesser = (v) => v?.phase === 'guess' && v.guess?.current === me() && !!v.mine;
+  const publicGuess = () => shared();
+  function pickPublic(loc) {
+    const n = (st.pending?.n ?? 0) + 1;
+    st.pending = { loc, left: GUESS_UNDO_S, n };
+    api.sfx('tap');
+    const tick = () => {
+      const p = st.pending;
+      if (!p || p.n !== n) return;
+      if (!isGuesser(view)) { st.pending = null; return; }
+      p.left -= 1;
+      if (p.left > 0) { later(tick, 1000); renderGuess(view); return; }
+      st.pending = null;
+      send({ type: 'guess', loc: p.loc });
+      renderGuess(view);
+      renderList(view);
+    };
+    later(tick, 1000);
+    renderGuess(view);
+  }
+  function undoPublic() {
+    if (!st.pending) return;
+    st.pending = null;
+    api.sfx('tap');
+    renderGuess(view);
+  }
+
   function renderGuess(v) {
     guessBox.hidden = v.phase !== 'guess';
     const g = v.guess;
-    const mineTurn = v.phase === 'guess' && g.current === me() && !!v.mine;
-    if (!mineTurn) st.pick = null;
-    const showBar = mineTurn && st.pick != null;
+    const mineTurn = isGuesser(v);
+    const pub = mineTurn && publicGuess();
+    if (!mineTurn || pub) st.pick = null;
+    if (!mineTurn) st.pending = null;
+    const pend = pub ? st.pending : null;
+    const showBar = pub ? !!pend : mineTurn && st.pick != null;
     guessBar.hidden = !showBar;
     wrap.classList.toggle('has-bar', showBar);
-    kBar([showBar && st.pick], () => (showBar ? btn(`就係「${locName(st.pick)}」！`, 'btn-primary btn-lg', confirmGuess) : null));
+    kBar([showBar && (pub ? ['undo', pend.left] : st.pick)], () => {
+      if (!showBar) return null;
+      return pub ? btn(`↩ 撤銷（${pend.left}）`, 'btn-ghost btn-lg', undoPublic)
+        : btn(`就係「${locName(st.pick)}」！`, 'btn-primary btn-lg', confirmGuess);
+    });
     if (v.phase !== 'guess') return;
-    kGuess([g, mineTurn, st.pick], () => {
+    kGuess([g, mineTurn, st.pick, pub && (pend ? pend.left : 0)], () => {
       const out = [];
-      if (mineTurn) {
+      if (pub) {
+        // the whole table reads this screen: the spy by name, never 「你」, and never the place picked
+        const who = nameOf(me());
+        out.push(h('h4', { text: `🕵️ ${who} 揀地點` }));
+        out.push(h('p', { class: 'sf-note', text: pend
+          ? `${who} 揀好咗，${pend.left} 秒後公佈。㩒錯就㩒撤銷。`
+          : `${who}：喺下面清單㩒一個地點，㩒咗就算（${GUESS_UNDO_S} 秒內可以撤銷）。` }));
+        if (pend) out.push(btn(`↩ 撤銷（${pend.left}）`, 'btn-ghost', undoPublic));
+      } else if (mineTurn) {
         out.push(h('h4', { text: '🕵️ 你揀咗邊個地點？' }));
         out.push(h('p', { class: 'sf-note', text: st.pick == null
           ? '喺下面清單㩒一個地點。只可以揀一次。'
@@ -566,13 +615,14 @@ export function mount(root, api) {
     const show = WITH_CARD.has(v.phase);
     listBox.hidden = !show;
     if (!show) return;
-    const guesser = v.phase === 'guess' && v.guess.current === me() && !!v.mine;
+    const guesser = isGuesser(v);
+    const pub = guesser && publicGuess();   // one phone (re-run N3): no highlight on the place the spy tapped
     if (guesser && !st.listOpen) st.listOpen = true;
     const picked = v.guess ? Object.values(v.guess.picks) : [];
     // #22: the phone in the middle is read by everybody — nobody's strikes on it (they could hint at the spy)
     const table = atTable();
     const struck = table ? [] : [...st.strikes].sort((a, b) => a - b);
-    kList([st.listOpen, struck, v.locations.map((l) => l.used), picked, st.pick, guesser, table], () => {
+    kList([st.listOpen, struck, v.locations.map((l) => l.used), picked, pub ? null : st.pick, guesser, pub, table], () => {
       const head = h('div', { class: 'sf-list-head' },
         h('button', {
           type: 'button', class: 'sf-list-toggle', 'aria-expanded': String(st.listOpen),
@@ -580,7 +630,7 @@ export function mount(root, api) {
         }, h('span', { text: `📍 地點清單 · ${v.locations.length} 個` }), h('span', { class: 'chev', text: st.listOpen ? '▴' : '▾' })),
         struck.length && !guesser ? btn('還原劃線', 'btn-ghost btn-sm', () => { st.strikes.clear(); renderList(view); }) : null);
       if (!st.listOpen) return head;
-      const hint = guesser ? '㩒你要揀嘅地點'
+      const hint = pub ? `${nameOf(me())} 㩒要揀嘅地點` : guesser ? '㩒你要揀嘅地點'
         : table ? '灰色 = 舊局用過，唔會再係答案。'
           : '㩒一下劃走（淨係呢部機見到；一部機輪流玩，換人會清返）。灰色 = 舊局用過，唔會再係答案。';
       const groups = [];
@@ -593,8 +643,9 @@ export function mount(root, api) {
         h('p', { class: 'sf-cat-name', text: g.cat }),
         h('div', { class: 'sf-locs' }, g.items.map((loc) => h('button', {
           type: 'button',
-          class: ['sf-loc', st.strikes.has(loc.i) && !guesser ? 'struck' : '', loc.used ? 'used' : '', picked.includes(loc.i) ? 'picked' : '', st.pick === loc.i ? 'is-sel' : ''].filter(Boolean).join(' '),
+          class: ['sf-loc', st.strikes.has(loc.i) && !guesser ? 'struck' : '', loc.used ? 'used' : '', picked.includes(loc.i) ? 'picked' : '', !pub && st.pick === loc.i ? 'is-sel' : ''].filter(Boolean).join(' '),
           onclick: () => {
+            if (pub) { pickPublic(loc.i); return; }
             if (guesser) { st.pick = loc.i; api.sfx('tap'); renderGuess(view); renderList(view); return; }
             if (table) return;
             if (st.strikes.has(loc.i)) st.strikes.delete(loc.i); else st.strikes.add(loc.i);
@@ -727,6 +778,7 @@ export function mount(root, api) {
       st.mode = 'main';
       st.sel = [];
       st.pick = null;
+      st.pending = null;
       st.sentReady = false;
       st.listOpen = v.phase === 'reveal' || atTable();   // the table screen keeps the public list open (#1)
       st.holder = null;

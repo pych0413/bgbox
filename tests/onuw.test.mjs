@@ -3416,7 +3416,9 @@ test('onuw: one phone (passPhone, U6) — every role step gets the same +8 s han
   for (const k of ['doppelganger', 'werewolf', 'minion', 'mason', 'seer', 'robber', 'troublemaker', 'drunk', 'insomniac']) {
     assert.equal(game.windowMs(one, k), game.windowMs({ ...one, passPhone: false }, k) + 8000, k);
   }
-  for (const k of ['begin', 'dawn']) assert.equal(game.windowMs(one, k), game.windowMs({ ...one, passPhone: false }, k), k);
+  assert.equal(game.windowMs(one, 'begin'), game.windowMs({ ...one, passPhone: false }, 'begin'));
+  // re-run R3: dawn gets its own fixed gap, so the last holder can put the phone back before anybody opens their eyes
+  assert.equal(game.windowMs(one, 'dawn'), game.windowMs({ ...one, passPhone: false }, 'dawn') + game.PASS_DAWN_PAD_MS);
   // played: the werewolf step with both wolves in the centre lasts exactly as long as with a wolf awake
   const lens = [];
   for (const [deal, centre] of [
@@ -3433,7 +3435,7 @@ test('onuw: one phone (passPhone, U6) — every role step gets the same +8 s han
   assert.equal(lens[0], 12000 + 8000);
 });
 
-test('onuw: one phone — the begin line asks for a hand on the table, the vote line says the phone goes round; a lapsed ability reads 「時間到或者唔想用」', () => {
+test('onuw: one phone — the begin line asks for a hand on the table, the vote line says the phone goes round; a lapsed ability says it ran out of time (re-run R6)', () => {
   const one = scenario({ p1: 'werewolf', p2: 'robber', p3: 'villager', p4: 'seer' }, ['werewolf', 'troublemaker', 'villager'], { passPhone: true });
   toNight(one);
   assert.ok(one.cue().text.includes('部手機放喺枱中間') && one.cue().text.includes('一隻手放喺枱上'));
@@ -3446,9 +3448,144 @@ test('onuw: one phone — the begin line asks for a hand on the table, the vote 
   playNight(own);
   for (const p of st(own).order) own.act(p, { type: 'ready-vote', on: true });
   assert.ok(!own.cue().text.includes('打開手機'), 'device-neutral');
-  // the robber let its window run out: its own note does not claim it chose to do nothing
+  // the robber let its window run out without touching the big button: on one phone the engine knows (re-run R6)
   const idle = notes(one, 'p2').find((n) => n.k === 'idle');
-  assert.equal(S.noteLine(idle, (p) => p), '強盜：今晚你冇確定（時間到或者唔想用）。');
+  assert.equal(idle.why, 'time');
+  assert.equal(S.noteLine(idle, (p) => p), '強盜：時間到，你今晚冇換到牌。');
+  // phones of their own: every seat taps the big button as a decoy, so the note stays honest about both
+  const ownIdle = notes(own, 'p2').find((n) => n.k === 'idle');
+  assert.equal(ownIdle.why, undefined);
+  assert.equal(S.noteLine(ownIdle, (p) => p), '強盜：今晚你冇確定（時間到或者唔想用）。');
+});
+
+test('onuw: one phone — a seat that tapped the big button without acting chose not to, one that never tapped ran out of time; the public log says which (re-run R6)', () => {
+  const nm = (p) => p;
+  const one = scenario({ p1: 'werewolf', p2: 'robber', p3: 'troublemaker', p4: 'seer' }, ['villager', 'villager', 'villager'], { passPhone: true });
+  playNight(one, {
+    werewolf: (s) => s.act('p1', { type: 'ack' }),          // the lone wolf: done, no peek
+    seer: (s) => s.act('p4', { type: 'ack' }),              // declined
+    robber: () => {},                                       // never tapped
+    troublemaker: (s) => s.act('p3', { type: 'ack' }),      // declined
+  });
+  const why = (p) => notes(one, p).find((n) => n.k === 'idle')?.why;
+  assert.deepEqual([why('p1'), why('p2'), why('p3'), why('p4')], ['declined', 'time', 'declined', 'declined']);
+  assert.equal(S.noteLine(noteOf(one, 'p4', 'idle'), nm), '預言家：你揀咗唔睇牌。');
+  assert.equal(S.noteLine(noteOf(one, 'p3', 'idle'), nm), '搗蛋鬼：你揀咗唔對調。');
+  assert.equal(S.noteLine(noteOf(one, 'p1', 'idle'), nm), '狼人：你揀咗唔睇中間嘅牌。');
+  const log = st(one).log.filter((e) => e.k === 'idle').map((e) => S.logLine(e, nm));
+  assert.ok(log.some((l) => l.includes('p2') && l.endsWith('時間到，冇用能力')), log.join('\n'));
+  assert.ok(log.some((l) => l.includes('p4') && l.endsWith('揀咗唔用能力')), log.join('\n'));
+  // a Doppelgänger's copy acks for her, but is not a choice to skip the copied ability: only a tap on the big button is
+  const dop = (tap) => {
+    const sim = scenario({ p1: 'doppelganger', p2: 'seer', p3: 'werewolf', p4: 'villager' }, ['villager', 'werewolf', 'robber'], { passPhone: true });
+    openStep(sim, 'doppelganger');
+    assert.ok(sim.act('p1', { type: 'copy', target: 'p2' }));
+    if (tap) sim.act('p1', { type: 'ack' });
+    sim.advance();
+    return notes(sim, 'p1').find((n) => n.k === 'idle');
+  };
+  assert.equal(dop(false).why, 'time');
+  assert.equal(dop(true).why, 'declined');
+  assert.equal(S.noteLine(dop(true), nm), '化身幽靈 → 預言家：你揀咗唔睇牌。');
+  // phones of their own: the same taps say nothing either way
+  const own = scenario({ p1: 'werewolf', p2: 'robber', p3: 'troublemaker', p4: 'seer' }, ['villager', 'villager', 'villager']);
+  playNight(own, { seer: (s) => s.act('p4', { type: 'ack' }) });
+  assert.equal(noteOf(own, 'p4', 'idle').why, undefined);
+  assert.ok(st(own).log.filter((e) => e.k === 'idle').every((e) => S.logLine(e, nm).endsWith('冇用能力') && !S.logLine(e, nm).includes('揀咗')));
+});
+
+test('onuw: one phone — dawn keeps everybody\'s eyes closed for a fixed gap while the last holder puts the phone back; 「睜開眼」 is the day\'s first line (re-run R3)', () => {
+  const deal = { p1: 'werewolf', p2: 'robber', p3: 'troublemaker', p4: 'seer' };
+  const one = scenario(deal, ['villager', 'werewolf', 'villager'], { passPhone: true });
+  toStep(one, 'dawn');
+  const c = one.cue();
+  assert.equal(c.text, '搗蛋鬼，請閉眼。大家繼續閉住眼，部手機擺返枱中間。');
+  assert.ok(!c.text.includes('睜開眼'), 'nobody opens their eyes yet');
+  for (const p of [null, ...ids(4)]) assert.equal(engine.view(st(one), p).night, true, `${p}: still night`);
+  assert.equal(one.focus(), null, 'nobody is called: the phone goes to the middle under the dim');
+  assert.equal(engine.view(st(one), 'p1').hint, S.HINT.night.dawnHold);
+  one.cueDone();
+  assert.equal(st(one).deadline - one.now, game.windowMs(st(one).cfg, 'dawn'), 'the same gap every game');
+  assert.equal(engine.view(st(one), 'p3').night, true);
+  one.advance();
+  assert.equal(st(one).phase, 'day');
+  assert.equal(engine.view(st(one), null).night, false, 'now the shell shows 天光喇');
+  const day = one.cue();
+  assert.ok(day && day.text.startsWith('天光喇，大家睜開眼！') && day.text.includes('分鐘'), day?.text);
+  assert.ok(one.host({ type: ACT.CUE_DONE, id: day.id }));
+  assert.equal(one.cue(), null, 'said once');
+  assert.equal(st(one).phase, 'day');
+  // 下一步 during that line skips the line first, then the day
+  const b = scenario(deal, ['villager', 'werewolf', 'villager'], { passPhone: true });
+  playNight(b);
+  assert.ok(b.cue());
+  b.host({ type: ACT.NEXT });
+  assert.equal(st(b).phase, 'day');
+  assert.equal(b.cue(), null);
+  b.host({ type: ACT.NEXT });
+  assert.equal(st(b).phase, 'vote');
+  assert.ok(b.cue().text.startsWith('夠鐘投票！'), 'the host started it before the clock ran out');
+  // phones of their own: unchanged — dawn opens eyes at once, no day line
+  const own = scenario(deal, ['villager', 'werewolf', 'villager']);
+  toStep(own, 'dawn');
+  assert.ok(own.cue().text.includes('天光喇，大家睜開眼'));
+  assert.equal(engine.view(st(own), 'p1').night, false);
+  own.cueDone();
+  own.advance();
+  assert.equal(st(own).phase, 'day');
+  assert.equal(own.cue(), null);
+});
+
+test('onuw: one phone — every role line calls the role LAST, so its eyes open as the gate comes up, not onto 「擺返中間」 (re-run R4); phones of their own keep the old lines', () => {
+  const cues = (sim) => {
+    toNight(sim);
+    const out = {};
+    while (st(sim).phase === 'night') { out[stepK(sim)] = sim.cue().text; sim.cueDone(); sim.advance(); }
+    return out;
+  };
+  const everything = { doppelganger: 1, werewolf: 2, minion: 1, mason: 2, seer: 1, robber: 1, troublemaker: 1, drunk: 1, insomniac: 1, hunter: 1, tanner: 1 };
+  const cfg = { ...config.defaults(10), ...customConfig(everything) };
+  const one = cues(new Sim(game, { n: 10, seed: 1, config: { ...cfg, passPhone: true } }));
+  const own = cues(new Sim(game, { n: 10, seed: 1, config: cfg }));
+  assert.equal(Object.keys(one).length, 13, 'every step');
+  for (const k of ['doppelganger', 'werewolf', 'minion', 'mason', 'seer', 'robber', 'troublemaker', 'drunk', 'insomniac']) {
+    assert.ok(one[k].endsWith('請睜開眼，拎起部手機。'), `${k}: ${one[k]}`);
+    assert.equal((one[k].match(/睜開眼/g) ?? []).length, 1, `${k}: called once`);
+  }
+  for (const k of ['doppelganger-minion', 'doppelganger-insomniac']) assert.ok(one[k].endsWith('化身幽靈請睜開眼，拎起部手機。'), one[k]);
+  assert.ok(one.werewolf.startsWith('化身幽靈，請閉眼。'), 'the last role still closes first');
+  assert.ok(one.seer.startsWith('守夜人，請閉眼。預言家：'));
+  // the same text whether or not the role is dealt (the centre sounds the same)
+  const again = cues(new Sim(game, { n: 10, seed: 7, config: { ...cfg, passPhone: true } }));
+  assert.deepEqual(one, again);
+  // phones of their own: the role is called first, as before
+  assert.ok(own.seer.includes('預言家，請睜開眼。你可以睇一個人嘅牌'));
+  assert.ok(!own.seer.includes('拎起部手機'));
+});
+
+test('onuw: one phone — the one-by-one vote asks for quiet until the last ballot (cue, gate label, ballot screen) (re-run R5)', async () => {
+  const one = scenario({ p1: 'werewolf', p2: 'robber', p3: 'villager', p4: 'seer' }, ['werewolf', 'troublemaker', 'villager'], { passPhone: true });
+  playNight(one);
+  one.now = st(one).deadline;
+  one.advance();
+  assert.equal(st(one).phase, 'vote');
+  assert.equal(one.cue().text, '時間到！部手機逐個交，揀你覺得係狼人嘅人。全部投完先好講，最後一齊公開。');
+  assert.deepEqual(one.focus(), { pids: ids(4), label: S.FOCUS_LABEL.votePass });
+  assert.ok(S.FOCUS_LABEL.votePass.includes('投完先好講') && S.FOCUS_LABEL.votePass.length <= 24);
+  const own = dayGame();
+  for (const p of ids(4)) own.act(p, { type: 'ready-vote', on: true });
+  assert.equal(own.cue().text, S.cueVote({}), 'phones of their own: the 3-2-1 line');
+  assert.equal(own.focus().label, S.FOCUS_LABEL.vote);
+  await withFakeDom(async (ui) => {
+    const seat = mountShared(ui, one, 'p2', []);
+    showTwice(seat, one.view('p2'), sharedCtx(one));
+    assert.ok(visibleText(seat.root).includes(S.T.voteLeadShared));
+    seat.handle.destroy();
+    const solo = mountAll(ui, own, []);
+    pushViews(own, solo);
+    assert.ok(visibleText(solo.p2.root).includes(S.T.voteLead));
+    for (const x of Object.values(solo)) x.handle.destroy();
+  });
 });
 
 test('onuw: `seats` (§7.1) — one whole-table tap readies everybody for the vote; the host\'s seat among them may add the minute; co-wakers ack together', () => {
@@ -3562,17 +3699,24 @@ function mountShared(ui, sim, pid, sent, { whole = true, host = 'p1' } = {}) {
   const all = sim.players.map((p) => p.id);
   const actAs = (as, a) => { const changed = sim.act(as, a); sent.push({ pid: as, a, changed }); return changed; };
   const armed = new Set();
+  const tableCalls = [];
   const api = {
     me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
-    shared: true, wholeTable: whole, atTable: pid === null, mySeats: all,
+    shared: true, wholeTable: whole, atTable: pid === null, mySeats: all, clockNow: () => sim.now,
     send: (a) => (pid ? actAs(pid, a) : false),
     sendAs: (as, a) => actAs(as, a),
-    tableSend: (a) => actAs(all.find((x) => x !== host) ?? all[0], { ...a, seats: all, table: true }),
+    // re-run #2 (DESIGN §7.1): `confirm` on a whole-table phone — the first tap arms (sends nothing), the next sends
+    tableSend: (a, opts = {}) => {
+      tableCalls.push({ a, opts });
+      if (opts.confirm && whole && !armed.has(`table:${a.type}`)) { armed.add(`table:${a.type}`); return false; }
+      armed.delete(`table:${a.type}`);
+      return actAs(all.find((x) => x !== host) ?? all[0], { ...a, seats: all, table: true });
+    },
     // arm-then-confirm: the first tap on a button arms it, the second does it
     confirm: (text, node) => { if (armed.has(node)) { armed.delete(node); return true; } armed.add(node); return false; },
     ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
   };
-  return { pid, root, api, handle: ui.mount(root, api) };
+  return { pid, root, api, tableCalls, handle: ui.mount(root, api) };
 }
 
 function sharedCtx(sim, co = [], extra = {}) {
@@ -3695,10 +3839,22 @@ test('onuw ui: by day on a whole-table phone — 夠鐘投票 and 全枱同意�
     assert.equal(ring.disabled, true);
     assert.ok(!visibleText(table.root).includes('想投票：'), 'no n / m waiting list');
     showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true }));
+    // re-run R2: it ends the talk for everybody — the first tap arms 「再㩒一次：全枱都夠鐘？仲有 2:11」, the second votes
+    assert.ok(!ready.textContent.includes('一下就得'));
+    sim.now = st(sim).deadline - 131_000;
+    click(ready);
+    assert.equal(sent.length, 0, 'the first tap sends nothing');
+    assert.equal(st(sim).phase, 'day');
+    assert.equal(table.tableCalls.at(-1).opts.confirm, '全枱都夠鐘？仲有 2:11');
+    assert.equal(table.tableCalls.at(-1).opts.node, ready);
     click(ready);
     assert.deepEqual(sent.at(-1).a, { type: 'ready-vote', on: true, seats: ids(4), table: true });
     assert.equal(st(sim).phase, 'vote');
+    assert.ok(sim.cue().text.startsWith('夠鐘投票！'), 'an early vote is not called 「時間到」');
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true }));
+    assert.ok(visibleText(table.root).includes(S.T.tableVoteBodyShared));
     table.handle.destroy();
+    assert.equal(S.T.tableReadyConfirm(0), '全枱都夠鐘？即刻投票');
     // the circle: two taps, then nobody dies
     const c = make();
     const s2 = [];

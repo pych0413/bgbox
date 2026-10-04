@@ -17,7 +17,8 @@
 //  - D4 absent seats: setAbsent(pid, away) sends `@absent` / `@present` as HOST and keeps `absent` (the
 //    seats the engine accepted it for) — blocking() is false for them, so the room never waits on one.
 //  - U10 (DESIGN §7.1): holdClock(on) holds the deadline while a one-phone gate is unanswered; released, the
-//    deadline moves on by the time held (pause-safe). Never snapshotted.
+//    deadline moves on by the time held (pause-safe); heldSince() = the host time the held clock stands at.
+//    Never snapshotted.
 //  - A restored session starts PAUSED, with the clock stopped at the moment it
 //    was last saved, so the host taps 繼續 (which also satisfies iOS' gesture
 //    rule for speech) and every timer carries on from where it was.
@@ -354,6 +355,18 @@ export class Session {
     this.#schedule();
     this.onChange();
     return true;
+  }
+
+  /**
+   * U10 (§7.1) — the host time the held clock stands at, or null when it is not held. While held, a countdown to the
+   * game deadline shows `deadline - heldSince()` (frozen); on release the deadline moves on by the time held, so the
+   * count carries on from that same value. Pause-safe (a pause banks the held time), and a deadline the engine set
+   * during the hold counts from the moment it was set.
+   */
+  heldSince() {
+    if (!this.held) return null;
+    const at = this.heldAt ?? (this.paused ? this.pausedAt : this.nowFn());
+    return at - this.heldMs;
   }
 
   stop() {

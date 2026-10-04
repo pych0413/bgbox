@@ -63,6 +63,11 @@ export function mount(root, api) {
   const shared = () => api.shared === true;
   const wholeTable = () => api.wholeTable === true;
   const isMe = (pid, me) => pid != null && pid === me && !shared();
+  // U10 (re-run N1): the game clock — api.now(), except while the room holds it at a one-phone gate: then the time it
+  // stands at, so every countdown here stands still with it (the shared Timer does this by itself)
+  const clockNow = () => (typeof api.clockNow === 'function' ? api.clockNow() : api.now());
+  const heldNow = (c) => !!c?.clockHeld && !c?.paused;
+  const HELD = '⏸ 等緊接手';
   const seatName = (pid, me) => nameOf(pid) + (isMe(pid, me) ? '（你）' : '');
 
   let view = null;
@@ -162,14 +167,14 @@ export function mount(root, api) {
     let p = props;
     let frozen = null;
     let wasPaused = false;
-    const left = () => (p.deadline == null ? null : Math.max(0, (p.deadline - p.now()) / 1000));
+    const left = () => (p.deadline == null ? null : Math.max(0, (p.deadline - clockNow()) / 1000));
     const paint = () => {
       const rem = p.paused && frozen != null ? frozen : left();
       clock.textContent = rem == null ? '–:––' : `${Math.floor(Math.ceil(rem) / 60)}:${String(Math.ceil(rem) % 60).padStart(2, '0')}`;
       const last = Math.min(...(p.warnAt?.length ? p.warnAt : [10]));
       root.classList.toggle('urgent', rem != null && rem > 0 && rem <= last);
       root.classList.toggle('done', rem === 0);
-      root.classList.toggle('paused', !!p.paused);
+      root.classList.toggle('paused', !!p.paused || !!p.heldNow);
     };
     const iv = setInterval(paint, 250);
     const api2 = {
@@ -203,7 +208,9 @@ export function mount(root, api) {
         const k = `${v.phase}|${v.sub}|${label}|${v.guessMode}`;
         if (t && k !== key) { t.destroy(); t = null; }
         key = k;
-        const props = { deadline: v.deadline, now: api.now, label, paused: !!c?.paused, warnAt };
+        // the held clock (U10): the shared Timer freezes by itself; say so explicitly too, at the room's time
+        const held = heldNow(c) ? (Number.isFinite(c.clockHeldAt) ? c.clockHeldAt : true) : undefined;
+        const props = { deadline: v.deadline, now: api.now, label, paused: !!c?.paused, warnAt, held, heldNow: heldNow(c) };
         if (!t) { t = v.guessMode === 'typed' ? silentClock(props) : Timer(props); host.append(t.el); } else t.update(props);
       },
       destroy() { t?.destroy(); host.remove(); },
@@ -218,12 +225,16 @@ export function mount(root, api) {
     const el = h('div', { class: 'dg-count' });
     let deadline = null;
     let paused = false;
+    let held = false;
     let iv = null;
     let fmt = label;
     const paint = () => {
       if (deadline == null || paused) return;
-      const n = Math.max(0, Math.ceil((deadline - api.now()) / 1000));
-      el.textContent = typeof fmt === 'function' ? fmt(n) : `${fmt} · ${n} 秒`;
+      // while the room holds the clock at a gate (U10) the count stands still at the held time, and says why
+      const n = Math.max(0, Math.ceil((deadline - clockNow()) / 1000));
+      const base = typeof fmt === 'function' ? fmt(n) : `${fmt} · ${n} 秒`;
+      el.textContent = held ? `${base} · ${HELD}` : base;
+      el.classList.toggle('held', held);
     };
     return {
       el,
@@ -231,6 +242,7 @@ export function mount(root, api) {
         if (nextLabel) fmt = nextLabel;
         deadline = v.deadline ?? null;
         paused = !!c?.paused;
+        held = heldNow(c);
         el.hidden = deadline == null;
         paint();
         if (!iv) iv = setInterval(paint, 500);

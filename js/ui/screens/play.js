@@ -25,11 +25,14 @@
 
 import { el, toast, lockScroll, unlockScroll, sig } from '../dom.js?v=1';
 import { sfx } from '../../core/sfx.js?v=1';
+import { wantsNightAmbient } from '../../core/engine-kit.js?v=1';
 import { components, NarratorBar, PassGate, RulesSheet, RecentFold, closeAllCovers } from '../components/index.js?v=1';
+import { setClockHold } from '../components/Timer.js?v=1';
 import { HintSheet } from '../hints.js?v=1';
 import { textSize, setTextSize } from '../settings.js?v=1';
 import {
   turnBadge, skipNeedsConfirm, SKIP_CONFIRM, nightChrome, focusSig, walkOrder, gateSubtitle, narrationChoices,
+  openStepChip, tableConfirmText,
 } from '../logic.js?v=1';
 
 const NO_VOID = '呢個遊戲唔支援呢輪作廢';
@@ -75,7 +78,9 @@ export function mountPlay(sh) {
   let lastSig;                // the focus signature last evaluated (undefined = not yet: the phone starts in the middle)
   let handedKey = null;       // `${sig}|${seat}` the phone was last handed over for (a gate tapped, a switch landed)
   let picked = null;          // { seat, sig }: chosen by hand (換人 / handTo / askWho) — holds while the signature stays (#9)
-  let lastHolder = null;      // the last seat on screen: walks go clockwise from here (#17)
+  let lastHolder = null;      // the last seat on screen BY DAY: walks go clockwise from here (#17)
+  let heldInSecret = false;   // the seat on screen got the phone in a secret step (night / eyes closed): it is never
+                              // a walk's start or a lastHolder — the first gate after a quiet day would name it (re-run N1/R1)
   let wasNight = false;       // the last evaluation was at night (night → day = dawn → the 天光 card)
   let tableCard = false;      // the public 擺返中間 / 天光 card is up: whole-table taps locked, focus gates wait (U5)
   let anonStep = null;        // the eyes-closed prompt whose gate was opened (one gate per step, real or decoy)
@@ -85,6 +90,8 @@ export function mountPlay(sh) {
   let walk = null;            // { stepKey, set, total }: the named step this phone is walking round (#33 progress)
   const deferred = new Set(); // #18 「⏭ 跳過佢」: seats sent to the end of this walk
   let holding = false;        // U10: this screen asked the room to hold the clock
+  let heldSeenAt = null;      // U10: when this screen first saw the room clock held (a core without clockHeldAt)
+  let lastTap = null;         // { node, at }: the last button tapped on the play screen (tableSend's confirm arms it)
   let ambientOn = false;      // U8: the night's noise bed is on
   let menuEl = null;
   let menuKind = null;
@@ -123,6 +130,11 @@ export function mountPlay(sh) {
 
   const root = el('section', { class: 'screen play', 'data-screen': 'play' },
     top, seatRow, timerStrip, banners, gameRoot, recent.el, narratorBar.el);
+  // the button a whole-table tap came from, so tableSend's confirm can arm it (re-run #2)
+  root.addEventListener('click', (e) => {
+    const node = e.target?.closest?.('button, [role="button"]') ?? null;
+    lastTap = node ? { node, at: app.clock.now() } : null;
+  }, true);
 
   // ---------- derived state ----------
   /** This phone's playing seats, in seat order. */
@@ -170,8 +182,37 @@ export function mountPlay(sh) {
       views: Object.fromEntries(co.map((pid) => [pid, st.views?.[pid] ?? null])),
       asked: asked && seat && asked.pid === seat ? { ...asked } : null,
       clockHeld: !!st.room.clockHeld,
+      clockHeldAt: heldAtOf(st),
     };
   };
+
+  /**
+   * U10: the host time the held game clock stands at (room view `clockHeldAt`), or null while it runs. Every
+   * `Timer` freezes there by itself (setClockHold); a game's own countdown uses `api.clockNow()`.
+   */
+  function heldAtOf(st) {
+    if (!st.room?.clockHeld) { heldSeenAt = null; return null; }
+    if (Number.isFinite(st.room.clockHeldAt)) return st.room.clockHeldAt;
+    return heldSeenAt ?? (heldSeenAt = app.clock.now());
+  }
+
+  /** A public one-person step (`focus.open`) for the seat on screen of a shared phone: it still lies face up in the middle. */
+  const openStepNow = (st) => {
+    const seat = playsAs(st);
+    return isShared(st) && !!seat && !secretNow(st) && st.focus?.open === true && !!st.focus.pids?.includes(seat);
+  };
+  /** The seat on screen may ink now (engine.canInk via the core; view.canDraw / view.draw.canDraw for a core without it). */
+  const inkingNow = (st, view) => {
+    const seat = playsAs(st);
+    return !!seat && !!(st.canInk?.includes(seat) || view?.canDraw || view?.draw?.canDraw);
+  };
+
+  /** 💡 on a shared phone in the middle, or on a public (`open`) step for the seat on screen: never a role cover. */
+  function hintOpts(st) {
+    const seat = playsAs(st);
+    const pub = isShared(st) && (!seat || (st.focus?.open === true && !!st.focus.pids?.includes(seat)));
+    return { hideOwn: pub };
+  }
 
   // ---------- 💡 hints (never opened by the app itself) ----------
   async function openHints() {
@@ -179,7 +220,7 @@ export function mountPlay(sh) {
     if (!id) return;
     let game;
     try { game = sh.cached(id) ?? await sh.loadGame(id); } catch (err) { console.error(err); toast('載入唔到提示'); return; }
-    hints.open(game, viewFor(app.state));
+    hints.open(game, viewFor(app.state), hintOpts(app.state));
   }
 
   /** engine.canVoid through the core: { ok, message } | null (the game does not say). */
@@ -300,12 +341,21 @@ export function mountPlay(sh) {
   /**
    * §7.1 #5 — one tap for the whole table: `{ ...action, seats: [every playing seat here], table: true }`, sent as
    * this phone's first present seat. Locked while the table card is up (U5); nothing on a single-seat phone.
+   * `opts.confirm` (re-run #2, U5): a tap that ENDS a discussion or STARTS a vote takes a second tap on a whole-table
+   * phone — the first arms the button (`opts.node`, else the button just tapped) to read 「再㩒一次：<confirm>」 and
+   * sends nothing (false); the same button again within ~3 s sends. A phone that holds only part of the table sends
+   * at once (the other phones still have their say).
    */
-  function tableSend(action) {
+  function tableSend(action, { confirm = '', node = null } = {}) {
     const st = app.state;
     const seats = playingSeats(st);
     if (seats.length < 2 || !action || typeof action !== 'object') return false;
     if (tableCard) { toast('先㩒「大家睇緊」張卡', 1800); return false; }
+    const ask = tableConfirmText(confirm);
+    if (ask && isWholeTable(st)) {
+      const btn = node ?? (lastTap && app.clock.now() - lastTap.at < 1000 ? lastTap.node : null);
+      if (!sh.confirm(ask, btn, { key: `table:${action.type ?? ''}` })) return false;
+    }
     const away = new Set(st.room?.absent ?? []);
     const from = seats.find((pid) => !away.has(pid)) ?? seats[0];
     return sendFor(from, { ...action, seats, table: true });
@@ -332,7 +382,7 @@ export function mountPlay(sh) {
       get mySeats() { return playingSeats(app.state); },
       handTo: (pid, opts) => handTo(pid, opts),
       toTable: (opts) => toTable(opts),
-      tableSend: (action) => tableSend(action),
+      tableSend: (action, opts) => tableSend(action, opts),
       /** U2: act as one of the co-wakers on this combined screen (or as the seat on screen). */
       sendAs(pid, action) {
         if (!seat || (pid !== seat && !(coWakers.includes(seat) && coWakers.includes(pid)))) return false;
@@ -343,6 +393,8 @@ export function mountPlay(sh) {
       confirm: (text, node = null, opts = {}) => sh.confirm(text, node, opts),
       ink(payload) { if (seat) return app.ink(seat, payload); },
       now: () => app.clock.now(),
+      /** U10: the game clock — api.now(), except while the room holds it at a gate: then the time it stands at. */
+      clockNow: () => heldAtOf(app.state) ?? app.clock.now(),
       sfx,
       toast,
       components: isShared(app.state) ? sharedComponents : components,
@@ -397,6 +449,18 @@ export function mountPlay(sh) {
     button: `▶ ${name} 開始`,
   });
 
+  /**
+   * Remember the seat leaving the screen as the walks' start (#17) — never one that got the phone in a secret step
+   * (re-run N1/R1: after a quiet day the first gate would name the last night holder).
+   */
+  function noteHolder(seat) { if (seat && !heldInSecret) lastHolder = seat; }
+
+  /** The phone goes to the middle (no seat on screen). */
+  function putDown() { app.setActiveSeat(null); heldInSecret = false; }
+
+  /** Where a walk starts from right now: the seat on screen, unless it got the phone in a secret step. */
+  const walkFrom = (st) => (heldInSecret ? null : currentSeat(st));
+
   /** Seats a NAMED focus calls on this phone, in the order the phone goes round (#17, #18). */
   function walkHere(st, holder) {
     const f = st.focus;
@@ -418,7 +482,8 @@ export function mountPlay(sh) {
   /** The phone lands on `pid` after its gate was tapped. */
   function land(pid, { key = null, pick = false, ask = null } = {}) {
     app.setActiveSeat(pid);
-    lastHolder = pid;
+    heldInSecret = secretNow(app.state);
+    if (!heldInSecret) lastHolder = pid;
     handedKey = key ?? `${lastSig ?? ''}|${pid}`;
     picked = pick ? { seat: pid, sig: lastSig ?? '' } : null;
     asked = ask;
@@ -439,7 +504,7 @@ export function mountPlay(sh) {
     hints.close();          // the phone is changing hands: the 💡 sheet belonged to the last holder
     closeAllCovers();
     const holder = currentSeat(st);
-    if (holder !== null && isShared(st)) { lastHolder = holder; app.setActiveSeat(null); }
+    if (holder !== null && isShared(st)) { noteHolder(holder); putDown(); }
     const extra = escape && st.isHost && target ? escapeRow(target) : null;
     const shown = PassGate.show({ ...text, kind: kind === 'decoy' ? 'anon' : kind, extra });
     syncHold();
@@ -464,7 +529,7 @@ export function mountPlay(sh) {
 
   /** `${sig}|${first seat of the walk}` for the state as it is now (is a focus gate still wanted?). */
   function currentKey(st) {
-    const here = walkHere(st, currentSeat(st));
+    const here = walkHere(st, walkFrom(st));
     return here.length ? `${focusSig(st.focus)}|${here[0]}` : null;
   }
 
@@ -485,14 +550,16 @@ export function mountPlay(sh) {
   function goTable(kind) {
     const st = app.state;
     const holder = currentSeat(st);
-    if (holder) lastHolder = holder;
+    noteHolder(holder);
     picked = null;
     asked = null;
     if (holder !== null) {
       hints.close();
       closeAllCovers();
-      app.setActiveSeat(null);
+      putDown();
     }
+    // dawn: the day's first walk starts from seat order, never from whoever held the phone at night (re-run N1/R1)
+    if (kind === 'dawn') lastHolder = null;
     if (kind !== 'silent') openTableCard(kind);
   }
 
@@ -559,6 +626,8 @@ export function mountPlay(sh) {
   /** Forget everything one-phone (a single-seat phone, or the game is not on). */
   function resetShared() {
     lastSig = undefined;
+    lastHolder = null;
+    heldInSecret = false;
     handedKey = null;
     picked = null;
     asked = null;
@@ -594,12 +663,14 @@ export function mountPlay(sh) {
     const changed = !first && sig !== lastSig;
     lastSig = sig;
     let holder = currentSeat(st);
-    if (first && holder !== null) { lastHolder = holder; app.setActiveSeat(null); holder = null; }
-    if (holder) lastHolder = holder;
+    // the game's first look: the phone starts in the middle, and the deal walks from seat order
+    if (first && holder !== null) { putDown(); holder = null; }
+    if (first) lastHolder = null;
 
     // dawn (U4): the night is over — the phone goes to the middle behind the public 天光 card
     const dawn = wasNight && !night && !anon;
     wasNight = night;
+    if (!dawn && !secretNow(st)) noteHolder(holder);
     if (dawn) {
       anonStep = null;
       coWakers = [];
@@ -616,7 +687,7 @@ export function mountPlay(sh) {
     anonStep = null;
     if (coWakers.length) coWakers = [];
 
-    const here = walkHere(st, holder);
+    const here = walkHere(st, heldInSecret ? null : holder);
     if (!here.length) {
       walk = null;
       deferred.clear();
@@ -677,8 +748,8 @@ export function mountPlay(sh) {
     if (left.length !== coWakers.length) coWakers = left;
     if (gateUp) return;
     if (holder !== null && !here.includes(holder)) {
-      if (left.length) { app.setActiveSeat(left[0]); lastHolder = left[0]; }
-      else app.setActiveSeat(null);       // nobody here is called any more: back to the middle, under the dim
+      if (left.length) { app.setActiveSeat(left[0]); heldInSecret = true; }   // a co-waker: never a walk's start
+      else putDown();       // nobody here is called any more: back to the middle, under the dim
     }
     pushUpdate();
   }
@@ -790,10 +861,11 @@ export function mountPlay(sh) {
     }
     const here = new Set(walkHere(st, seat));
     const shared = isShared(st);
+    const open = openStepNow(st);    // re-run #6: the phone lies face up in the middle for X's public step
     return [
-      el('h3', { text: shared && !seat ? '邊個要睇自己？' : '換邊個睇' }),
+      el('h3', { text: shared && (!seat || open) ? '邊個要睇自己？' : '換邊個睇' }),
       el('div', { class: 'sheet-list' },
-        shared && seat ? menuBtnRow('📱 擺返枱中間', () => toTable(), 'seat-home-row') : null,
+        shared && seat && !open ? menuBtnRow('📱 擺返枱中間', () => toTable(), 'seat-home-row') : null,
         playingSeats(st).map((pid) => {
           const p = st.room.players.find((x) => x.id === pid);
           return el('button', {
@@ -1035,9 +1107,14 @@ export function mountPlay(sh) {
 
     const anon = !!st.focus?.anonymous;
     const atTable = shared && !seat;
-    seatChip.classList.toggle('at-table', atTable);
+    // re-run #6: a public one-person step (focus.open) is on the phone in the middle for everyone — the chip says so,
+    // never 「而家睇：X」, and there is no 📱 擺返中間. While X draws on it the chip cannot be tapped (a 換人 would take
+    // the canvas off the table's screen); otherwise anyone may still pick their own name to peek (9upper's role
+    // reminder during the 諗樣's explain, #9) — a hand-picked seat, as from the table chip
+    const openStep = openStepNow(st);
+    seatChip.classList.toggle('at-table', atTable || openStep);
     root.classList.toggle('at-table', atTable);
-    homeBtn.hidden = !(shared && seat && !secretNow(st));
+    homeBtn.hidden = !(shared && seat && !secretNow(st) && !openStep);
     if (shared && secretNow(st)) {
       // #9 / #1: at night and in a secret step the chip names nobody and cannot be tapped (the dawn chip is the
       // same whoever acted last)
@@ -1046,6 +1123,14 @@ export function mountPlay(sh) {
       seatChip.replaceChildren(
         el('span', { class: 'dot', style: { '--seat': 'var(--text-dim)' } }),
         el('span', { class: 'who', text: anon ? '🤫 而家係秘密步驟' : '🌙 夜晚 · 部手機擺喺中間' }));
+    } else if (openStep) {
+      const drawing = inkingNow(st, view);
+      seatChip.hidden = false;
+      seatChip.disabled = drawing;
+      seatChip.replaceChildren(...[
+        el('span', { class: 'who', text: openStepChip(nameOf(st, seat), st.focus.label) }),
+        drawing ? null : el('span', { class: 'swap', text: '揀名 ⇄' }),
+      ].filter(Boolean));
     } else if (atTable) {
       seatChip.hidden = false;
       seatChip.disabled = false;
@@ -1092,6 +1177,7 @@ export function mountPlay(sh) {
       // §7.1: who holds a shared phone is settled FIRST, so nothing is ever painted for a seat that just lost it
       // (setActiveSeat changes app.state at once; the screen below reads the result)
       evaluateFocusGate(st);
+      setClockHold(room.phase === 'playing' ? heldAtOf(st) : null);   // U10: every Timer stands still while held
       const seat = playsAs(st);
       const meta = sh.gameMeta(room.gameId) ?? {};
       const view = viewFor(st);
@@ -1116,10 +1202,11 @@ export function mountPlay(sh) {
         mode, shared, table: shared && !seat,
       });
       sh.sound.night(night.on, { level: night.level, words: night.words });
-      // U8: the night's neutral noise bed on the phone in the middle, when the game asks for it (never in 靜音; a
-      // multi-phone table is left as it was)
+      // U8: the night's neutral noise bed on the phone in the middle, when the game asks for it — meta.nightAmbient,
+      // which defaults to an eyes-closed night (engine-kit.wantsNightAmbient) — never in 靜音; a multi-phone table is
+      // left as it was
       const bed = isWholeTable(st) && room.phase === 'playing' && isNight && mode !== 'silent'
-        && (meta.nightAmbient === true || st.table?.ambient === true);
+        && (wantsNightAmbient(meta) || st.table?.ambient === true);
       if (bed !== ambientOn) { ambientOn = bed; sh.sound.ambient?.(bed); }
 
       const key = `${room.gameId}|${seat ?? 'table'}`;
@@ -1140,10 +1227,11 @@ export function mountPlay(sh) {
       }
 
       refreshMenu();
-      if (hints.isOpen()) hints.update(sh.cached(room.gameId), viewFor(st));
+      if (hints.isOpen()) hints.update(sh.cached(room.gameId), viewFor(st), hintOpts(st));
     },
     destroy() {
       if (holding) { try { app.hostCtl?.holdClock?.(false); } catch (err) { console.error(err); } holding = false; }
+      setClockHold(null);
       if (ambientOn) { ambientOn = false; sh.sound.ambient?.(false); }
       if (who) { const req = who; who = null; req.resolve(null); }
       uiToken++;

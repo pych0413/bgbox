@@ -46,7 +46,8 @@
 //
 // One phone in the middle (DESIGN §7.1): filterFocus passes a named focus's `open` / `step` / `label` / `ordered` /
 // `hold` to the devices it names (never on an anonymous step); act() keeps `table` a boolean beside the filtered
-// `seats` (a whole-table tap); holdClock() holds the game clock at a one-phone gate (room view `clockHeld`); an
+// `seats` (a whole-table tap); holdClock() holds the game clock at a one-phone gate (room view `clockHeld`, and
+// `clockHeldAt` = the host time the held clock stands at); an
 // eyes-closed night has no 靜音 on a whole-table phone (U1: silentBarred / onePhoneNarration, applied by createApp);
 // and nobody there is listed as idle (#18).
 // ============================================================
@@ -367,6 +368,8 @@ export class Room {
       absent: this.session && this.phase === 'playing' ? this.session.absent.slice() : [],
       // U10 (§7.1): the game clock is held while a one-phone gate is unanswered
       clockHeld: !!(this.session && this.phase === 'playing' && this.session.held),
+      // …and the host time it stands at: while held, a countdown shows `deadline - clockHeldAt` (frozen, §7.1 U10)
+      clockHeldAt: this.session && this.phase === 'playing' && this.session.held ? this.session.heldSince() : null,
     };
   }
 

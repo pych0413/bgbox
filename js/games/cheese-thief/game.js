@@ -33,6 +33,8 @@ export const meta = {
   minutes: [10, 15],
   narration: 'required',     // the night is read out; 讀稿 and 靜音 work with one phone each
   eyesClosed: true,          // U1: a whole-table phone offers no 靜音 (everybody's eyes are shut, nobody would hear the hour)
+  nightAmbient: true,        // U8 (re-run N3): a whole-table phone plays a neutral noise bed all night, so an occupied hour
+                             // (the phone picked up, the gate tapped, the phone put down) sounds like an empty one
   paperMode: false,
   singleDevice: 'full',      // phone in the middle, picked up by whoever is called
   banks: [],
@@ -107,7 +109,7 @@ export const rules = {
     },
     {
       title: '一部手機玩',
-      body: '部手機擺喺枱中間，用🔊語音（或者搵個唔玩嘅人📜讀稿）。搖骰同投票：手機會叫名，逐個拎起嚟做，做完交俾下一位。\n夜晚全部人閉眼：聽到報你個點鐘先拎起部手機，㩒交接卡，睇完㩒大掣，部手機擺返中間再閉眼。每個鐘自動加 10 秒交機時間，冇人醒嘅鐘都一樣長。\n同一個鐘有幾個人醒：一齊望同一個畫面；自己嘅嘢（例如粒骰）㩒自己個名先睇，其他人望開。貪瞓鼠淨係得自己醒：㩒一個名就即刻偷睇（4 人局唔得）。\n天光部手機擺返中間：計時同「大家夠鐘投票」喺枱面，一下就得。想再睇自己張牌、粒骰或者 📓，㩒上面揀名，睇完擺返中間。',
+      body: '部手機擺喺枱中間，用🔊語音（或者搵個唔玩嘅人📜讀稿）。搖骰同投票：手機會叫名，逐個拎起嚟做，做完交俾下一位。\n夜晚全部人閉眼：聽到報你個點鐘先拎起部手機，㩒交接卡，睇完㩒大掣，部手機擺返中間再閉眼。每個鐘自動加 10 秒交機時間，冇人醒嘅鐘都一樣長。\n同一個鐘有幾個人醒：一齊望同一個畫面；自己嘅嘢（例如粒骰）㩒自己個名先睇，其他人望開。貪瞓鼠淨係得自己醒：㩒一個名就即刻偷睇（4 人局唔得）。\n天光部手機擺返中間：計時同「大家夠鐘投票」喺枱面；夠鐘投票要㩒兩下先算，免得有人手快。想再睇自己張牌、粒骰或者 📓，㩒上面揀名，睇完擺返中間。',
     },
   ],
 };
@@ -1016,6 +1018,12 @@ function buildView(s, pid) {
     : TITLES[s.phase];
   v.title = title;
   v.subtitle = subtitle;
+  // the 💡 sheet lists only the roles of THIS game (re-run #5, DESIGN 15.2) — public: the deal, the head-count's
+  // followers and the 背鍋鼠 option are all known to the table
+  const fm = s.cfg.fallMouse ? 1 : 0;
+  v.rolesInPlay = [{ id: 'thief', count: 1 }, { id: 'sleepyhead', count: s.n - 1 - fm }];
+  if (s.n >= 5) v.rolesInPlay.push('follower');
+  if (fm) v.rolesInPlay.push({ id: FMOUSE, count: 1 });
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
 
   // public: the seats the host marked 💤 (the counts below are of the seats the table still waits for)

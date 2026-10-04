@@ -56,8 +56,8 @@ host's ruling), show the leaderboard after every cycle, remember every word and 
 `config.defaults(n, prev, env)` keeps the previous choices (sanitised), falls back to FFA when n < 4, clamps `teams`
 to ⌊n/2⌋, and with `env.singleDevice` (the Room passes it: one device holds every seat) **never keeps typed** — a
 pass-the-phone table always starts on 🗣️ 講出口; the drawing mode and the rest are kept. It also sets the hidden
-`passPhone` (no field) to `env.singleDevice`: the play cue then says 「部手機擺喺中間」 and the drawing step's gate label
-reads 「擺喺枱中間畫」 (§4). `cycles`, `teamRounds` and
+`passPhone` (no field) to `env.singleDevice`: the play cue then says the phone lies flat in the middle and the clock starts
+when the drawer taps 開始, the drawing step's gate label reads 「擺喺枱中間畫」, and the reveal lasts 10 s (§4). `cycles`, `teamRounds` and
 `roundSeconds` are `0 = auto`, so they follow the head-count and the mode by themselves. Summary lines (lobby):
 「6 人：每人畫 2 次，共 12 輪 · 約 22 分鐘」 · 「📱 手機畫板」 · 「🗣️ 講出口」 · 「每輪 80 秒」 · optional 「冇提示」,
 「難詞多分」, 「類別：…」, 「難度：…」.
@@ -191,7 +191,8 @@ ruling the old hint line does not come back).
 
 ### 3.3 reveal — the answer
 
-**7 s for every turn**, the last one too (research 2.5). Everyone sees: 「🎉 阿B、阿C 估中」 (or 「⏰ 時間到，冇人估中」 /
+**7 s for every turn**, the last one too (research 2.5); **10 s on one phone** (`passPhone`, re-run N4: the 「擺返中間」
+card sits in front of it first, and it is the table's only big look at the answer and the picture). Everyone sees: 「🎉 阿B、阿C 估中」 (or 「⏰ 時間到，冇人估中」 /
 「🏳️ 阿明 放棄咗呢條」 / 「🚩 犯規成立，🔵 藍隊 今輪冇分」 / 「⚠️ 作廢…」), the word big with its tier, category and aliases,
 the points line 「阿B +34 · 阿C +34 · 阿明（畫）+28」 (teams: the team and its point), the final picture (canvas mode;
 paper mode 「睇返張紙上嘅畫，對吓答案。」), 「自動下一輪 · 6 秒」 (last turn: 「睇成績 · 6 秒」), 「下一個畫：阿B」 (bold, with
@@ -248,11 +249,15 @@ After the word is dealt nothing needs the network.
 2. `play`: `focus = { pids: [drawer], open: true, label: '擺喺枱中間畫' (passPhone; else '畫畫'), hold: true }` — a public
    one-person step (#4): the shell's light card 「輪到 阿明 · 擺喺枱中間畫 · 大家一齊睇 · 阿明 㩒一下開始」 over the table
    view, and the drawing clock does not start until the drawer taps it. The drawer's screen says 「部手機平放喺枱中間畫 ·
-   唔准講嘢、寫字同數字。」 (paper: 「部手機擺喺中間計時，用紙筆畫 · …」), the play cue 「開始！部手機擺喺中間。限時 80 秒。…」
-   (#16). It keeps showing the clock, **the mask and the hints**, the full-width canvas and, under it, the name chips. The
+   唔准講嘢、寫字同數字。」 (paper: 「部手機擺喺中間計時，用紙筆畫 · …」). The play cue is said as the word is picked,
+   while the card still holds the clock, so it does not say 「開始！」 (re-run N2): 「阿明揀好喇。部手機平放喺枱中間，阿明㩒
+   「開始」就計時，限時 80 秒。答案有 N 隻字。估到就大聲講出嚟。」 (#16). It keeps showing the clock, **the mask and the hints**, the full-width canvas and, under it, the name chips. The
    word stays behind the hold cover 「拎起部機，㩒住睇個詞」 (#22), so the table cannot read it off the screen (tested: no
    non-drawer seat view and no table view on that device ever holds an unrevealed character or an unpicked offer, and the
    drawer's screen never shows the word unless held). In paper mode the phone is just the clock.
+   **A held clock looks held** (U10, re-run N1): while the room holds the clock, the shared Timer stands still by itself
+   (and is told `held` = `ctx.clockHeldAt`), and this game's own countdowns (「最遲 N 秒後開始畫」 on the screen behind the
+   pick gate, 「自動下一輪 · N 秒」) count to `deadline - api.clockNow()`, so they stand still too and add 「 · ⏸ 等緊接手」.
 3. `reveal` / `standings`: `focus` is `null` → the phone goes to the middle behind the shell's table card and shows the
    table view: the answer, the points and 「下一個畫：阿B（之後：阿C → 阿D）」 (D8 — the waiting screen's queue is never on
    show on one phone). The table screen's play prompt is the shout line, never 「旁觀緊」.
@@ -450,7 +455,8 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 - One phone: typed never survives `defaults(…, { singleDevice })` for any n or prev, `validate` refuses it with a message
   that says why (#21), no typed preset, the hidden `passPhone` follows the env; paper / canvas presets; the topics field's
   `bank` + `matches` (#11). Focus carries `label` / `hold` (choose) and `open` / `label` / `hold` (play); the play cue says
-  「部手機擺喺中間」 only with `passPhone`; 最快反應 only for a solve in the first half of its turn (D10). UI on a shared phone:
+  「X揀好喇。部手機平放喺枱中間，X㩒「開始」就計時」 (no 「開始！」) only with `passPhone` (re-run N2); the countdowns stand still
+  at `ctx.clockHeldAt` with 「⏸ 等緊接手」 while the clock is held (re-run N1); `rolesInPlay` (this turn's parts) in every view; 最快反應 only for a solve in the first half of its turn (D10). UI on a shared phone:
   the 平放喺枱中間 lines (whole-table), the slim hold cover instead of the tap chip, the full-width canvas with the chips under
   it, the shout line on the table screen, 「之後：…」 on the reveal, never 「（你）」; phones of their own unchanged. Through the
   REAL play screen (paper, one whole-table phone): the private 揀詞 gate with the clock held (`holdClock(true)` → `false` on
@@ -476,7 +482,7 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
   play / reveal (host only, re-queued once, word released), `@next`.
 - Stalls: `blocking` only for the drawer while choosing (and the host during a ruling) — also through `Session.blocking`;
   `autoAct`; the drawer cannot skip the reveal.
-- Reveal 7 s for every turn including the last; the 5 s standings after each full cycle only (FFA and teams, never after the
+- Reveal 7 s for every turn including the last (10 s on one phone, re-run N4); the 5 s standings after each full cycle only (FFA and teams, never after the
   last turn or for re-queued turns), its view, hint, cue and `@next`; the queue preview.
 - Typed: feed visibility per seat, input rules, rate limits (700 ms / burst lock / 60), all-solved ends the turn, clock-out,
   drawer override (play and the reveal window, never double counted), strictness, **no cues at all**.

@@ -142,7 +142,7 @@ export function mount(root, api) {
 
   function paintTheme(v) {
     const goal = (v.round.redo ? '重新派過 · ' : '')
-      + (noScore(v) ? `共 ${v.round.total} 輪 · 唔計分` : v.mode.endMode === 'target' ? `先到 ${v.mode.target} 分` : `共 ${v.round.total} 輪`);
+      + (noScore(v) ? `共 ${v.round.total} 局 · 唔計分` : v.mode.endMode === 'target' ? `先到 ${v.mode.target} 分` : `共 ${v.round.total} 局`);
     if (v.theme == null) {
       themeText.textContent = '？？？';
       themeSub.textContent = `${v.me === v.qm ? '你出題中' : `等 ${nameOf(v.qm)} 出題`} · ${goal}`;
@@ -909,22 +909,43 @@ export function mount(root, api) {
         no.classList.toggle('armed', armed === false);
       };
       // #29 one phone, spoken guess: the phone lies in the middle for the caught fake to study the picture (the step is
-      // public), so the picture comes first and the answer stays covered until the fake has said the guess
-      const middle = peek && shared();
+      // public), so the picture comes first and the answer stays covered until the fake has said the guess. A whole-table
+      // phone (re-run N1): the fake spoke with the phone and handed it here behind a private card — the answer first
+      const handed = peek && shared() && !!view.guess?.handOver;
+      const middle = peek && shared() && !handed;
       const judgeNote = h('p', { class: 'fk-note' });
       if (middle && board) { wrapEl.append(board.el); boardPlaced = true; }
       wrapEl.append(judgeNote,
         cover ? h('div', { class: 'fk-judge-peek' }, cover.el) : face, saidEl,
         h('div', { class: 'fk-judgebtns' }, yes, no));
       paint = (v) => {
-        judgeNote.textContent = middle
-          ? `部手機擺喺中間俾 ${nameOf(v.fake)} 睇幅畫（答案冚住）；佢講完，判斷嗰個先㩒住睇答案，再㩒啱或者錯。`
-          : peek ? '你係判斷嗰個人：㩒住張卡睇答案，唔好俾人望到。' : '你係判斷嗰個人：只有你睇到答案。';
+        judgeNote.textContent = handed
+          ? `${nameOf(v.guess.judge)}：${nameOf(v.fake)} 講咗佢估嘅題目。㩒住睇答案，再㩒啱或者錯。`
+          : middle
+            ? `部手機擺喺中間俾 ${nameOf(v.fake)} 睇幅畫（答案冚住）；佢講完，判斷嗰個先㩒住睇答案，再㩒啱或者錯。`
+            : peek ? '你係判斷嗰個人：㩒住張卡睇答案，唔好俾人望到。' : '你係判斷嗰個人：只有你睇到答案。';
         wordEl.textContent = v.guess?.word ?? '';
-        saidEl.textContent = v.guess?.text ? `${nameOf(v.fake)} 估：「${v.guess.text}」（同答案唔完全一樣，你決定算唔算）` : `等 ${nameOf(v.fake)} 大聲講出佢估嘅題目，再㩒啱或者錯。`;
+        saidEl.textContent = v.guess?.text ? `${nameOf(v.fake)} 估：「${v.guess.text}」（同答案唔完全一樣，你決定算唔算）`
+          : handed ? '' : `等 ${nameOf(v.fake)} 大聲講出佢估嘅題目，再㩒啱或者錯。`;
+        saidEl.hidden = !saidEl.textContent;
         paintBtns();
       };
       parts.destroy.push(() => cancel(handle));
+    } else if (sub === 'fake' && shared() && view.guess?.handOver) {
+      // re-run N1, one phone: the card named the caught fake, who studies the picture, says the guess out loud, then
+      // hands the phone to the judge by name (a private card: the answer is on the judge's screen). The table reads
+      // this screen — names, never 「你」
+      const w = waitBlock('🎤', '');
+      const handBtn = h('button', { class: 'btn btn-primary btn-lg fk-handjudge', type: 'button' });
+      handBtn.addEventListener('click', () => {
+        api.sfx('tap');
+        if (api.handTo?.(view.guess.judge, { why: '判斷估啱唔啱' }) === false) api.toast?.('交唔到，㩒上面個名揀返判斷嗰個');
+      });
+      wrapEl.append(w.el, handBtn);
+      paint = (v) => {
+        w.set(`${nameOf(v.fake)} 望住幅畫，大聲講出佢估嘅題目（得一次機會）。講完就交俾 ${nameOf(v.guess.judge)} 判斷。`);
+        handBtn.textContent = `講完 · 交俾 ${nameOf(v.guess.judge)} 判斷`;
+      };
     } else {
       const w = waitBlock(sub === 'fake' ? '🎤' : '🤔', '');
       wrapEl.append(w.el);
@@ -1125,7 +1146,7 @@ export function mount(root, api) {
         const left = readers.filter((p) => !seen.who.includes(p) && !away(p));
         seenTxt.hidden = wholeTable();
         seenTxt.textContent = `睇完 ${seen.who.length} / ${seen.total}${left.length ? ` · 等緊：${left.map(nameOf).join('、')}` : ''}`
-          + ` · ${v.last ? '齊人就睇總結' : '齊人就開下一輪'}`;
+          + ` · ${v.last ? '齊人就睇總結' : '齊人就開下一局'}`;
       },
       destroy() { cancel(replayTimer); board?.destroy(); },
     };

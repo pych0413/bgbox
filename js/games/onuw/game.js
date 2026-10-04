@@ -353,6 +353,7 @@ const stepOf = (s) => s.steps[s.ix] ?? null;
 const cueIdOf = (s) => `on${s.gid}:night:${s.ix}:${stepOf(s).k}`;
 const dealCueId = (s) => `on${s.gid}:deal`;
 const voteCueId = (s) => `on${s.gid}:vote`;
+const dawnCueId = (s) => `on${s.gid}:dawn`;
 const revealCueId = (s) => `on${s.gid}:reveal`;
 const discussMs = (s) => (s.cfg.discussSec || discussFor(s.n)) * 1000;
 const cueMinMs = (text) => Math.max(2500, Math.min(9000, text.length * 150));
@@ -366,6 +367,13 @@ const REVEAL_MS = 180_000;      // the reveal waits for the host, but never fore
  */
 export const PASS_PAD_MS = 8000;
 
+/**
+ * One phone, dawn (re-run R3): the last role's holder needs time to put the phone back before anybody opens their eyes.
+ * The dawn step stays eyes-closed (`view.night`) and is this much longer — a fixed gap, the same whoever acted last —
+ * and 「天光喇，大家睜開眼」 is the day's first line, spoken once it is over.
+ */
+export const PASS_DAWN_PAD_MS = 3000;
+
 /** Fixed per step kind (and pace) — never depends on who is awake or what they did. */
 const BASE_MS = {
   begin: 3000, doppelganger: 20000, 'doppelganger-minion': 8000, werewolf: 12000, minion: 8000, mason: 8000,
@@ -374,7 +382,7 @@ const BASE_MS = {
 };
 export function windowMs(cfg, k) {
   const base = k === 'werewolf' && !cfg.loneWolf ? 10000 : BASE_MS[k];
-  const pad = cfg.passPhone && k !== 'begin' && k !== 'dawn' ? PASS_PAD_MS : 0;
+  const pad = !cfg.passPhone || k === 'begin' ? 0 : k === 'dawn' ? PASS_DAWN_PAD_MS : PASS_PAD_MS;
   return Math.round(base * PACES[cfg.pace]) + pad;
 }
 
@@ -513,11 +521,12 @@ function setup({ players, config: cfg, rng, now, hostPid, carry }) {
     dop: dp ? { pid: dp, target: null, copied: null, acted: false } : null,   // PRIVATE
     steps: buildSteps(counts), ix: 0, stage: 'cue',
     acked: [], did: {},
+    passed: [],                                         // this window: seats that tapped the big button with an ability unused
     notes: Object.fromEntries(order.map((p) => [p, []])),   // PRIVATE per seat
     log: [], moves: [],                                 // PRIVATE until reveal
     ready: {}, dealCue: true,
-    dayReady: {}, extends: 0,
-    votes: {}, ringAgree: {}, voteCue: true,
+    dayReady: {}, extends: 0, dawnCue: false,
+    votes: {}, ringAgree: {}, voteCue: true, voteEarly: false,
     revealDone: {}, revealCue: true,
     absent: {},                                         // public: seats the host marked 💤 (D4)
     final: null, report: null, outcome: null, voided: false,
@@ -539,6 +548,7 @@ function startNight(s) {
   s.ix = 0;
   s.stage = 'cue';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.deadline = null;
   s.timerLabel = null;
@@ -551,6 +561,7 @@ function enterWindow(s, ctx) {
   const st = stepOf(s);
   s.stage = 'window';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.deadline = nowOf(ctx) + windowMs(s.cfg, st.k);
   s.timerLabel = null;
@@ -666,7 +677,11 @@ function nightAct(s, pid, a, ctx) {
   if (!st) return s;
   if (a.type === 'ack') {
     // `seats`: a shared phone's combined screen acks for every co-waker on it at once (U2)
-    for (const p of seatsOf(s, pid, a)) if (!s.acked.includes(p)) s.acked.push(p);
+    for (const p of seatsOf(s, pid, a)) {
+      if (!s.acked.includes(p)) s.acked.push(p);
+      // re-run R6: a tap on the big button while an ability is still unused (not the ack a copy or an action implies)
+      if (s.stage === 'window' && abilityOf(s, p) && !(s.passed ??= []).includes(p)) s.passed.push(p);
+    }
     return s;
   }
   if (s.stage !== 'window') return s;
@@ -714,7 +729,11 @@ function resolveWindow(s, ctx) {
     if (ab.mandatory) {
       doDrunk(s, p, rint(rng, 3), ab, true);
     } else {
-      record(s, p, ab.ab === 'loneWolf' ? 'werewolf' : ab.ab, ab.via, { k: 'idle', ability: ab.ab });
+      // One phone (re-run R6): the big button there means "done, the phone goes back", so a seat that tapped it without
+      // acting chose not to, and one that never tapped ran out of time. On phones of their own every seat taps the big
+      // button as a decoy, so the engine cannot tell — the note stays honest about both.
+      const why = s.cfg.passPhone ? ((s.passed ?? []).includes(p) ? 'declined' : 'time') : undefined;
+      record(s, p, ab.ab === 'loneWolf' ? 'werewolf' : ab.ab, ab.via, why ? { k: 'idle', ability: ab.ab, why } : { k: 'idle', ability: ab.ab });
     }
   }
 }
@@ -726,6 +745,7 @@ function finishWindow(s, ctx) {
   s.stage = 'cue';
   s.deadline = null;
   s.acked = [];
+  s.passed = [];
   s.did = {};
   return s;
 }
@@ -736,14 +756,19 @@ function startDay(s, ctx) {
   s.phase = 'day';
   s.stage = 'day';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.dayReady = {};
+  // one phone (re-run R3): the dawn step only closed the last role's eyes; 「天光喇，大家睜開眼」 opens the day
+  s.dawnCue = !!s.cfg.passPhone;
   s.deadline = nowOf(ctx) + discussMs(s);
   s.timerLabel = S.T.dayTimer;
   return s;
 }
 
 function startVote(s, ctx = {}) {
+  // one phone (re-run R2): a vote the table started before the clock ran out is not called 「時間到」
+  s.voteEarly = !!s.cfg.passPhone && s.phase === 'day' && s.deadline != null && nowOf(ctx) < s.deadline;
   s.phase = 'vote';
   s.deadline = null;
   s.timerLabel = null;
@@ -1007,6 +1032,7 @@ function hostAct(s, a, ctx) {
     case ACT.CUE_DONE:
       if (s.phase === 'deal' && a.id === dealCueId(s)) s.dealCue = false;
       else if (s.phase === 'night' && s.stage === 'cue' && a.id === cueIdOf(s)) return enterWindow(s, ctx);
+      else if (s.phase === 'day' && a.id === dawnCueId(s)) s.dawnCue = false;
       else if (s.phase === 'vote' && a.id === voteCueId(s)) s.voteCue = false;
       else if (s.phase === 'reveal' && a.id === revealCueId(s)) s.revealCue = false;
       return s;
@@ -1017,7 +1043,9 @@ function hostAct(s, a, ctx) {
           for (const p of s.order) s.ready[p] = true;
           return startNight(s, ctx);
         case 'night': return s.stage === 'cue' ? enterWindow(s, ctx) : finishWindow(s, ctx);
-        case 'day': return startVote(s, ctx);
+        case 'day':
+          if (s.dawnCue) { s.dawnCue = false; return s; }
+          return startVote(s, ctx);
         case 'reveal':
           if (s.revealCue) { s.revealCue = false; return s; }
           return toOver(s);
@@ -1071,9 +1099,14 @@ function cue(s) {
       const text = S.cueNight(st.k, prev, { loneWolf: s.cfg.loneWolf, discussSec: s.cfg.discussSec || discussFor(s.n), passPhone: !!s.cfg.passPhone });
       return { id: cueIdOf(s), text, minMs: cueMinMs(text) };
     }
+    case 'day': {
+      if (!s.dawnCue) return null;
+      const text = S.cueDayOpen({ discussSec: s.cfg.discussSec || discussFor(s.n) });
+      return { id: dawnCueId(s), text, minMs: cueMinMs(text) };
+    }
     case 'vote': {
       if (!s.voteCue) return null;
-      const text = S.cueVote({ passPhone: !!s.cfg.passPhone });
+      const text = S.cueVote({ passPhone: !!s.cfg.passPhone, early: !!s.voteEarly });
       return { id: voteCueId(s), text, minMs: cueMinMs(text) };
     }
     case 'reveal': {
@@ -1105,7 +1138,8 @@ function focus(s) {
       const open = s.order.filter((p) => s.votes[p] === undefined && !isAbsent(s, p));
       const undecided = s.cfg.passPhone ? open : open.filter((p) => !s.ringAgree[p]);
       const pids = undecided.length ? undecided : open;
-      return pids.length ? { pids, label: S.FOCUS_LABEL.vote } : null;
+      // one phone (re-run R5): the gate also asks for quiet until the last ballot is in
+      return pids.length ? { pids, label: s.cfg.passPhone ? S.FOCUS_LABEL.votePass : S.FOCUS_LABEL.vote } : null;
     }
     default: return null;
   }
@@ -1262,7 +1296,8 @@ function buildView(s, pid) {
       break;
     case 'night': {
       const st = stepOf(s);
-      v.night = st.k !== 'dawn';
+      // one phone (re-run R3): the dawn step keeps everybody's eyes closed while the last holder puts the phone back
+      v.night = st.k !== 'dawn' || !!s.cfg.passPhone;
       // windowMs: this step kind's fixed length (public: the same whoever is awake) — the bar is drawn from it (#7)
       v.step = { ix: s.ix, total: s.steps.length, k: st.k, stage: s.stage, windowMs: windowMs(s.cfg, st.k) };
       // no night counter in any view (playtest #18): an action counts as an ack, so 「n / m」 would tell a seatless
@@ -1318,7 +1353,7 @@ function hintFor(s, seat, v) {
     case 'night': {
       const k = stepOf(s).k;
       if (k === 'begin') return H.night.begin;
-      if (k === 'dawn') return H.night.dawn;
+      if (k === 'dawn') return s.cfg.passPhone ? H.night.dawnHold : H.night.dawn;
       if (s.stage !== 'window') return H.night.cue;
       const nf = v.my.night;
       if (!nf.awake) return H.night.sleep;

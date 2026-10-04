@@ -6,7 +6,7 @@
 import { test, assert, Sim, paths, ACT, HOST, makePlayers } from './lib.mjs';
 import * as game from '../js/games/cheese-thief/game.js';
 import { judge } from '../js/games/cheese-thief/game.js';
-import { mulberry32, clone } from '../js/core/engine-kit.js';
+import { mulberry32, clone, wantsNightAmbient } from '../js/core/engine-kit.js';
 import { narrate, VOTE_CALL, HINT } from '../js/games/cheese-thief/script.js';
 
 const { engine, config, meta } = game;
@@ -101,6 +101,12 @@ test('cheese-thief: meta and config are well-formed', () => {
   assert.deepEqual(meta.players, [4, 8]);
   assert.equal(meta.narration, 'required');
   assert.ok(['full', 'partial', 'none'].includes(meta.singleDevice));
+  // U8 (re-run N3): the night's noise bed on a whole-table phone, so an occupied hour sounds like an empty one
+  assert.equal(meta.nightAmbient, true);
+  assert.equal(wantsNightAmbient(meta), true);
+  // the one-phone rules no longer promise a one-tap 夠鐘投票 (re-run N2)
+  const onePhone = game.rules.sections.find((x) => x.title.includes('一部手機'));
+  assert.ok(onePhone && onePhone.body.includes('㩒兩下') && !onePhone.body.includes('一下就得'), onePhone?.body);
   assert.ok(Array.isArray(meta.banks));
   assert.ok(game.rules.quick.length >= 3);
   assert.deepEqual(game.rules.roles.map((r) => r.id).sort(), ['fall-mouse', 'follower', 'sleepyhead', 'thief']);
@@ -1025,7 +1031,12 @@ function leakCheck(sim) {
 
     // role ids: only my own card (or, after the vote, what the table has seen)
     const rolePaths = paths(v, (x) => x === 'thief' || x === 'sleepyhead' || x === 'fall-mouse');
+    // the 💡 roles in play (re-run #5) are public: the same in every view, from the head-count and the config only
+    const fm = s.cfg.fallMouse ? 1 : 0;
+    assert.deepEqual(v.rolesInPlay, [{ id: 'thief', count: 1 }, { id: 'sleepyhead', count: s.n - 1 - fm },
+      ...(s.n >= 5 ? ['follower'] : []), ...(fm ? [{ id: 'fall-mouse', count: 1 }] : [])]);
     for (const p of rolePaths) {
+      if (p.startsWith('$.rolesInPlay.')) continue;
       if (open && (p.startsWith('$.revealed.') || p.startsWith('$.debrief.'))) continue;
       assert.equal(p, '$.my.role', `role id at ${p} in ${A}'s view`);
     }
@@ -1160,7 +1171,8 @@ test('cheese-thief: the table view (spectator/host screen) never carries a secre
     for (const k of ['my', 'notes', 'candidates', 'myVote', 'revealed', 'debrief']) assert.ok(!(k in t), k);
     assert.deepEqual(Object.keys(t.step).sort(), ['h', 'ix', 'k', 'stage', 'total', 'windowMs']);
     assert.ok(!('acks' in t), 'no tap counter on the table: on a shared phone only the awake seats tap');
-    assert.ok(paths(t, (x) => x === 'thief' || x === 'sleepyhead').length === 0);
+    assert.ok(paths(t, (x) => x === 'thief' || x === 'sleepyhead').filter((p) => !p.startsWith('$.rolesInPlay.')).length === 0);
+    assert.deepEqual(t.rolesInPlay, [{ id: 'thief', count: 1 }, { id: 'sleepyhead', count: 5 }, 'follower'], 'the 💡 roles in play: public');
     if (sim.state.stage === 'cue') sim.cueDone(); else sim.advance();
   }
 });
@@ -2436,15 +2448,23 @@ function mountShared(ui, sim, pid, sent, { whole = true } = {}) {
   const root = new FEl('div');
   const all = sim.players.map((p) => p.id);
   const act = (as, a) => { const changed = sim.act(as, a); sent.push({ pid: as, a, changed }); return changed; };
+  // re-run #2 (DESIGN §7.1): `confirm` on a whole-table phone — the first tap arms (sends nothing, false), the next sends
+  const tableCalls = [];
+  const armed = new Set();
   const api = {
     me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
     shared: true, wholeTable: whole, atTable: pid === null, mySeats: all,
     send: (a) => (pid ? act(pid, a) : false),
     sendAs: (as, a) => act(as, a),
-    tableSend: (a) => act(all[0], { ...a, seats: all, table: true }),
-    ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+    tableSend: (a, opts = {}) => {
+      tableCalls.push({ a, opts });
+      if (opts.confirm && whole && !armed.has(a.type)) { armed.add(a.type); return false; }
+      armed.delete(a.type);
+      return act(all[0], { ...a, seats: all, table: true });
+    },
+    ink() {}, now: () => sim.now, clockNow: () => sim.now, sfx() {}, toast() {}, components: comps,
   };
-  return { pid, root, api, cards, handle: ui.mount(root, api) };
+  return { pid, root, api, cards, tableCalls, handle: ui.mount(root, api) };
 }
 
 /** The ctx a shared phone gives the seat it mounted for: `coWakers` / `views` while several of its seats are awake. */
@@ -2642,15 +2662,39 @@ test('cheese-thief ui: by day on a whole-table phone — 夠鐘投票 is one tap
     showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true, tableLocked: true }));
     const btn = byCls(table.root, 'ct-table-ready')[0];
     assert.equal(btn.hidden, false);
-    assert.equal(btn.textContent, '🗳️ 大家夠鐘投票 ✓（一下就得）');
+    assert.equal(btn.textContent, ui.TABLE_READY);
+    assert.ok(!btn.textContent.includes('一下就得'));
     assert.equal(btn.disabled, true, 'U5: locked until the 「擺返中間」 card is tapped');
     assert.ok(!visibleText(table.root).includes('想投票：'), 'no n / m waiting list');
     assert.ok(byCls(table.root, 'c-timer').length === 1, 'the clock is on the table screen');
+    // re-run N4: the dawn re-check, once for the whole table (5p), under the clock
+    const rc = byCls(table.root, 'ct-table-recheck')[0];
+    assert.equal(rc.hidden, false);
+    assert.equal(rc.textContent, ui.RECHECK_TABLE);
     showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true, tableLocked: false }));
+    // re-run N2: 夠鐘投票 ends the talk for everybody, so the first tap only arms (naming the time still on the clock)
+    sim.now = sim.state.deadline - 170_000;
+    click(btn);
+    assert.equal(sent.length, 0, 'the first tap sends nothing');
+    assert.equal(sim.state.phase, 'day');
+    assert.equal(table.tableCalls.at(-1).opts.confirm, '全枱傾夠未？仲有 2:50');
+    assert.equal(table.tableCalls.at(-1).opts.node, btn, 'the button itself is armed');
     click(btn);
     assert.deepEqual(sent.at(-1).a, { type: 'day-ready', on: true, seats: ids(5), table: true });
-    assert.equal(sim.state.phase, 'vote', 'one tap is the table\'s decision');
+    assert.equal(sim.state.phase, 'vote', 'the second tap is the table\'s decision');
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true }));
+    assert.equal(byCls(table.root, 'ct-table-recheck')[0].hidden, true, 'not during the vote');
     table.handle.destroy();
+    assert.equal(ui.tableReadyConfirm(0), '全枱傾夠未？');
+    assert.equal(ui.tableReadyConfirm(65_000), '全枱傾夠未？仲有 1:05');
+
+    // 4p never has a follower: no re-check line on the table
+    const four = scenario(4, { thief: 'p1', dice: { p1: [3, 4], p2: [1, 2], p3: [2, 5], p4: [4, 6] } });
+    finishNight(four);
+    const t4 = mountShared(ui, four, null, []);
+    showTwice(t4, four.view(null), sharedCtx(four, [], { atTable: true }));
+    assert.equal(byCls(t4.root, 'ct-table-recheck')[0].hidden, true);
+    t4.handle.destroy();
 
     // a seat picked by hand by day: its own card, dice and 📓 — and where the table button is
     const day = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 1, p3: 2, p4: 4, p5: 5 } });
@@ -3012,4 +3056,18 @@ test('cheese-thief: the table view (the phone in the middle) carries the clock a
   assert.equal(day.night, undefined);
   assert.equal(typeof day.deadline, 'number');
   assert.deepEqual(day.dayReady, { done: 0, total: 5 });
+});
+
+test('cheese-thief (re-run #5): every view and the table name the roles of this game (view.rolesInPlay) — the 💡 sheet lists only those', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js');
+  const five = scenario(5, { thief: 'p2' });
+  for (const pid of [null, 'p1', 'p2']) {
+    const h = hintRoles(five.view(pid), game.rules);
+    assert.equal(h.inPlay, true);
+    assert.deepEqual(h.roles.map((r) => [r.id, r.count]), [['thief', 1], ['sleepyhead', 4], ['follower', null]]);
+  }
+  const four = scenario(4, { thief: 'p1' });
+  assert.deepEqual(hintRoles(four.view(null), game.rules).roles.map((r) => r.id), ['thief', 'sleepyhead'], '4p: no follower');
+  const fm = new Sim(game, { n: 6, seed: 2, config: { ...config.defaults(6), fallMouse: true } });
+  assert.deepEqual(hintRoles(fm.view(null), game.rules).roles.map((r) => [r.id, r.count]), [['thief', 1], ['sleepyhead', 4], ['follower', null], ['fall-mouse', 1]]);
 });

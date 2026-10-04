@@ -221,6 +221,31 @@ export function gateSubtitle({ label = '', done = 0, total = 0 } = {}) {
   return parts.join(' · ');
 }
 
+/**
+ * Re-run #6: the seat chip during a public one-person step (`focus.open`) on a shared phone — the phone lies face up
+ * in the middle, so it never says who "holds" it: 「📱 枱中間 — 阿明 畫緊」. The verb comes from the step's public
+ * `label` (畫 → 畫緊, 講 / 發言 / 遺言 / 解釋 → 講緊, 揀 → 揀緊, 估 → 估緊), else 「輪到 X」.
+ */
+export function openStepChip(name, label = '') {
+  const l = typeof label === 'string' ? label : '';
+  const who = String(name ?? '?');
+  const verb = /畫/.test(l) ? '畫緊' : /講|發言|遺言|解釋|描述/.test(l) ? '講緊' : /揀/.test(l) ? '揀緊' : /估/.test(l) ? '估緊' : '';
+  return verb ? `📱 枱中間 — ${who} ${verb}` : `📱 枱中間 — 輪到 ${who}`;
+}
+
+export const TABLE_CONFIRM = '全枱傾夠未？';
+
+/**
+ * Re-run #2: `api.tableSend(action, { confirm })` — the question the armed button asks. A leading 「再㩒一次：」 is
+ * dropped (the arm adds it), so `'開始投票？'` and `'再㩒一次：開始投票？'` both read 「再㩒一次：開始投票？」. `true` asks
+ * 「全枱傾夠未？」. '' = no confirm.
+ */
+export function tableConfirmText(text) {
+  if (text === true) return TABLE_CONFIRM;
+  if (typeof text !== 'string') return '';
+  return text.trim().replace(/^再㩒一次[:：]\s*/, '').trim();
+}
+
 export const ONE_PHONE_NARRATION = '一部手機：大家要閉眼，所以冇靜音 · 📜 讀稿要搵個唔玩嘅人讀';
 
 /**
@@ -510,6 +535,39 @@ export function hintRoleText(view) {
     return `${what ? `做乜：${what}` : ''}${what && win ? ' ' : ''}${win ? `點贏：${win}` : ''}`.slice(0, 400);
   }
   return '';
+}
+
+/**
+ * The 💡 sheet's role list → `{ roles: [{ ...role, count }], inPlay }` | null (no roles at all).
+ * `view.rolesInPlay` names the roles in THIS game, in the order to list them: ids (`'seer'`; an id given twice
+ * counts twice) or `{ id | role, count | n }` objects (an object with its own `name` / `emoji` / `text` / `team` is a
+ * role the rules do not list, e.g. a custom deck). Onuw's existing `view.roleList` (`{ role, count }`) is read the
+ * same way. Then only those roles are listed (`inPlay: true`, heading 「呢局有咩角色」); ids the rules do not know
+ * are skipped. Without it every role of the game (`inPlay: false`, heading 「呢個遊戲有咩角色」). `count` is a
+ * number when the view gave one (or an id repeated), else null.
+ */
+export function hintRoles(view, rules) {
+  const all = (Array.isArray(rules?.roles) ? rules.roles : []).filter((r) => r && typeof r === 'object' && r.name);
+  const src = Array.isArray(view?.rolesInPlay) ? view.rolesInPlay : Array.isArray(view?.roleList) ? view.roleList : null;
+  if (src) {
+    const out = new Map();
+    for (const x of src.slice(0, 60)) {
+      const obj = x && typeof x === 'object' ? x : null;
+      const id = typeof x === 'string' ? x : typeof obj?.id === 'string' ? obj.id : typeof obj?.role === 'string' ? obj.role : null;
+      if (!id) continue;
+      const given = Number(obj?.count ?? obj?.n);
+      const n = Number.isFinite(given) && given > 0 ? Math.floor(given) : null;
+      const had = out.get(id);
+      if (had) { had.count = (had.count ?? 1) + (n ?? 1); continue; }
+      const known = all.find((r) => r.id === id);
+      const role = known ?? (obj && (obj.name || obj.emoji)
+        ? { id, name: String(obj.name ?? ''), emoji: obj.emoji ?? '❔', team: obj.team, text: String(obj.text ?? obj.desc ?? '') }
+        : null);
+      if (role) out.set(id, { ...role, count: n });
+    }
+    if (out.size) return { roles: [...out.values()], inPlay: true };
+  }
+  return all.length ? { roles: all.map((r) => ({ ...r, count: null })), inPlay: false } : null;
 }
 
 /**

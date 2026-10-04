@@ -301,6 +301,11 @@ function validate(cfg, n) {
   if (c.hostPlays && presetOf(c.preset).needsModerator) {
     warnings.push('呢個玩法要有人做主持叫天黑：建議熄咗「房主一齊玩」，由房主做主持。');
   }
+  // re-run #2 F5: two holders and two different cards — your own card names the other's
+  if (k === 2) {
+    const kinds = c.roles.filter((x) => (x.filler ? r.filler : x.count) > 0).length;
+    if (kinds >= 2) warnings.push('淨係 2 個人攞牌：睇完自己張牌就知對方係咩。');
+  }
   return { ok: true, message: c.hostPlays ? r.message : `${r.message}（主持唔攞牌）`, warnings };
 }
 
@@ -459,7 +464,7 @@ export const rules = {
     },
     {
       title: '一部機玩',
-      body: '冇數據、或者有人部機冇電都得：一部機放喺枱中間，每人輪流拎起。開局之後 app 會逐個叫人接機：睇牌，要搖骰就而家搖、鎖埋，搞掂㩒「✓ 搞掂 · 交俾下一個」。\n最後一個人會交返俾房主：主持嘅掣喺房主嗰個座位。主持開盅或者開角色之後，部機會擺返枱中間俾大家一齊睇。',
+      body: '冇數據、或者有人部機冇電都得：一部機放喺枱中間，每人輪流拎起。開局之後 app 會逐個叫人接機：睇牌，要搖骰就而家搖、鎖埋，搞掂㩒「✓ 搞掂 · 交俾下一個」。\n最後一個人會交返俾房主：主持嘅掣喺房主嗰個座位。主持開盅或者開角色之後，部機會擺返枱中間俾大家一齊睇；要再用主持掣，㩒中間嘅「🎛 主持掣」交返俾房主就得。',
     },
   ],
 };
@@ -871,6 +876,7 @@ export const engine = {
       if (role) carry.roles[id] = role.name;
     }
     // noScore: the app keeps no score here — the shell says 「邊個贏由你哋講」 instead of a winners list
-    return { winners: [], noScore: true, summary: `通用派牌：玩咗 ${state.round} 回合`, lines, carry };
+    // linesTitle (re-run #2 F4): the recap is the last round's cards and dice, not a 「點解會咁」
+    return { winners: [], noScore: true, summary: `通用派牌：玩咗 ${state.round} 回合`, lines, linesTitle: '今局嘅牌同骰', carry };
   },
 };

@@ -2471,7 +2471,10 @@ const ROLE_IDS_ALL = ['werewolf', 'villager', 'seer', 'witch', 'hunter', 'guard'
 function roleLeakFree(view, seat, { spectate = false } = {}) {
   const v = JSON.parse(JSON.stringify(view));
   if (v.over || v.god || v.all) return;
+  // the 💡 roles in play (re-run #2) are the board itself: public, for every seat and the table
+  assert.deepEqual(v.rolesInPlay, v.board);
   delete v.board;
+  delete v.rolesInPlay;
   delete v.my;
   if (seat !== null) assert.equal(v.roleId, view.my?.role, 'roleId is the own card of the seat');
   delete v.roleId;
@@ -4940,4 +4943,206 @@ test('werewolf ui, two seats on one phone in a room of phones: a dead wolf on th
     assert.deepEqual(sim.state.lastNight.deaths, ['p8']);
     h.destroy();
   });
+});
+
+// ---------- one-phone re-run (docs/playtest/single/werewolf-rerun.md) ----------
+
+test('werewolf one phone (re-run #7): U8 — the night noise bed on a whole-table phone', async () => {
+  const { wantsNightAmbient } = await import('../js/core/engine-kit.js');
+  assert.equal(meta.nightAmbient, true);
+  assert.equal(wantsNightAmbient(meta), true);
+});
+
+test('werewolf one phone (re-run #4): every night\'s 天黑 line puts the phone back in the middle and waits as long as night 1\'s; phones of their own keep 「第二晚，天黑請閉眼。」', () => {
+  const one = deal(mkOne(R9));
+  const first = one.cue();
+  assert.equal(first.minMs, S.BEGIN_PASS_MIN_MS);
+  nightKill(one, 'p7');
+  toNight(one);
+  const second = one.cue();
+  assert.equal(cur(one).step, 'begin');
+  assert.ok(second.text.startsWith('第二晚，天黑請閉眼。') && second.text.includes('部手機擺返枱中間'), second.text);
+  assert.ok(second.minMs >= first.minMs, `night 2 waits ${second.minMs} ms, night 1 ${first.minMs} ms`);
+  assert.equal(S.cueBegin(3, { pass: true }).includes('部手機擺返枱中間'), true);
+  const own = deal(mk(R9));
+  nightKill(own, 'p7');
+  toNight(own);
+  assert.equal(own.cue().text, '第二晚，天黑請閉眼。');
+  assert.equal(own.cue().minMs, S.cueMinMs('第二晚，天黑請閉眼。'), 'phones of their own: unchanged');
+});
+
+test('werewolf (re-run #6): the witch\'s 「唔可以自救」 line names the rule this table plays', () => {
+  const W5 = { p1: 'werewolf', p2: 'werewolf', p3: 'seer', p4: 'witch', p5: 'villager', p6: 'villager', p7: 'villager' };
+  for (const [save, want] of [['first', '今局淨係第一晚可以自救。'], ['never', '今局女巫唔可以自救。']]) {
+    const sim = deal(mk(W5, { witchSelfSave: save }));
+    if (save === 'first') {   // night 2: the night-1 self-save is gone
+      night(sim, { wolves: { p1: pk('p5'), p2: pk('p5') } });
+      toNight(sim);
+    }
+    toStep(sim, 'wolves');
+    sim.act('p1', pk('p4'));
+    sim.act('p2', pk('p4'));
+    toStep(sim, 'witch');
+    const info = sim.view('p4').nt.info;
+    assert.ok(info.includes(want), `${save}: ${info.join(' | ')}`);
+    assert.ok(!info.includes('呢個規則你唔可以自救。'));
+  }
+});
+
+test('werewolf one phone (re-run #3c): wolves on ONE screen made one pick — the recap names them as one 「一齊揀」, never each as its author; own phones keep per-wolf picks', () => {
+  const lines = (sim) => sim.state.rec.filter((r) => r.k === 'night').flatMap((r) => S.recapNight(r, (p) => p, (p) => p));
+  const one = deal(mkOne(R9));
+  toStep(one, 'wolves');
+  one.act('p1', { type: 'night', pick: 'p7', lock: true, seats: ['p1', 'p2', 'p3'] });
+  night(one);
+  const w = one.state.rec[0].wolves;
+  assert.deepEqual(w.shared, ['p1', 'p2', 'p3']);
+  const l = lines(one).find((x) => x.includes('🐺'));
+  assert.ok(l.includes('p1、p2、p3（一齊揀）→p7') && l.includes('襲擊 p7'), l);
+  assert.ok(!l.includes('p2→p7') && !l.includes('（一致）'), l);
+  // 空刀 together, from the shared screen
+  const b = deal(mkOne(R9));
+  toStep(b, 'wolves');
+  b.act('p2', { type: 'night', pick: null, lock: true, seats: ['p1', 'p2', 'p3'] });
+  night(b);
+  const bl = lines(b).find((x) => x.includes('🐺'));
+  assert.ok(bl.includes('（一齊揀）→空刀') && bl.endsWith('空刀'), bl);
+  // phones of their own: each wolf's own pick, as before
+  const own = deal(mk(R9));
+  night(own, { wolves: wolvesPick('p7', ['p1', 'p2', 'p3']) });
+  assert.equal(own.state.rec[0].wolves.shared, undefined);
+  const ol = lines(own).find((x) => x.includes('🐺'));
+  assert.ok(ol.includes('p1→p7、p2→p7、p3→p7') && ol.includes('（一致）'), ol);
+});
+
+test('werewolf one phone (re-run #5): 🤖 代佢做 at a vote gate is marked 「代做（當棄權）」 in the 票型 — the tally, the recap and the vote log; own phones unchanged', async () => {
+  const sim = deal(mkOne(R9));
+  nightKill(sim, 'p7');
+  toVote(sim);
+  const c = cur(sim);
+  const [a, b, ...rest] = c.voters;
+  const auto = game.engine.autoAct(clone(sim.state), a);
+  assert.deepEqual(auto, { type: 'vote', target: null, proxy: true });
+  assert.ok(sim.act(a, auto));
+  sim.act(b, { type: 'vote', target: null });                 // a real abstain
+  for (const v of rest) sim.act(v, { type: 'vote', target: 'p1' });
+  assert.equal(phase(sim), 'say');
+  const rec = sim.state.rec.find((r) => r.k === 'vote');
+  assert.deepEqual(rec.votes.find((x) => x.by === a), { by: a, to: null, proxy: true });
+  assert.deepEqual(rec.votes.find((x) => x.by === b), { by: b, to: null });
+  const parts = S.voteParts(rec, (p) => p);
+  assert.ok(parts.includes(`棄權：${b}`) && parts.includes(`${S.PROXY_ABSTAIN}：${a}`), parts.join(' | '));
+  assert.ok(sim.view(null).voteLog[0].votes.some((x) => x.by === a && x.proxy === true));
+  assert.ok(sim.view(null).recent[0].entries[0].lines.some((x) => x.includes(S.PROXY_ABSTAIN)));
+  // every ballot proxied or abstained: 全部棄權 never hides the proxied ones
+  assert.deepEqual(S.voteParts({ votes: [{ by: 'x', to: null }, { by: 'y', to: null, proxy: true }] }, (p) => p), ['棄權：x', `${S.PROXY_ABSTAIN}：y`]);
+  assert.deepEqual(S.voteParts({ votes: [{ by: 'x', to: null }] }, (p) => p), ['全部棄權']);
+  // the public tally screen names it too
+  await withFakeDom(async (ui) => {
+    const root = new FEl('div');
+    const h = ui.mount(root, sharedApi(sim, null, [], []));
+    h.update(sim.view(null), ctxOne(sim, { atTable: true }));
+    const no = (pid) => sim.players.findIndex((p) => p.id === pid) + 1;
+    const t = root.textContent;
+    assert.ok(t.includes(`${no(a)}號 玩家${no(a)}${S.UI.day.abstainProxy}`), t);
+    assert.ok(!t.includes(`${no(b)}號 玩家${no(b)}${S.UI.day.abstainProxy}`), t);
+    h.destroy();
+  });
+  // a forged `proxy` on a real ballot does nothing; phones of their own never mark it
+  const own = deal(mk(R9));
+  nightKill(own, 'p7');
+  toVote(own);
+  const v0 = cur(own).voters[0];
+  assert.deepEqual(game.engine.autoAct(clone(own.state), v0), { type: 'vote', target: null });
+  own.act(v0, { type: 'vote', target: null, proxy: true });
+  for (const v of cur(own).voters.slice(1)) own.act(v, { type: 'vote', target: 'p1' });
+  assert.ok(own.state.rec.find((r) => r.k === 'vote').votes.every((x) => !x.proxy));
+});
+
+test('werewolf ui, one phone (re-run #3a #3b): on ONE wolf screen 空刀 takes a second tap and the split-vote rule gives way to what applies; a phone of its own is unchanged', async () => {
+  await withFakeDom(async (ui) => {
+    const co = ['p1', 'p2', 'p3'];
+    const sim = deal(mkOne(R9));
+    toStep(sim, 'wolves');
+    const sent = []; const root = new FEl('div');
+    const api = sharedApi(sim, 'p1', sent, []);
+    const armed = new Set();
+    const asked = [];
+    api.confirm = (text, node) => { asked.push(text); if (armed.has(node)) { armed.delete(node); return true; } armed.add(node); return false; };
+    const h = ui.mount(root, api);
+    const paint = () => h.update(sim.view('p1'), ctxOne(sim, { coWakers: co, views: Object.fromEntries(co.map((p) => [p, sim.view(p)])) }));
+    paint();
+    const hint = findAll(root, (n) => hasCls(n, 'ww-hint'))[0];
+    assert.equal(hint.textContent, S.PANEL.wolves.ruleTogether);
+    assert.ok(!root.textContent.includes(S.PANEL.wolves.rulePlurality));
+    const skip = findAll(root, (n) => hasCls(n, 'ww-skip'))[0];
+    clickN(skip);
+    assert.equal(sent.length, 0, 'the first tap only arms it');
+    assert.deepEqual(asked, [S.PANEL.wolves.skipConfirm]);
+    for (const w of co) assert.equal(sim.state.nt.sel[w], undefined);
+    clickN(skip);
+    assert.deepEqual(sent.at(-1).a, { type: 'night', pick: null, lock: true, seats: co });
+    for (const w of co) assert.deepEqual(sim.state.nt.sel[w], { pick: null, lock: true });
+    h.destroy();
+    // two of three wolves on this phone (a room of phones): the third can still disagree — the rule stays
+    const part = deal(mkOne(R9));
+    toStep(part, 'wolves');
+    const pr = new FEl('div');
+    const ph = ui.mount(pr, sharedApi(part, 'p1', [], []));
+    ph.update(part.view('p1'), ctxOne(part, { coWakers: ['p1', 'p2'] }));
+    assert.equal(findAll(pr, (n) => hasCls(n, 'ww-hint'))[0].textContent, S.PANEL.wolves.rulePlurality);
+    ph.destroy();
+    // a phone of its own: one tap 空刀, the rule as before
+    const own = deal(mk(R9));
+    toStep(own, 'wolves');
+    const os = []; const or = new FEl('div');
+    const oapi = sharedApi(own, 'p1', os, [], { shared: false });
+    oapi.confirm = () => { throw new Error('no confirm on a phone of its own'); };
+    const oh = ui.mount(or, oapi);
+    oh.update(own.view('p1'), { focus: own.focus(), paused: false, narrationMode: 'voice' });
+    assert.equal(findAll(or, (n) => hasCls(n, 'ww-hint'))[0].textContent, S.PANEL.wolves.rulePlurality);
+    clickN(findAll(or, (n) => hasCls(n, 'ww-skip'))[0]);
+    assert.deepEqual(os.at(-1).a, { type: 'night', pick: null, lock: true });
+    oh.destroy();
+  });
+});
+
+test('werewolf ui, one phone (re-run #1): while the room clock is held at the speaker\'s card the speech timer stands still and the speaker reads 「⏳ 等緊開始」, not 「🎙 講緊」', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mkOne(R9));
+    nightKill(sim, 'p7');
+    drive(sim, (s) => s.phase === 'speech' && s.cur.stage === 'run');
+    const who = cur(sim).pid;
+    const spy = { sfx: [], timers: 0 };
+    const comps = stubComponents(spy);
+    const made = [];
+    const T = comps.Timer;
+    comps.Timer = (p) => { const t = T(p); made.push(t); return t; };
+    const root = new FEl('div');
+    const h = ui.mount(root, sharedApi(sim, null, [], [], { comps }));
+    const heldAt = sim.now - 2000;
+    const nowItem = () => findAll(root, (n) => hasCls(n, 'ww-speaker') && hasCls(n, 'now'))[0].textContent;
+    h.update(sim.view(null), ctxOne(sim, { atTable: true, clockHeld: true, clockHeldAt: heldAt }));
+    assert.equal(made.at(-1).props.held, heldAt, 'the timer freezes at the hold');
+    assert.ok(nowItem().includes(S.UI.day.speakHeld) && !nowItem().includes(S.UI.day.speakNow), nowItem());
+    // a core without clockHeldAt: still held (from now)
+    h.update(sim.view(null), ctxOne(sim, { atTable: true, clockHeld: true }));
+    assert.equal(made.at(-1).props.held, true);
+    // the speaker took the phone: the clock runs
+    h.update(sim.view(null), ctxOne(sim, { atTable: true, clockHeld: false, clockHeldAt: null }));
+    assert.equal('held' in made.at(-1).props, false, 'no hold of its own: it follows the room again');
+    assert.ok(nowItem().includes(S.UI.day.speakNow));
+    assert.ok(sim.view(null).speech?.order.includes(who));
+    h.destroy();
+  });
+});
+
+test('werewolf (re-run #2): every view and the table name the roles on this board (view.rolesInPlay) — the 💡 sheet lists only those', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js');
+  const sim = deal(mkOne({ p1: 'werewolf', p2: 'werewolf', p3: 'seer', p4: 'witch', p5: 'villager', p6: 'villager' }));
+  for (const pid of [null, 'p1', 'p3', 'p5']) {
+    const h = hintRoles(sim.view(pid), rules);
+    assert.equal(h.inPlay, true, `${pid}`);
+    assert.deepEqual(h.roles.map((r) => `${r.id}×${r.count}`).sort(), ['seer×1', 'villager×2', 'werewolf×2', 'witch×1']);
+  }
 });

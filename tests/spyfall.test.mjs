@@ -2760,6 +2760,112 @@ test('spyfall ui one phone: a public step hides the role card; the round reveal 
   }));
 });
 
+test('spyfall one phone: re-run N2 — a 舉手 final vote keeps the reporter in focus through every tally, so the phone never bounces to the middle between suspects', () => {
+  const one = playing(4, { seed: 71, config: game.config.defaults(4, undefined, { singleDevice: true }) });
+  assert.equal(one.state.cfg.passPhone, true);
+  assert.equal(one.state.cfg.voteMode, 'hands');
+  const d = R(one).dealer;
+  const order = ids(one);
+  const next = order[(order.indexOf(d) + 1) % 4];
+  const sigOf = (f) => JSON.stringify([f?.pids ?? null, !!f?.open, f?.step ?? '']);
+  timeUp(one);
+  // suspect 1 is the dealer, so the next seat reports
+  const v1 = one.focus();
+  assert.deepEqual(v1.pids, [next]);
+  one.act(next, { type: 'verdict', no: 1 });
+  assert.equal(phase(one), 'tally');
+  const t1 = one.focus();
+  const tv = one.view(null).tally;
+  assert.ok(!('reporter' in tv), 'the views are unchanged');
+  assert.deepEqual(t1, { pids: [next], open: true, label: `最後投票 ${tv.index}/${tv.of} · 結果` });
+  assert.equal(sigOf(t1), sigOf(v1), 'the same signature as the vote: no table card while the result shows');
+  settle(one);
+  // suspect 2 is that reporter, so the dealer reports: one public card for the new holder
+  assert.deepEqual(one.focus().pids, [d]);
+  one.act(d, { type: 'verdict', no: 1 });
+  const t2 = one.focus();
+  assert.deepEqual(t2.pids, [d]);
+  settle(one);
+  assert.equal(sigOf(one.focus()), sigOf(t2), 'the dealer reports the next suspect too: no card in between');
+  one.act(d, { type: 'verdict', no: 0 });
+  assert.equal(phase(one), 'tally');
+  assert.deepEqual(one.focus().pids, [d], 'the convicting result shows on the holder’s screen');
+  settle(one);
+  assert.equal(phase(one), 'roundEnd');
+  assert.equal(one.focus(), null, 'the round’s reveal puts the phone in the middle');
+
+  // an accusation's tally still sends the phone to the middle (the clock restarts there)
+  const acc = playing(4, { seed: 72, config: game.config.defaults(4, undefined, { singleDevice: true }) });
+  const x = nonSpies(acc)[0];
+  acc.act(x, { type: 'accuse', target: nonSpies(acc)[1] });
+  acc.act(x, { type: 'verdict', no: 1 });
+  assert.equal(phase(acc), 'tally');
+  assert.equal(acc.focus(), null);
+
+  // phones of their own (舉手 picked by hand): unchanged, nobody in focus during a tally
+  const multi = playing(4, { seed: 71, config: { voteMode: 'hands' } });
+  timeUp(multi);
+  multi.act(multi.view('p1').vote.reporter, { type: 'verdict', no: 1 });
+  assert.equal(phase(multi), 'tally');
+  assert.equal(multi.focus(), null);
+});
+
+const visText = (n) => (n instanceof FText ? n.data : !n || n.hidden ? '' : n.children.map(visText).join(''));
+
+test('spyfall ui one phone: re-run N3 — the public guess names the spy, never says 「你」, never marks or prints the place tapped, and sends it after 3 s unless 撤銷', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = playing(5, { seed: 485, config: game.config.defaults(5, undefined, { singleDevice: true }) });
+    const spy = spyOf(sim);
+    sim.act(spy, { type: 'spy-stop' });
+    assert.equal(phase(sim), 'guess');
+    const name = sim.players.find((p) => p.id === spy).name;
+    const r = mountSpyfallShared(ui, sim, spy);
+    const guessBox = () => boxOf(r.root, 'sf-guess');
+    const bar = () => boxOf(r.root, 'sf-guessbar');
+    const locBtn = (i) => findEls(r.root, (n) => n.cls.has('sf-loc') && n.textContent.includes(sim.state.list[i].name))[0];
+    const runTimers = () => { let k = 0; while (t.pending() && k++ < 20) t.step(); };
+    let text = visText(guessBox());
+    assert.ok(text.includes(`🕵️ ${name} 揀地點`) && !text.includes('你'), text);
+    assert.ok(!shown(bar()), 'no bar before a pick');
+    // a slip: pick, then 撤銷 — nothing goes out, nothing was marked or printed
+    const wrong = (R(sim).loc + 1) % sim.state.list.length;
+    clickEl(locBtn(wrong));
+    assert.ok(!findEls(r.root, (n) => n.cls.has('is-sel')).length, 'the tapped place is not highlighted');
+    text = visText(guessBox()) + visText(bar());
+    assert.ok(!text.includes(sim.state.list[wrong].name), text);
+    assert.ok(text.includes(`${name} 揀好咗，3 秒後公佈`) && !text.includes('你'), text);
+    assert.deepEqual(r.log.sent, [], 'nothing sent at the tap');
+    clickEl(btnText(bar(), '↩ 撤銷'));
+    runTimers();
+    assert.deepEqual(r.log.sent, [], '撤銷 sent nothing');
+    assert.ok(!shown(bar()));
+    // the real pick: out after the countdown
+    clickEl(locBtn(R(sim).loc));
+    t.step();
+    assert.ok(visText(guessBox()).includes('2 秒後公佈'), visText(guessBox()));
+    runTimers();
+    assert.deepEqual(r.log.sent, [{ type: 'guess', loc: R(sim).loc }]);
+    r.handle.destroy();
+
+    // a phone of its own: unchanged — the pick is highlighted and confirmed with 就係…
+    const root = new FEl('div');
+    const sent = [];
+    const own = ui.mount(root, {
+      me: spy, players: sim.players, isHost: false, meta: game.meta, config: sim.state.cfg,
+      send: (a) => { sent.push(a); return Promise.resolve(true); }, ink() {}, now: () => sim.now, sfx() {}, toast() {},
+      components: stubSpyfallComponents(),
+    });
+    own.update(sim.view(spy), { focus: sim.focus(), paused: false });
+    const ownLoc = findEls(root, (n) => n.cls.has('sf-loc') && n.textContent.includes(sim.state.list[wrong].name))[0];
+    clickEl(ownLoc);
+    assert.equal(findEls(root, (n) => n.cls.has('is-sel')).length, 1);
+    assert.ok(visText(boxOf(root, 'sf-guess')).includes('你揀咗'));
+    clickEl(btnText(boxOf(root, 'sf-guess'), '就係'));
+    assert.deepEqual(sent, [{ type: 'guess', loc: wrong }]);
+    own.destroy();
+  }));
+});
+
 // ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
 // A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
 // filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
@@ -2863,6 +2969,9 @@ async function withShell(fn) {
     dom.disarmConfirm?.();
     const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
     PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
     for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
       if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
     }
@@ -3001,4 +3110,61 @@ test('spyfall, one phone through the real play screen: the look walk, play on th
     assert.ok(ph.gateText().includes('第 2 局睇身分'), ph.gateText());
     ph.destroy();
   });
+});
+
+test('spyfall, one phone through the real play screen: re-run N2 — the 舉手 final vote stays with its reporter between suspects (no table card, no card to its own holder)', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/spyfall/ui.js?v=1');
+    const sim = mk(4, { seed: 71, config: { ...game.config.defaults(4, undefined, { singleDevice: true }), rounds: 1 } });
+    const ph = await onePhoneShell(dom, sim, mount);
+    const name = (pid) => sim.players.find((p) => p.id === pid).name;
+    while (phase(sim) === 'reveal') { await ph.tapGate(); await ph.tapIn('睇完喇 — 準備好'); }
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    timeUp(sim);
+    await ph.render();
+    const d = R(sim).dealer;
+    const order = ids(sim);
+    const next = order[(order.indexOf(d) + 1) % 4];
+    assert.equal(ph.gate(), 'public', ph.gateText());
+    assert.ok(ph.gateText().includes(`輪到 ${name(next)}`), ph.gateText());
+    await ph.tapGate();
+    const cards = [];
+    let asked = 0;
+    while (phase(sim) === 'vote' && asked++ < 6) {
+      const reporter = sim.view(null).vote.reporter;
+      if (ph.gate()) { cards.push([ph.gate(), ph.gateText()]); await ph.tapGate(); }
+      assert.equal(ph.st.activeSeat, reporter);
+      await ph.tapIn('有人反對');                       // nobody convicted: every suspect is asked in turn
+      assert.equal(phase(sim), 'tally');
+      assert.equal(ph.gate(), null, 'no table card while the result shows');
+      assert.equal(ph.st.activeSeat, reporter, 'the reporter keeps the phone');
+      sim.advance();
+      await ph.render();
+    }
+    assert.equal(asked, 4, 'all four suspects were asked');
+    assert.equal(cards.length, 1, `one card, when the dealer takes over: ${JSON.stringify(cards)}`);
+    assert.equal(cards[0][0], 'public');
+    assert.ok(cards[0][1].includes(`輪到 ${name(d)}`), cards[0][1]);
+    assert.equal(phase(sim), 'roundEnd');
+    assert.equal(ph.gate(), 'table', 'the round’s reveal goes to the middle');
+    ph.destroy();
+  });
+});
+
+test('spyfall one phone: re-run #5 — every view names the roles in play for the 💡 sheet (counts only, never who), and the one-phone hint fits the one-tap guess', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const sim = playing(6, { seed: 486, config: game.config.defaults(6, undefined, { singleDevice: true }) });
+  const want = [{ id: 'agent', count: 5 }, { id: 'spy', count: 1 }];
+  for (const pid of [null, ...ids(sim)]) assert.deepEqual(sim.view(pid).rolesInPlay, want);
+  const list = hintRoles(sim.view(null), game.rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => [r.id, r.count]), [['agent', 5], ['spy', 1]]);
+  const spy = spyOf(sim);
+  sim.act(spy, { type: 'spy-stop' });
+  const name = sim.players.find((p) => p.id === spy).name;
+  assert.ok(sim.view(spy).hint.startsWith(`${name}：`) && !sim.view(spy).hint.includes('你'), sim.view(spy).hint);
+  const own = playing(6, { seed: 486 });
+  own.act(spyOf(own), { type: 'spy-stop' });
+  assert.ok(own.view(spyOf(own)).hint.includes('就係'), 'phones of their own: unchanged');
 });

@@ -276,6 +276,7 @@ and a debrief line per seat 「阿明：🧀 大盜 · 骰 3 · 三點鐘醒」.
 Single device is `full`. The phone lies in the middle of the table; every seat lives on it. The shell's one-phone contract (DESIGN §7.1) does the hand-overs; this game supplies the steps, the table screen and the one-phone wording.
 
 * **narration (U1):** `meta.eyesClosed: true` — a whole-table phone offers 🔊 語音 and 📜 讀稿 only (讀稿 needs a reader who is not playing; the lobby says so). 靜音 stays for one phone each.
+* **noise bed (U8, re-run N3):** `meta.nightAmbient: true` — a whole-table phone plays the shell's neutral night bed under every hour, so an occupied hour (the phone picked up, the gate tapped, the phone put down) sounds like an empty one.
 * **roll:** `focus` = `{ pids: seats not yet ready, label: '睇牌・擲骰' }`, so each player gets the phone behind 「交俾 X · 其他人唔好望 · 睇牌・擲骰」, peeks their card, rolls, taps 準備好 (「好喇，交俾下一位…」) and passes it on. The 🔓 lock is hidden on a shared phone (#36): it would not survive the hand-over and any holder could undo it.
 * **night:** the begin line says 「部手機擺喺枱中間」. At every `open` window `focus` = `{ pids: awake seats, anonymous: '擲到三點嘅請拎起部手機' }` (4p: `'醒鐘係三點嘅請拎起部手機'`), so the gate says what the narrator said and never a name; an empty hour gets the same decoy gate. Every window carries the 10 s hand-over pad (`passPhone`), and `view.step.windowMs` (the step kind's fixed length) lets the bar show the time already gone when the screen mounts after the gate, with 「仲有 N 秒」 beside it and 「⏰ 時間到 — 部手機擺返中間，閉眼」 when it runs out (#7). The seat alone in its hour:
   * sees a **three-line** awake card (who is awake, the cheese, the one thing it may do);
@@ -286,7 +287,7 @@ Single device is `full`. The phone lies in the middle of the table; every seat l
   * behind each seat's own 「🤫 名」 panel (the others look away; every panel has the same shape): its own die, a 4p thief's choice to steal now or wait (its button sends `steal` as that seat; the witness then reads the theft on the shared part), a 7p follower's 「大盜係 X（你夜晚親眼見到佢偷）」 / 「你唔知大盜係邊個」;
   * one big button: the owed pick, else 「睇完就㩒，部手機擺返中間」 = `{ type: 'ack', seats: coWakers }` for all of them. Nobody leaves `focus` until the window ends; the legacy `done` action still works in the engine but the UI no longer sends it (no chained walk).
 * **dawn:** the shell puts the phone in the middle behind 「☀️ 天光喇」 — the holder and the chip are the same for every role assignment.
-* **day:** the table screen (`view(state, null)`: title, the clock, 想投票) has 「🗳️ 大家夠鐘投票 ✓（一下就得）」 → `api.tableSend({ type: 'day-ready', on: true })`, which counts for every seat on the phone (`seats`), so on a whole-table phone one tap starts the vote; it is locked while the 「擺返中間」 card is up (U5). A shared phone that does not hold the whole table reads 「🗳️ 呢部機嘅人都夠鐘投票」 with the count. A seat picked by hand (換人) sees its card, die and 📓, no per-seat 夠鐘投票, and 「📱 想投票：擺返中間，喺枱面㩒「夠鐘投票」」.
+* **day:** the table screen (`view(state, null)`: title, the clock, 想投票) has, from 5 players up, the dawn re-check said once for everyone, 「🔁 天光喇：大家輪流㩒上面揀名，再睇一次自己張身份牌。」 (re-run N4: the same words for every role assignment, never whether anything changed; 4p has no line), and 「🗳️ 大家夠鐘投票」 → `api.tableSend({ type: 'day-ready', on: true }, { confirm: '全枱傾夠未？仲有 2:50', node })`, which counts for every seat on the phone (`seats`). It ends the talk for everybody, so on a whole-table phone the first tap only arms the button (「再㩒一次：全枱傾夠未？仲有 2:50」, the time still on the clock) and the second starts the vote (re-run N2, DESIGN §7.1); it is locked while the 「擺返中間」 card is up (U5). A shared phone that does not hold the whole table reads 「🗳️ 呢部機嘅人都夠鐘投票」 with the count. A seat picked by hand (換人) sees its card, die and 📓, no per-seat 夠鐘投票, and 「📱 想投票：擺返中間，喺枱面㩒「夠鐘投票」」.
 * **vote:** `focus` = `{ pids: seats that have not voted, label: '投票' }`; the shell gates each voter (also the one on screen) with 「其他人唔好望 · 投票 · 搞掂 k/n」. The vote line says 「部手機逐個交」.
 * **reveal / over:** public; on a shared phone nobody is 「你」 (#20): 🧀 完咗 and no 「（你）」.
 * In 讀稿 mode with a single phone the narrator is a person who does not play: they read the text and press 下一步.
@@ -478,7 +479,7 @@ From `docs/playtest/single/cheese-thief.md` and the cross-game summary (decision
 | finding | change |
 |---|---|
 | #1 dawn names the last night holder | shell (table mode); the game's table view carries the clock and 想投票, and no night tap counter (it would count the awake on a shared phone) |
-| #5 夠鐘投票 needs every seat | `day-ready` takes `seats`; the table screen's 「大家夠鐘投票 ✓（一下就得）」 (`api.tableSend`), locked behind the table card |
+| #5 夠鐘投票 needs every seat | `day-ready` takes `seats`; the table screen's 「大家夠鐘投票」 (`api.tableSend`, two taps since the re-run), locked behind the table card |
 | #6 靜音 on one phone | `meta.eyesClosed: true`; rules 「旁白三個模式」 and the new 「一部手機玩」 section |
 | #7 peeks lost in the 15 s hour | hidden `passPhone` + 10 s pad on every awake window (20 s hour); `view.step.windowMs`; bar with 「仲有 N 秒」 / 「⏰ 時間到…」; one-tap peek and a three-line card on a shared phone |
 | #8 co-wakers walked in seat order | one combined screen with per-seat 🤫 panels (U2); `ack` takes `seats`; the pick goes out with `api.sendAs` |
@@ -486,3 +487,13 @@ From `docs/playtest/single/cheese-thief.md` and the cross-game summary (decision
 | #20 「你贏咗」 / 「（你）」 | none on a shared phone (over screen, reveal panel) |
 | #33 gate subtitle | `focus.label` 「睇牌・擲骰」 / 「投票」 |
 | #36 decoy grid and 🔓 lock | unusable names dimmed with 「睇完就㩒，部手機擺返中間」; no lock on a shared phone |
+
+### One-phone re-run (2026-10-04 UTC, `docs/playtest/single/cheese-thief-rerun.md`)
+
+| finding | change |
+|---|---|
+| N2 大家夠鐘投票 ends the talk with one tap | `api.tableSend(…, { confirm })`: the first tap arms 「再㩒一次：全枱傾夠未？仲有 m:ss」, the second sends; label 「🗳️ 大家夠鐘投票」; rules 「㩒兩下先算」 |
+| N3 no night sound bed | `meta.nightAmbient: true` |
+| N4 the dawn re-check is missing from the table screen | 「🔁 天光喇：大家輪流㩒上面揀名，再睇一次自己張身份牌。」 on the shared day table screen, 5p+ |
+| (re-run #5, all games) 💡 lists only the roles in play | `view.rolesInPlay` in every view and the table view: 🧀 ×1, 🐭 × (n − 1 − 背鍋鼠), 🤝 共犯 from 5p, 🎭 背鍋鼠 when on — public (head-count and config only) |
+| N1 the first vote gate names the last night holder | shell (`play.js`: a seat that got the phone in a secret step is never a walk's start) |

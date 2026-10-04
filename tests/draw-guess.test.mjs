@@ -1590,7 +1590,7 @@ test('draw-guess: tie-breaks — more correct guesses wins, then more drawer poi
 // ============================================================
 
 const ALLOWED_VIEW_KEYS = ['me', 'role', 'phase', 'title', 'subtitle', 'drawMode', 'guessMode', 'hintsOn', 'scoring', 'turn', 'upNext', 'scores', 'teams',
-  'myTeam', 'mod', 'last', 'sub', 'choose', 'play', 'reveal', 'standings', 'feed', 'deadline', 'timerLabel', 'hint'];
+  'myTeam', 'mod', 'last', 'sub', 'choose', 'play', 'reveal', 'standings', 'feed', 'deadline', 'timerLabel', 'hint', 'rolesInPlay'];
 
 /** Characters of the live word that this seat may NOT see yet, plus every offer it may not see at all. */
 function secretsFor(sim, pid) {
@@ -2344,9 +2344,10 @@ function stubComponents(log) {
     },
     Timer(p0) {
       const root = E('div', 'c-timer');
-      const api = { el: root, update(p) { root.textContent = p.label ?? ''; }, destroy() { root.remove(); } };
+      const api = { el: root, props: p0, update(p) { api.props = p; root.textContent = p.label ?? ''; }, destroy() { root.remove(); } };
       api.update(p0);
       log.timers++;
+      (log.timerApis ??= []).push(api);
       return api;
     },
     Canvas(p0) {
@@ -2609,16 +2610,79 @@ test('draw-guess: one phone — #16 the play cue says the phone goes in the midd
   const one = mk(4, 2, { passPhone: true }, bankOf(TRIO));
   pick(one, '摩天輪');
   const t1 = one.cue().text;
-  assert.ok(t1.startsWith('開始！部手機擺喺中間。'), t1);
+  const dn = one.players.find((p) => p.id === D(one)).name;
+  // re-run N2: said as the word is picked, while the public card still holds the clock — so no 「開始！」 yet
+  assert.ok(t1.startsWith(`${dn}揀好喇。部手機平放喺枱中間，${dn}㩒「開始」就計時，限時 `), t1);
+  assert.ok(!t1.includes('開始！'), t1);
   assert.ok(!t1.includes('摩天輪'), 'never the word');
   const own = mk(4, 2, {}, bankOf(TRIO));
   pick(own, '摩天輪');
   assert.ok(!own.cue().text.includes('部手機'), own.cue().text);
+  assert.ok(own.cue().text.startsWith('開始！限時 '), 'phones of their own: unchanged');
   // D6: the lobby help for 畫喺邊 fits one phone and phones of their own alike
   const help = config.fields(config.defaults(5), 5).find((f) => f.key === 'drawMode').help;
   assert.ok(!help.includes('每部手機'), help);
   const rule = rules.sections.find((x) => x.title === '用一部手機玩').body;
   assert.ok(rule.includes('平放喺枱中間') && rule.includes('㩒住') && rule.includes('冇得打字估'), rule);
+});
+
+test('draw-guess: one phone — re-run N4: the reveal lasts 10 s (the table card comes first); phones of their own keep 7 s', () => {
+  for (const [over, ms] of [[{ passPhone: true }, 10000], [{}, 7000]]) {
+    const sim = mk(4, 3, { ...over, roundSeconds: 60 }, bankOf(TRIO));
+    pick(sim, '老虎');
+    assert.ok(sim.act(D(sim), { type: 'accept', target: guessers(sim)[0] }));
+    toReveal(sim);
+    assert.equal(sim.state.revealMs, ms);
+    assert.equal(sim.state.deadline - sim.now, ms);
+    // the late-✔ / 🚩 window is still the first 5 s of it
+    assert.equal(sim.view(null).reveal.lateUntil, sim.now + 5000);
+  }
+});
+
+test('draw-guess ui: U10 / re-run N1 — while the room holds the clock, the countdowns stand still at the held time and say so', async () => {
+  await withUi(async (ui) => {
+    const log = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const sim = mk(4, 5, { passPhone: true, roundSeconds: 60 }, bankOf(TRIO));
+    const all = sim.state.order;
+    let heldAt = null;
+    const mount = (pid) => {
+      const root = new FEl('div');
+      const api = {
+        me: pid, players: sim.players, isHost: true, meta, config: sim.state.cfg, send() {}, ink() {}, now: () => sim.now,
+        clockNow: () => heldAt ?? sim.now, sfx() {}, toast() {}, components: stubComponents(log),
+        shared: true, wholeTable: true, atTable: pid === null, mySeats: all,
+      };
+      return { root, handle: ui.mount(root, api) };
+    };
+    const ctxOf = () => ({ paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] }, shared: true, clockHeld: heldAt != null, clockHeldAt: heldAt });
+    // the table screen behind the drawer's private gate: 「最遲 N 秒後開始畫」
+    const table = mount(null);
+    const show = (seat) => seat.handle.update(sim.view(seat === table ? null : D(sim)), ctxOf());
+    const count = () => findEls(table.root, (n) => n.cls.has('dg-count'))[0];
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫');
+    heldAt = sim.now;                                    // the gate is up: the room holds the clock here
+    sim.now += 15_000;                                   // nobody has taken the phone yet
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫 · ⏸ 等緊接手', 'stands still at the held time');
+    // released: the session moved the deadline on by the time held, so the count carries on from the same value
+    sim.state.deadline += 15_000;
+    heldAt = null;
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫');
+    // the drawing clock (the shared Timer): told the held time explicitly
+    pick(sim, '老虎');
+    const drawer = mount(D(sim));
+    heldAt = sim.now;
+    show(drawer);
+    const timer = log.timerApis.at(-1);
+    assert.equal(timer.props.held, heldAt);
+    heldAt = null;
+    show(drawer);
+    assert.equal(timer.props.held, undefined, 'a running clock is left to the Timer');
+    table.handle.destroy();
+    drawer.handle.destroy();
+  });
 });
 
 test('draw-guess: D10 — 最快反應 only for a solve in the first half of its turn', () => {
@@ -2851,6 +2915,9 @@ async function withShell(fn) {
     dom.disarmConfirm?.();
     const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
     PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
     for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
       if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
     }
@@ -2968,4 +3035,16 @@ test('draw-guess, one phone through the real play screen: the offers behind a pr
     assert.ok(ph.text().includes('摩天輪'), 'the answer on the table screen');
     ph.destroy();
   });
+});
+
+test('draw-guess: re-run #5 — every view (seats and table) names this turn’s parts for the 💡 sheet', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const ffa = mk(4, 5, { passPhone: true }, bankOf(TRIO));
+  for (const pid of [null, ...ffa.state.order]) assert.deepEqual(ffa.view(pid).rolesInPlay, [{ id: 'drawer', count: 1 }, { id: 'guesser', count: 3 }]);
+  const list = hintRoles(ffa.view(null), game.rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => r.id), ['drawer', 'guesser'], 'no 對手隊員 outside team play');
+  const teams = mk(6, 5, { teamMode: 'teams', teams: 2 }, bankOf(TRIO));
+  assert.ok(teams.state.teams, 'team play');
+  assert.deepEqual(teams.view(null).rolesInPlay, [{ id: 'drawer', count: 1 }, { id: 'guesser', count: 2 }, { id: 'rival', count: 3 }]);
 });

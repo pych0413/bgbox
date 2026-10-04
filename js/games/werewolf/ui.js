@@ -116,7 +116,11 @@ export function mount(root, api) {
       return;
     }
     setHidden(timerHost, false);
+    // U10 (re-run #1): while a whole-table phone holds the room clock at the speaker's card, the timer stands still and
+    // stays silent (the shell tells every Timer too; passing the hold here keeps it right whatever the order)
+    const heldAt = Number.isFinite(c?.clockHeldAt) ? c.clockHeldAt : c?.clockHeld ? true : undefined;
     const props = { deadline: v.deadline, now: api.now, label: v.timerLabel ?? '', paused: !!c?.paused, warnAt: [10] };
+    if (heldAt !== undefined) props.held = heldAt;
     if (!timer) { timer = C.Timer(props); timerHost.append(timer.el); } else timer.update(props);
   }
 
@@ -359,7 +363,11 @@ export function mount(root, api) {
     /** A shared phone, this seat has confirmed: the same 確定 button now puts the phone back in the middle (real or decoy alike). */
     const homeNow = () => type === 'night' && !!api.shared && typeof api.toTable === 'function' && !!cur?.nt.lock;
 
-    skip.addEventListener('click', () => api.send(withMates({ type, pick: null, lock: true })));
+    skip.addEventListener('click', () => {
+      // re-run #3a: on ONE shared screen 空刀 locks every wolf at once and the screen goes — so it takes a second tap
+      if (cur?.co.length && typeof api.confirm === 'function' && !api.confirm(S.PANEL.wolves.skipConfirm, skip)) return;
+      api.send(withMates({ type, pick: null, lock: true }));
+    });
     ok.addEventListener('click', () => {
       if (homeNow()) { api.toTable({ card: false }); return; }
       // together: the shown pick goes with the lock, so every wolf confirms the same target (never a silent 空刀)
@@ -390,8 +398,12 @@ export function mount(root, api) {
           infoSig = sg;
           info.replaceChildren(...lines.map((l, i) => el('p', { class: `ww-info-line${i === 0 ? ' head' : ''}`, text: l })));
         }
-        setText(hint, nt.hint);
-        setHidden(hint, !nt.hint);
+        // re-run #3b: every living wolf on this ONE screen cannot disagree — the split-vote rule becomes what does apply
+        const rules = [S.PANEL.wolves.rulePlurality, S.PANEL.wolves.ruleUnanimous];
+        const allHere = co.length > 1 && [v.me, ...(v.my?.mates ?? [])].filter((p) => seatOf(v, p)?.alive !== false).every((p) => co.includes(p));
+        const hintText = allHere && rules.includes(nt.hint) ? S.PANEL.wolves.ruleTogether : nt.hint;
+        setText(hint, hintText);
+        setHidden(hint, !hintText);
         const items = nt.chips.map((c) => ({
           ...c,
           no: seatOf(v, c.pid)?.no ?? 0,
@@ -507,11 +519,13 @@ export function mount(root, api) {
     const node = el('div', { class: 'ww-speak' }, list, done, note, explode?.el);
     return {
       el: node,
-      update(v) {
+      update(v, c) {
         const cur = kind === 'speech' ? v.speech : v.words;
         const mine = v.me && cur.pid === v.me;
         const order = kind === 'speech' ? cur.order : [cur.pid];
-        const sg = sig([order, cur.idx, cur.pid, v.me]);
+        // U10 (re-run #1): a whole-table phone holds the clock until the speaker takes the phone — not 「講緊」 yet
+        const held = !!c?.clockHeld;
+        const sg = sig([order, cur.idx, cur.pid, v.me, held]);
         if (node.dataset.k !== sg) {
           node.dataset.k = sg;
           list.replaceChildren(...order.map((pid, i) => {
@@ -519,7 +533,7 @@ export function mount(root, api) {
             return el('div', { class: `ww-speaker ${state}`, style: { '--seat': colorOf(pid) } },
               el('b', { text: String(seatOf(v, pid)?.no ?? '') }),
               el('span', { class: 'ww-speaker-name', text: labelOf(v, pid) }),
-              el('small', { text: state === 'done' ? S.UI.day.speakSpoke : state === 'now' ? S.UI.day.speakNow : S.UI.day.speakNext }));
+              el('small', { text: state === 'done' ? S.UI.day.speakSpoke : state === 'now' ? (held ? S.UI.day.speakHeld : S.UI.day.speakNow) : S.UI.day.speakNext }));
           }));
         }
         const running = v.stage === 'run';
@@ -661,7 +675,8 @@ export function mount(root, api) {
                 : s.outcome === 'tie2' ? S.UI.day.tallyTie2 : s.outcome === 'nobody' ? S.UI.day.tallyNobody : S.UI.day.tallyPeace;
           setText(outcome, text);
           setHidden(outcome, false);
-          const abst = s.votes.filter((x) => x.to === null).map((x) => labelOf(v, x.by));
+          // a proxied abstain (one phone, 🤖 代佢做 at a vote gate) is named as such (re-run #5)
+          const abst = s.votes.filter((x) => x.to === null).map((x) => labelOf(v, x.by) + (x.proxy ? S.UI.day.abstainProxy : ''));
           setText(abstain, abst.length ? `${S.UI.day.abstain}：${abst.join('、')}` : '');
           setHidden(abstain, !abst.length);
           setHidden(panelHost, false);

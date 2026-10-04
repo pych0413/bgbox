@@ -1045,7 +1045,9 @@ test('undercover: with reveal off nothing is said about the role, except a white
   const v = view(sim, 'p1');
   assert.equal(v.elim.role, null);
   assert.deepEqual(v.outs, [{ pid: 'p2', round: 1, role: null }]);
-  assert.equal(/"(civilian|undercover|blank)"/.test(JSON.stringify(v)), false);
+  // (rolesInPlay is the deck — the public counts on the header — not anybody's role)
+  assert.equal(/"(civilian|undercover|blank)"/.test(JSON.stringify({ ...v, rolesInPlay: undefined })), false);
+  assert.deepEqual(v.rolesInPlay, [{ id: 'civilian', count: 5 }, { id: 'undercover', count: 1 }, { id: 'blank', count: 1 }]);
   assert.doesNotMatch(sim.cue().text, /平民|臥底|白板/);
   goOn(sim);
   roundOut(sim, 'p7', { proceed: false });
@@ -1656,7 +1658,8 @@ function checkViews(sim) {
     // role names may only appear where an eliminated player is announced
     const walk = (o, path) => {
       if (typeof o === 'string' && ROLE_WORDS.includes(o)) {
-        assert.ok(/^\$\.(outs\.\d+\.role|history\.\d+\.role|elim\.role)$/.test(path), `role leaked at ${path}`);
+        // (rolesInPlay is the deck of the game — the public counts — not anybody's role)
+        assert.ok(/^\$\.(outs\.\d+\.role|history\.\d+\.role|elim\.role|rolesInPlay\.\d+\.id)$/.test(path), `role leaked at ${path}`);
       } else if (o && typeof o === 'object') {
         for (const [k, v] of Object.entries(o)) walk(v, `${path}.${k}`);
       }
@@ -2394,7 +2397,7 @@ test('undercover one phone: the deal cue and the rules never say 「用自己部
 /** A shared phone's mount: the table screen (pid null) or a seat, with the §7.1 api members faked and logged. */
 function mountUndercoverShared(ui, comps, sim, pid, { wholeTable = true, ctx = {} } = {}) {
   const root = new UEl('div');
-  const log = { sent: [], table: [], asks: [], toTable: 0, confirms: [], toasts: [] };
+  const log = { sent: [], table: [], asks: [], toTable: 0, confirms: [], toasts: [], armedOn: [] };
   let armed = null;
   const all = sim.players.map((p) => p.id);
   const handle = ui.mount(root, {
@@ -2402,7 +2405,15 @@ function mountUndercoverShared(ui, comps, sim, pid, { wholeTable = true, ctx = {
     send: (a) => { log.sent.push(a); return Promise.resolve(true); },
     now: () => sim.now, sfx() {}, toast: (t) => log.toasts.push(t), components: comps,
     shared: true, wholeTable, atTable: pid == null, mySeats: wholeTable ? all : all.slice(0, 2),
-    tableSend: (a) => { log.table.push(a); return Promise.resolve(true); },
+    // the shell's tableSend: `confirm` arms the button first on a whole-table phone (re-run #2), else it sends at once
+    tableSend: (a, o = {}) => {
+      if (o.confirm && wholeTable) {
+        if (armed !== o.confirm) { armed = o.confirm; log.confirms.push(o.confirm); log.armedOn.push(o.node ?? null); return false; }
+        armed = null;
+      }
+      log.table.push(a);
+      return Promise.resolve(true);
+    },
     askWho: (o) => { log.asks.push(o); return Promise.resolve(null); },
     toTable: () => { log.toTable += 1; return true; },
     handTo: () => true,
@@ -2457,7 +2468,8 @@ test('undercover ui one phone: the table screen runs the speaking round, opens t
       t.show();
       assert.ok(!uWords(t.root).includes('想開始投票'), uWords(t.root));
       uClick(btn(t.root, '開始投票'));
-      assert.deepEqual(t.log.confirms, ['全枱傾夠未？']);
+      assert.deepEqual(t.log.confirms, ['開始投票？全枱傾夠未？'], 'N3: the armed label still says what the second tap does');
+      assert.equal(t.log.armedOn[0], btn(t.root, '開始投票'), 'the shell arms the very button');
       assert.equal(t.log.table.length, 1, 'the first tap only arms');
       uClick(btn(t.root, '開始投票'));
       assert.deepEqual(t.log.table.at(-1), { type: 'start-vote' });
@@ -2492,6 +2504,89 @@ test('undercover ui one phone: the table screen runs the speaking round, opens t
     globalThis.setTimeout = saved.setTimeout;
     globalThis.clearTimeout = saved.clearTimeout;
   }
+});
+
+test('undercover one phone: re-run #2 N1 — 「X 講完喇」 cannot double-advance: a stale step is dropped, a bare table tap is ignored, the next button is locked for a moment (shared phones only)', async () => {
+  // engine: every tap carries the step it was made on
+  const sim = mk(5, { seed: 480 });
+  rig(sim, 'CCCCU', { starter: 'p1' });
+  ready(sim);
+  const all = sim.players.map((p) => p.id);
+  const asTable = (a) => sim.act('p3', { ...a, seats: all, table: true });
+  assert.equal(asTable({ type: 'done', at: 'speak:1:round:0' }), true);
+  assert.equal(sim.state.turn, 1);
+  assert.equal(asTable({ type: 'done', at: 'speak:1:round:0' }), false, 'a second tap on the old step does nothing');
+  assert.equal(asTable({ type: 'done' }), false, 'a whole-table tap without its step is never trusted');
+  assert.equal(sim.state.turn, 1);
+  assert.equal(sim.act('p2', { type: 'done' }), true, 'the speaker on a phone of their own: unchanged');
+  assert.equal(sim.state.turn, 2);
+
+  const saved = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
+  const queue = [];
+  globalThis.setTimeout = (f) => { queue.push(f); return queue.length; };
+  globalThis.clearTimeout = () => {};
+  try {
+    await withUndercoverUi(async (ui, comps) => {
+      const s2 = mk(5, { seed: 481 });
+      rig(s2, 'CCCCU', { starter: 'p1' });
+      ready(s2);
+      const btn = (root, text) => uFind(root, (n) => n.tag === 'button' && uShown(n) && n.textContent.includes(text))[0];
+      const t = mountUndercoverShared(ui, comps, s2, null);
+      const who = () => uFind(t.root, (n) => n.cls.has('uc-who'))[0];
+      assert.ok(!btn(t.root, '玩家1 講完喇').disabled, 'the first paint is live (nothing was just tapped)');
+      uClick(btn(t.root, '玩家1 講完喇'));
+      assert.ok(s2.act('p1', { ...t.log.table[0], seats: all, table: true }));
+      t.show();
+      const next = btn(t.root, '玩家2 講完喇');
+      assert.ok(next.disabled, 'rebuilt in the same spot for the next speaker, dead for a moment');
+      assert.ok(who().cls.has('is-new'), 'the new name pulses meanwhile');
+      uClick(next);
+      assert.equal(t.log.table.length, 1, 'a double tap does not end 玩家2\'s turn');
+      t.show({ tableLocked: true });
+      assert.ok(next.disabled);
+      while (queue.length) queue.shift()();
+      t.show();
+      assert.ok(!next.disabled && !who().cls.has('is-new'), 'live again after the lock');
+      uClick(next);
+      assert.deepEqual(t.log.table.at(-1), { type: 'done', at: 'speak:1:round:1' }, 'each tap carries the step it was made on');
+      t.handle.destroy();
+
+      // a phone of your own: the speaker's 講完喇 is live the moment the turn reaches them (multi-phone unchanged)
+      const s3 = mk(5, { seed: 482 });
+      rig(s3, 'CCCCU', { starter: 'p1' });
+      ready(s3);
+      const root = new UEl('div');
+      const own = ui.mount(root, {
+        me: 'p2', players: s3.players, isHost: false, meta, config: s3.state.cfg,
+        send: () => Promise.resolve(true), now: () => s3.now, sfx() {}, toast() {}, components: comps,
+      });
+      const showOwn = () => own.update(s3.view('p2'), { focus: s3.focus(), paused: false });
+      showOwn();
+      s3.act('p1', { type: 'done', at: 'speak:1:round:0' });
+      showOwn();
+      assert.ok(!btn(root, '講完喇').disabled, 'no lock on a phone of your own');
+      own.destroy();
+    });
+  } finally {
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+  }
+});
+
+test('undercover one phone: re-run #2 N2 — the 💡 role list names only the roles dealt (no 白板 line without a white card)', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js');
+  const std = mk(5, { seed: 483 });
+  for (const pid of [null, 'p1']) {
+    const h = hintRoles(std.view(pid), rules);
+    assert.equal(h.inPlay, true);
+    assert.deepEqual(h.roles.map((r) => r.name), ['平民', '臥底'], `${pid}: ${h.roles.map((r) => r.name)}`);
+    assert.deepEqual(h.roles.map((r) => r.count), [4, 1]);
+  }
+  const withBlank = mk(8, { seed: 484, cfg: { preset: 'blank' } });
+  const names = hintRoles(withBlank.view(null), rules).roles.map((r) => r.name);
+  assert.ok(names.includes('白板'), names.join());
+  const onlyBlank = mk(6, { seed: 485, cfg: { undercovers: 0, blanks: 1 } });
+  assert.deepEqual(hintRoles(onlyBlank.view(null), rules).roles.map((r) => r.name), ['平民', '白板']);
 });
 
 test('undercover ui one phone: a shared phone that is not the whole table taps 開始投票 once, for its own seats', async () => {
@@ -2736,7 +2831,16 @@ test('undercover, one phone through the real play screen: the private deal walk,
     assert.ok(ph.button('講完喇').disabled, 'locked while the card is up (U5)');
     await ph.tapGate();
     assert.ok(!ph.text().includes('輪到你'), ph.text());
-    for (const pid of ['p1', 'p2', 'p3', 'p4']) await ph.tapIn(`${name(pid)} 講完喇`);
+    // re-run #2 N1: the next speaker's button is rebuilt in the same spot, dead for a moment — a double tap ends one turn
+    for (const pid of ['p1', 'p2', 'p3', 'p4']) {
+      await ph.tapIn(`${name(pid)} 講完喇`);
+      if (pid === 'p4') break;
+      const next = ph.button('講完喇');
+      assert.ok(next.disabled && next.textContent.includes('講完喇') && !next.textContent.includes(name(pid)), next.textContent);
+      assert.equal(sim.state.turn, ['p1', 'p2', 'p3'].indexOf(pid) + 1, 'one turn per tap');
+      await shWait(1600);
+      await ph.render();
+    }
     assert.equal(phase(sim), 'discuss');
     assert.equal(ph.gate(), null, 'still in the middle: no card for a public step that follows a public step');
     // 開始投票: the whole table's call, so a second tap

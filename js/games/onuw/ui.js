@@ -603,7 +603,8 @@ function buildVote(E) {
     update(view) {
       // 💤 an absent seat casts no vote (D4): its phone says so instead of offering a ballot or the circle
       const benched = !!view.my?.absent && view.myVote === undefined;
-      setText(lead, benched ? T.absentSelf : T.voteLead);
+      // a shared phone (re-run R5): the ballots go round one by one — quiet until the last one is in
+      setText(lead, benched ? T.absentSelf : E.shared() ? T.voteLeadShared : T.voteLead);
       setHidden(panel.el, benched);
       panel.update({
         players: E.markedPlayers(view), candidates: view.candidates ?? [], me: api.me,
@@ -767,8 +768,13 @@ function buildTable(E) {
   const list = makeRoleList();
   const away = makeAway(E);
   // §7.1 the phone in the middle of a shared table: by day the table's own taps (#5, #24) — each one counts for every
-  // seat on the phone; locked while the 「擺返中間」 card is up (U5)
-  const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-table-ready', type: 'button', onclick: () => api.tableSend?.({ type: 'ready-vote', on: true }) });
+  // seat on the phone; locked while the 「擺返中間」 card is up (U5). 夠鐘投票 ends the talk for everybody, so on a
+  // whole-table phone the shell asks for a second tap, naming the time still on the clock (re-run R2)
+  const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-table-ready', type: 'button', onclick: () => {
+    const dl = current?.phase === 'day' ? current.deadline : null;
+    const now = typeof api.clockNow === 'function' ? api.clockNow() : api.now();
+    api.tableSend?.({ type: 'ready-vote', on: true }, { confirm: T.tableReadyConfirm(dl != null ? dl - now : NaN), node: readyBtn });
+  } });
   const ringBtn = h('button', { class: 'btn btn-ghost on-table-ring', type: 'button', onclick: (e) => {
     if (typeof api.confirm === 'function' && !api.confirm(T.tableRingConfirm, e?.currentTarget ?? ringBtn)) return;
     api.tableSend?.({ type: 'ring', on: true });
@@ -807,7 +813,7 @@ function buildTable(E) {
           break;
         case 'vote':
           setText(title, T.tableVote);
-          setText(body, T.tableVoteBody);
+          setText(body, E.shared() ? T.tableVoteBodyShared : T.tableVoteBody);
           setText(count, T.votedCount(view.progress.done, view.progress.total));
           break;
         default: break;
@@ -817,7 +823,8 @@ function buildTable(E) {
       // 「全枱同意圈票」 needs every seat at once: only a phone holding the whole table can say it in one tap
       setHidden(ringBtn, !(table && E.whole() && view.opts?.ringVote));
       if (table) {
-        setText(readyBtn, E.whole() ? T.tableReady : T.tableReadyPart);
+        // not while the shell has it armed (「再㩒一次：…」): a repaint would hide the question
+        if (!readyBtn.classList.contains('armed')) setText(readyBtn, E.whole() ? T.tableReady : T.tableReadyPart);
         readyBtn.disabled = !!ctx?.tableLocked;
         setText(ringBtn, T.tableRing);
         ringBtn.disabled = !!ctx?.tableLocked;

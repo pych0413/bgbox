@@ -97,6 +97,8 @@ export const meta = {
   minutes: [25, 60],
   narration: 'required',             // the night is called out; 讀稿 and 靜音 work on phones of their own
   eyesClosed: true,                  // U1: the night needs eyes closed → no 靜音 on one phone (DESIGN §7.1)
+  nightAmbient: true,                // U8 (re-run #7): a whole-table phone plays a neutral noise bed all night, so the
+                                     // reach for the phone at the witch / seer steps is not heard against silence
   paperMode: false,
   singleDevice: 'partial',           // phone in the middle; wolves share it, speeches and votes go seat by seat
   banks: [],
@@ -769,7 +771,7 @@ function panel(s, pid) {
       const lines = [];
       if (s.potion.save) {
         lines.push(atk ? W.victim(nm(s, atk), atk === pid) : W.victimNone);
-        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave);
+        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave(s.cfg.save));
         if (atk) P.tags[atk] = '💊';
       } else lines.push(W.victimHidden);
       // Her pick names the potion it spends, on her button and on a line of her own panel (a tentative pick is
@@ -875,6 +877,9 @@ function nightAct(s, pid, a) {
   let changed = selectAct(s, pid, own, s.nt.sel, P);
   for (const t of mates) changed = selectAct(s, t, own, s.nt.sel, panel(s, t)) || changed;
   if (!changed) return s;
+  // re-run #3c: a tap from ONE shared screen counts for every wolf on it, and the screen cannot tell whose finger it was —
+  // the recap names them as one pick (「一齊揀」), never each wolf as if they had chosen it themselves
+  if (mates.length) s.nt.wolfGroup = [...new Set([...(s.nt.wolfGroup ?? []), pid, ...mates])].sort(bySeat(s));
   if (c.step === 'seer' && P.real && s.nt.sel[pid]?.lock) revealSeer(s, pid);
   return s;
 }
@@ -929,6 +934,8 @@ function commit(s, ctx) {
       }
       s.nt.attacked = target;
       rec.wolves = { picks, target, how };
+      const together = (s.nt.wolfGroup ?? []).filter((w) => ws.includes(w));
+      if (together.length > 1) rec.wolves.shared = together;
       break;
     }
     case 'witch': {
@@ -1087,6 +1094,9 @@ function voteAct(s, pid, a, ctx) {
   if (!('target' in a)) return s;
   if (a.target !== null && !(isStr(a.target) && c.cands.includes(a.target))) return s;
   c.votes[pid] = a.target;
+  // one phone (re-run #5): 🤖 代佢做 at a vote gate casts an abstain the seat never chose — the 票型 says so
+  if (s.cfg.passPhone && a.proxy === true && a.target === null) (c.proxy ??= {})[pid] = true;
+  else if (c.proxy) delete c.proxy[pid];
   if (c.voters.every((p) => p in c.votes)) return finishRun(s, ctx);
   return s;
 }
@@ -1099,7 +1109,7 @@ function resolveVote(s, ctx) {
   const top = t.top.slice().sort(bySeat(s));
   const rec = {
     k: 'vote', d: s.d, round: c.round,
-    votes: c.voters.map((p) => ({ by: p, to: votes[p] })), counts: { ...t.counts },
+    votes: c.voters.map((p) => (c.proxy?.[p] && votes[p] === null ? { by: p, to: null, proxy: true } : { by: p, to: votes[p] })), counts: { ...t.counts },
     outcome: 'none', pid: null, tied: [],
   };
   const say = { k: 'say', kind: 'tally', round: c.round, counts: { ...t.counts }, votes: rec.votes, outcome: 'none', pid: null, tied: [] };
@@ -1300,7 +1310,9 @@ function cue(state) {
   // the two public facts the table reads off the screen get a floor: the dawn result, and the 票型 (longer per ballot)
   const minMs = c.k === 'dawn' ? Math.max(S.DAWN_MIN_MS, S.cueMinMs(text))
     : c.k === 'say' && c.kind === 'tally' ? Math.max(S.tallyMinMs(c.votes.length), S.cueMinMs(text))
-      : S.cueMinMs(text);
+      // one phone (re-run #4): every night's 天黑 line gives the last holder the same time to put the phone back
+      : c.k === 'night' && c.step === 'begin' && c.stage === 'cue' && s.cfg.passPhone ? Math.max(S.BEGIN_PASS_MIN_MS, S.cueMinMs(text))
+        : S.cueMinMs(text);
   return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs };
 }
 
@@ -1385,7 +1397,9 @@ function autoAct(state, pid) {
     case 'speech': case 'words':
       return c.stage === 'run' && c.pid === pid ? { type: 'done' } : null;
     case 'vote':
-      return c.stage === 'run' && c.voters.includes(pid) && !(pid in c.votes) ? { type: 'vote', target: null } : null;
+      // one phone: the host's 🤖 代佢做 at a vote gate — the abstain is marked as proxied in the 票型 (re-run #5)
+      if (!(c.stage === 'run' && c.voters.includes(pid) && !(pid in c.votes))) return null;
+      return s.cfg.passPhone ? { type: 'vote', target: null, proxy: true } : { type: 'vote', target: null };
     default: return null;
   }
 }
@@ -1576,6 +1590,8 @@ function view(state, pid) {
     night: s.phase === 'night' && !isMod,
     say: stageText ?? '',
     board: ROLE_IDS.filter((id) => (s.cfg.roles[id] ?? 0) > 0).map((id) => ({ id, count: s.cfg.roles[id] })),
+    // the 💡 sheet lists only the roles on this board (re-run #2, DESIGN 15.2): public, every seat and the table alike
+    rolesInPlay: ROLE_IDS.filter((id) => (s.cfg.roles[id] ?? 0) > 0).map((id) => ({ id, count: s.cfg.roles[id] })),
     opts: {
       win: s.cfg.win, save: s.cfg.save, open: s.cfg.open, explode: s.cfg.selfExplode, spectate: !!s.cfg.spectate,
       guardStack: s.cfg.guardStack, hasHunter: hasRole(s, 'hunter'), preset: s.cfg.preset, pace: s.cfg.pace,
@@ -1589,7 +1605,7 @@ function view(state, pid) {
   // who left last night (seat order, no cause) and every vote so far with its 票型.
   if (s.lastNight && s.lastNight.n === s.d && DAY_PHASES.has(s.phase)) v.lastNight = { n: s.lastNight.n, deaths: s.lastNight.deaths.slice() };
   v.voteLog = s.rec.filter((r) => r.k === 'vote').map((r) => ({
-    d: r.d, round: r.round, votes: r.votes.map((x) => ({ by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
+    d: r.d, round: r.round, votes: r.votes.map((x) => (x.proxy ? { by: x.by, to: x.to, proxy: true } : { by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
   }));
   // …and the same 票型 as the shell's public fold (RecentFold under the game, closed until tapped), newest first, by day
   if (v.voteLog.length && DAY_PHASES.has(s.phase)) {
@@ -1638,7 +1654,7 @@ function view(state, pid) {
       const say = { kind: c.kind };
       if (c.kind === 'tally') {
         say.round = c.round; say.counts = { ...c.counts }; say.outcome = c.outcome;
-        say.votes = c.votes.map((x) => ({ by: x.by, to: x.to }));
+        say.votes = c.votes.map((x) => (x.proxy ? { by: x.by, to: x.to, proxy: true } : { by: x.by, to: x.to }));
         say.pid = c.pid; say.tied = c.tied.slice();
       } else if (c.kind === 'shot') {
         say.by = c.by; say.pid = c.pid; if (s.cfg.open) say.role = s.role[c.pid];

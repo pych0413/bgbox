@@ -18,6 +18,11 @@ const START_SCORE = 3;         // rulebook: everybody starts on a 3-point token 
 const MISS_PENALTY = 3;        // 收皮啦 on the honest player
 const MAX_SWAPS = 3;           // 換題 per round (the rulebook just says "redraw"; this only stops endless fishing)
 const OFFICIAL_READ = 9;       // printed rulebook: the eyes-closed peek lasts 9 seconds
+// One phone (passPhone): the speaker on the floor this long or more counts as 講完 when the 諗樣 calls somebody else
+// (👉 叫佢講, re-run #2 N4) — under it they were only "up" by the queue and go back to waiting, as before.
+const FLOOR_MS = 8000;
+// voidRound kinds that keep the 諗樣 and deal again (fresh term, roles, order); the others hand the seat on
+const REDEALS = ['redeal', 'unread', 'away'];
 const LEVEL_MODES = ['mix', 'judge', '1', '2', '3'];
 // Who decides the order in which the 玩家 explain (rulebook: the 諗樣, so that is the default):
 //   judge  諗樣揀 — the queue is only a suggestion; the 諗樣 may call anybody at any time
@@ -121,10 +126,11 @@ export const rules = {
     { title: '有人唔喺度', body:
       '房主可以：\n'
       + '・🗑️ 呢輪作廢：唔計分，重新派題目、身份同次序。如果卡喺諗樣度（揀難度、開始睇卡、揀人），就換下一位做諗樣，佢今個圈最尾先做。\n'
-      + '・💤 唔喺度：唔再等佢。佢係諗樣就換人做；輪到佢解釋就跳過；之後唔派卡俾佢。返嚟再㩒一下就得。' },
+      + '・💤 唔喺度：唔再等佢。佢係諗樣就換人做；輪到佢解釋就跳過；之後唔派卡俾佢。返嚟再㩒一下就得。\n'
+      + '一部手機：諗樣唔喺度，🤖 代佢做就呢輪作廢、換下一位；未睇卡嘅人唔喺度，就等其他人睇完再俾佢睇，再唔喺度（或者 💤）就重新派過。' },
     { title: '用一部手機玩', body:
       '要開「一部手機輪流睇」（得一部手機會自動開）。睇卡嗰陣部手機由諗樣左手邊開始逐個傳：㩒「開始睇卡」，每人都係睇同樣秒數，夠鐘自動冚返，再交俾下一位。\n'
-      + '之後部手機交返俾諗樣：解釋嗰陣佢拎住，有人講完就㩒「✅ 講完 · 下一位」；人唔喺度先㩒「⏭ 跳過」。'
+      + '之後部手機交返俾諗樣：解釋嗰陣佢拎住，有人講完就㩒「✅ 講完 · 下一位」或者直接㩒下一個嘅名；人唔喺度先㩒「⏭ 跳過」。'
       + '想睇返自己係咩，㩒上面個名換人，睇完擺返中間。\n'
       + '揭曉嗰陣部手機擺返枱中間，大家一齊睇，睇完任何一個人㩒「下一輪」就得。' },
     { title: '小貼士', body:
@@ -359,8 +365,13 @@ const speaker = (s) => (s.phase === 'explain' ? s.round.speaker ?? null : null);
 /** Marked 💤 唔喺度 by the host (public): never waited on, dealt no card from the next deal on. */
 const isAway = (s, pid) => (s.absent ?? []).includes(pid);
 const presentOf = (s, list) => list.filter((p) => !isAway(s, p));
-/** 諗樣揀: who may be called — anybody still waiting, or somebody who was skipped (never a seat that is away). */
-const callable = (s, r, pid) => !isAway(s, pid) && (!r.spoken.includes(pid) || (r.skipped ?? []).includes(pid));
+/**
+ * 諗樣揀: who may be called — anybody still waiting, or somebody who was skipped (never a seat that is away). One phone
+ * (passPhone, re-run #2 N4): also a 玩家 who has spoken (✅ stays), for a follow-up — the rules let the 諗樣 question
+ * anybody, and the speaker cannot reach a button of their own there.
+ */
+const callable = (s, r, pid) => !isAway(s, pid)
+  && (!r.spoken.includes(pid) || (r.skipped ?? []).includes(pid) || !!s.cfg.passPhone);
 /** Is the round in play the last one? (A turn of a seat that is away is dropped when it comes up.) */
 const isLast = (s) => !s.judges.slice(s.roundNo).some((p) => !isAway(s, p));
 /** Rounds this game will have, as far as anybody can tell now. */
@@ -420,14 +431,26 @@ function showTerm(s, ctx) {
   clearTimer(s);
 }
 
+/**
+ * Pass the phone: who reads next — the first reader round the table who has not read (never a seat that is away); a
+ * reader passed over by 代佢做 (`later`, re-run #2 N2) comes after everybody else, so the look is offered again once.
+ */
+function nextReader(s) {
+  const r = s.round;
+  const open = (p) => !r.readDone.includes(p) && !isAway(s, p);
+  const later = r.later ?? [];
+  return r.readers.find((p) => open(p) && !later.includes(p)) ?? later.find(open) ?? null;
+}
+
 /** The 9-second step. Together: one window for every phone. Pass: one equal window per reader, in turn. */
 function startRead(s, ctx) {
   const r = s.round;
   s.phase = 'read';
   r.readDone = [];
   r.readStarted = false;
+  r.later = [];
   if (s.cfg.passPhone) {
-    r.reader = r.readers.find((p) => !isAway(s, p)) ?? null;
+    r.reader = nextReader(s);
     clearTimer(s);
   } else {
     r.reader = null;
@@ -446,7 +469,7 @@ function endPeek(s, ctx) {
   const r = s.round;
   r.readDone.push(r.reader);
   r.readStarted = false;
-  const next = r.readers.find((p) => !r.readDone.includes(p) && !isAway(s, p)) ?? null;   // a seat that is away is passed over
+  const next = nextReader(s);   // a seat that is away is passed over
   r.reader = next;
   if (next) clearTimer(s);
   else startExplain(s, ctx);
@@ -454,6 +477,7 @@ function endPeek(s, ctx) {
 
 /** Per-speaker clock. Only when somebody is actually on the floor: 「自己決定」 has no current speaker, so no clock. */
 function setTurnTimer(s, ctx) {
+  s.round.floorAt = typeof ctx?.now === 'number' ? ctx.now : null;   // when the one on the floor got it (N4)
   if (s.cfg.speakSecs > 0 && speaker(s)) {
     s.deadline = ctx.now + s.cfg.speakSecs * 1000;
     s.timerLabel = `${nameOf(s, speaker(s))} 講緊`;
@@ -526,9 +550,18 @@ function endTurn(s, ctx, who = null, skip = false) {
 /**
  * The 諗樣 decides who speaks next (rulebook: any order he likes). The interrupted speaker goes back to waiting;
  * a skipped player called back gets a full turn again.
+ * One phone (passPhone, re-run #2 N4): calling the next one by name is how the 諗樣 who holds the phone moves on, and
+ * the speaker cannot tap 我講完 there — so a speaker who has had the floor for FLOOR_MS or more is ✅ 已講 (講完);
+ * a ✅ player called again for a follow-up keeps their ✅.
  */
 function callSpeaker(s, ctx, target) {
   const r = s.round;
+  const cur = r.speaker;
+  if (s.cfg.passPhone && cur && cur !== target && typeof ctx?.now === 'number' && typeof r.floorAt === 'number'
+    && ctx.now - r.floorAt >= FLOOR_MS) {
+    if (!r.spoken.includes(cur)) r.spoken.push(cur);
+    drop(r.skipped ??= [], cur);
+  }
   if (r.skipped?.includes(target)) { drop(r.skipped, target); drop(r.spoken, target); }
   r.turnNo = (r.turnNo ?? 0) + 1;
   r.speaker = target;
@@ -642,19 +675,23 @@ function deferSlot(s, i) {
  *   'stuck'  — the 諗樣 is the stuck seat: the seat moves on to the next 諗樣, and the stuck one's turn goes to the
  *              end of this lap (deferSlot)
  *   'absent' — the 諗樣 is away: the seat moves on and their turn is dropped
+ *   'unread' — one phone: a reader passed over twice by 代佢做 never looked (`pid`), so maybe nobody knows the truth —
+ *              same 諗樣, dealt again whoever that reader was (re-run #2 N2)
+ *   'away'   — one phone: a reader marked 💤 before their look (`pid`) — same 諗樣, dealt again without them
  * A scored round (reveal) or a finished game is left alone. With nobody left to judge, the game ends.
  */
-function voidRound(s, ctx, how) {
+function voidRound(s, ctx, how, pid = null) {
   const r = s.round;
   if (!r || s.phase === 'reveal' || s.phase === 'over') return s;
   const entry = { n: r.n, judge: r.judge, term: r.term?.term ?? null, how };
-  if (how !== 'redeal') {
+  if (pid) entry.pid = pid;
+  if (!REDEALS.includes(how)) {
     entry.kept = how === 'stuck' && deferSlot(s, s.roundNo - 1);
     if (!entry.kept) removeSlot(s, s.roundNo - 1);
   }
   s.voids.push(entry);
   s.roundNo -= 1;
-  nextRound(s, ctx, { how, judge: r.judge, kept: !!entry.kept });
+  nextRound(s, ctx, { how, judge: r.judge, kept: !!entry.kept, ...(pid ? { pid } : {}) });
   return s;
 }
 
@@ -684,7 +721,9 @@ function redealRoles(s, ctx) {
  * 💤 (@absent) and back (@present), host only, public. An absent seat is not waited on for the rest of the game:
  *   the 諗樣 → the round is void and the seat moves on (their turn is dropped);
  *   before the read (level, term) → the cards are dealt again without them (nothing private is out yet);
- *   pass-the-phone read → their peek is passed over;   explaining → their turn is skipped (⏭, never ✅ 已講);
+ *   pass-the-phone read → before their look the round is dealt again without them ('away': whoever they were, so
+ *   nothing leaks — they might have held the only look at the truth, re-run #2 N2); mid-look it counts as read;
+ *   explaining → their turn is skipped (⏭, never ✅ 已講);
  *   揀人 → their card stands (they can still be picked).   From the next deal on: no card, no turn as 諗樣.
  * Never automatic on a role: voiding only when the absent seat is the 老實人 would tell the table who it was (the
  * host, who cannot see roles, may still void). Refused (state unchanged) if fewer than 3 seats would be left.
@@ -707,7 +746,11 @@ function setAway(s, ctx, pid, away) {
   if (!r.explainers.includes(pid)) return s;
   switch (s.phase) {
     case 'level': case 'term': redealRoles(s, ctx); break;
-    case 'read': if (s.cfg.passPhone && r.reader === pid) endPeek(s, ctx); break;
+    case 'read':
+      if (!s.cfg.passPhone || r.readDone.includes(pid)) break;
+      if (r.reader === pid && r.readStarted) endPeek(s, ctx);
+      else voidRound(s, ctx, 'away', pid);
+      break;
     case 'explain':
       if (s.cfg.speakOrder === 'free') { if (!r.spoken.includes(pid)) endTurn(s, ctx, pid, true); }
       else if (r.speaker === pid) endTurn(s, ctx, null, true);
@@ -776,11 +819,15 @@ function rawCue(s) {
   const k0 = r.key ?? r.n;   // a redeal (呢輪作廢) keeps the round number but gets fresh cue ids
   switch (s.phase) {
     case 'level':
-      return { id: `r${k0}:level`, text: S.cueLevel(r.n, nm(r.judge)), minMs: 2500 };
-    case 'term':
+      return { id: `r${k0}:level`, minMs: 2500,
+        text: S.cueLevel(r.n, nm(r.judge), S.redoSpoken(r.redo, nm, r.judge, plannedTotal(s))) };
+    case 'term': {
+      const intro = s.cfg.levelMode !== 'judge' && r.swaps === 0;
       return { id: `r${k0}:term:${r.swaps}`, minMs: 3000,
-        text: S.cueTerm({ n: r.n, judge: nm(r.judge), term: r.term.term, hint: r.term.hint,
-          intro: s.cfg.levelMode !== 'judge' && r.swaps === 0, swapped: r.swaps > 0 }) };
+        text: S.cueTerm({ n: r.n, judge: nm(r.judge), term: r.term.term, hint: r.term.hint, intro, swapped: r.swaps > 0,
+          // re-run #2 N3: a fresh deal says why, and how many rounds there are now (in 語音 nobody reads the screen)
+          redo: intro ? S.redoSpoken(r.redo, nm, r.judge, plannedTotal(s)) : '' }) };
+    }
     case 'read':
       return { id: `r${k0}:read`, minMs: 1500,
         text: S.cueRead({ readSecs: s.cfg.readSecs, pass: s.cfg.passPhone, first: nm(r.readers[0]) }) };
@@ -881,6 +928,22 @@ function act(state, msg, ctx) {
       return s;
     case 'peek':
       if (s.phase === 'read' && s.cfg.passPhone && pid === r.reader && !r.readStarted) startPeek(s, ctx);
+      return s;
+    case 'later': {
+      // 代佢做 for a reader who is not there (one phone, re-run #2 N2): nobody can look for them, and their look may be
+      // the only one at the truth. The first time it goes to the end of the queue (offered again once everybody else
+      // has read); the second time the round is dealt again — whoever they were, so nothing leaks.
+      if (s.phase !== 'read' || !s.cfg.passPhone || pid !== r.reader || r.readStarted) return s;
+      r.later ??= [];
+      if (r.later.includes(pid)) return voidRound(s, ctx, 'unread', pid);
+      r.later.push(pid);
+      r.reader = nextReader(s);
+      return s;
+    }
+    case 'step-down':
+      // 代佢做 for a 諗樣 who is not there (one phone, re-run #2 N1): nobody can judge for them, so the round is void and
+      // the seat moves on (their turn goes to the end of this lap, once) — never a ghost round of random taps
+      if (isJudge && s.cfg.passPhone && ['level', 'term', 'explain', 'judge'].includes(s.phase)) return voidRound(s, ctx, 'stuck');
       return s;
     case 'done': {
       if (s.phase !== 'explain') return s;
@@ -1108,7 +1171,7 @@ function focus(state) {
       if (!pass) return { pids: presentOf(state, r.explainers) };
       if (!r.reader) return { pids: [] };
       const round = r.readers.filter((p) => r.readDone.includes(p) || !isAway(state, p));
-      return { pids: [r.reader], label: `睇卡 ${round.indexOf(r.reader) + 1}/${round.length}` };
+      return { pids: [r.reader], label: `睇卡 ${r.readDone.length + 1}/${round.length}` };
     }
     case 'level': return judgeStep('揀難度');
     case 'term': return judgeStep('睇題目');
@@ -1215,18 +1278,22 @@ function autoAct(state, pid, ctx) {
   const r = s.round;
   const isJudge = pid === r.judge;
   const rnd = (n) => (ctx && ctx.rng ? rint(ctx.rng, n) : 0);
+  // One phone (passPhone, re-run #2 N1/N2): 代佢做 never plays a part nobody is there to play. An absent 諗樣 steps
+  // down (the round is void, the seat moves on); an absent reader's look is offered again later, then the round is
+  // dealt again — a window running with nobody at the phone could be the only look at the truth.
+  const pass = !!s.cfg.passPhone;
+  if (pass && isJudge && ['level', 'term', 'explain', 'judge'].includes(s.phase)) return { type: 'step-down' };
   switch (s.phase) {
     case 'level': return isJudge ? { type: 'level', level: 1 + rnd(3) } : null;
     case 'term': return isJudge ? { type: 'start' } : null;
-    case 'read': return s.cfg.passPhone && pid === r.reader && !r.readStarted ? { type: 'peek' } : null;
+    case 'read': return pass && pid === r.reader && !r.readStarted ? { type: 'later' } : null;
     case 'explain':
       // a 玩家 who is not there did not 「講完」: their turn ends as ⏭ 跳過咗 ('away'), and they get it back once
       if (s.cfg.speakOrder === 'free') {
         if (isJudge) return { type: 'done', target: r.explainers.find((p) => !r.spoken.includes(p)) };
         return r.spoken.includes(pid) ? null : { type: 'away' };
       }
-      // 代佢做 for the 諗樣 never claims the speaker finished: one phone needs the explicit skip
-      if (isJudge) return s.cfg.passPhone ? { type: 'done', skip: true } : { type: 'done' };
+      if (isJudge) return { type: 'done' };   // (one phone: the 諗樣 steps down, above)
       return pid === speaker(s) ? { type: 'away', turn: r.turnNo ?? 0 } : null;
     case 'judge': return isJudge ? { type: 'pick', target: r.explainers[rnd(r.explainers.length)] } : null;
     case 'reveal': return isJudge ? { type: 'next' } : null;

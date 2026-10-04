@@ -791,8 +791,10 @@ export function mount(root, api) {
    * phone lying in the middle, the table screen itself: one table tap, api.tableSend).
    */
   const leaderAway = (v) => (v.absent ?? []).includes(v.leader);
-  const leads = (v) => (v.me !== null && (v.me === v.leader || (leaderAway(v) && !(v.absent ?? []).includes(v.me))))
-    || (v.me === null && !!api.atTable && leaderAway(v));
+  /** Anybody may tap 繼續: the leader is 💤, or one phone lies in the middle (re-run F2: the result is the table's). */
+  const anyContinues = (v) => (typeof v.tableContinue === 'boolean' ? v.tableContinue : leaderAway(v));
+  const leads = (v) => (v.me !== null && (v.me === v.leader || (anyContinues(v) && !(v.absent ?? []).includes(v.me))))
+    || (v.me === null && !!api.atTable && anyContinues(v));
 
   function keyFor(v) {
     const seat = v.me !== null;

@@ -105,14 +105,37 @@ export function srcLabel(src) {
 
 // ---------- narration cues ----------
 
-export function cueLevel(n, judge) {
-  return `第 ${n} 輪，${judge}做諗樣。${judge}，請揀題目難度：星愈多，提示愈少，分數愈高。`;
+/** `redo` (redoSpoken): why this is a fresh deal — said first, and then it already names the 諗樣. */
+export function cueLevel(n, judge, redo = '') {
+  return `${redo || `第 ${n} 輪，${judge}做諗樣。`}${judge}，請揀題目難度：星愈多，提示愈少，分數愈高。`;
 }
 
-export function cueTerm({ n, judge, term, hint, intro, swapped }) {
-  const head = intro ? `第 ${n} 輪，${judge}做諗樣。` : '';
-  const swap = swapped ? '換咗題。' : '';
-  return `${head}${swap}題目係「${term}」。${hintSpoken(hint)}有冇人已經識？識就出聲換題；冇人識就由${judge}㩒開始睇卡。`;
+export function cueTerm({ n, judge, term, hint, intro, swapped, redo = '' }) {
+  // re-run #2 N7: after a 換題 only the new term and the question, not the whole prompt again
+  if (swapped) return `換咗題：「${term}」。${hintSpoken(hint)}仲有冇人識？冇人識就由${judge}㩒開始睇卡。`;
+  const head = intro ? redo || `第 ${n} 輪，${judge}做諗樣。` : '';
+  return `${head}題目係「${term}」。${hintSpoken(hint)}有冇人已經識？識就出聲換題；冇人識就由${judge}㩒開始睇卡。`;
+}
+
+/**
+ * Spoken at the start of a fresh deal (re-run #2 N3): in 語音 the table only hears that the round starts again and why,
+ * and — when a 諗樣 turn was lost — how many rounds the game has now. '' for a normal round.
+ * `redo` = { how, judge, kept, pid? }; `judgeNow` = this deal's 諗樣; `total` = rounds planned now.
+ */
+export function redoSpoken(redo, nameOf, judgeNow, total) {
+  if (!redo) return '';
+  const J = nameOf(redo.judge);
+  const N = nameOf(judgeNow);
+  const P = redo.pid ? nameOf(redo.pid) : '';
+  switch (redo.how) {
+    case 'absent': return `${J}唔喺度，呢輪重新嚟過，由${N}做諗樣，一共 ${total} 輪。`;
+    case 'stuck': return redo.kept
+      ? `呢輪重新嚟過：${J}遲啲先做諗樣，而家由${N}做。`
+      : `呢輪重新嚟過，由${N}做諗樣，一共 ${total} 輪。`;
+    case 'unread': return `${P}冇睇到張卡，呢輪重新派過，都係${N}做諗樣。`;
+    case 'away': return `${P}唔喺度，呢輪重新派過，都係${N}做諗樣。`;
+    default: return `呢輪重新派過，都係${N}做諗樣。`;
+  }
 }
 
 export function cueRead({ readSecs, pass, first }) {
@@ -202,6 +225,8 @@ export function hintFor(c) {
       return honest ? '等諗樣揀人：揀中你，你同諗樣都有分。' : '等諗樣揀人：揀中你就係呃到佢，淨係你有分！';
     case 'reveal':
       if (c.role === 'judge') return `睇吓答案同分數，㩒「${c.last ? '睇總結' : '下一輪'}」繼續。`;
+      // one phone (re-run #2 N8): the phone lies in the middle, and anybody taps the one 下一輪 for the table
+      if (c.pass) return `大家睇完，任何一個㩒「${c.last ? '睇總結' : '下一輪'}」就得。`;
       return '睇吓真正解釋同分數，等諗樣繼續。';
     default:
       return '玩完喇！最高分嘅贏，下面有每輪發生咩事。';
@@ -324,8 +349,10 @@ export function redoLine(redo, nameOf, judgeNow) {
   const J = nameOf(redo.judge);
   const N = nameOf(judgeNow);
   switch (redo.how) {
-    case 'absent': return `💤 ${J} 唔喺度：呢鋪由 ${N} 做諗樣`;
+    case 'absent': return `💤 ${J} 唔喺度：呢輪重新嚟過，由 ${N} 做諗樣，少咗一輪`;
     case 'stuck': return redo.kept ? `🗑️ 上一鋪作廢：${J} 遲啲先做諗樣，呢鋪由 ${N} 做` : `🗑️ 上一鋪作廢：呢鋪由 ${N} 做諗樣`;
+    case 'unread': return `🗑️ 上一鋪作廢：${nameOf(redo.pid)} 冇睇到張卡，新題目、重新派身份`;
+    case 'away': return `💤 ${nameOf(redo.pid)} 唔喺度：新題目、重新派身份`;
     default: return '🗑️ 上一鋪作廢：新題目、重新派身份';
   }
 }
@@ -338,6 +365,8 @@ export function voidLine(x, nameOf) {
     case 'skip': return `💤 第 ${x.n} 輪：${J} 唔喺度，冇做諗樣`;
     case 'absent': return `💤 第 ${x.n} 輪作廢${t}：${J} 唔喺度，換人做諗樣`;
     case 'stuck': return `🗑️ 第 ${x.n} 輪作廢${t}：${J} ${x.kept ? '遲啲先做諗樣' : '今個圈冇做到諗樣'}`;
+    case 'unread': return `🗑️ 第 ${x.n} 輪作廢${t}：${nameOf(x.pid)} 冇睇到張卡，重新派過（諗樣 ${J}）`;
+    case 'away': return `💤 第 ${x.n} 輪作廢${t}：${nameOf(x.pid)} 睇卡前唔喺度，重新派過（諗樣 ${J}）`;
     default: return `🗑️ 第 ${x.n} 輪作廢${t}，重新派過（諗樣 ${J}）`;
   }
 }

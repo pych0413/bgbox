@@ -363,8 +363,13 @@ function nextPresentIx(s, ix) {
   return (ix + 1) % s.n;
 }
 const nextLeaderOf = (s) => s.order[nextPresentIx(s, s.leaderIx)];
-/** Who may tap 繼續 on a public screen: the leader — or, when the leader is 💤, anybody at the table. */
-const mayContinue = (s, pid) => pid === leaderOf(s) || (isAway(s, leaderOf(s)) && !isAway(s, pid));
+/**
+ * Who may tap 繼續 on a public screen: the leader — or, when the leader is 💤, anybody at the table. On one phone
+ * (passPhone, re-run F2) anybody at the table: the result lies face up in the middle, so the table does not wait on
+ * whoever led to tap it twice.
+ */
+const tableContinues = (s) => !!s.cfg.passPhone || isAway(s, leaderOf(s));
+const mayContinue = (s, pid) => pid === leaderOf(s) || (tableContinues(s) && !isAway(s, pid));
 const sizeOf = (s) => TEAM_SIZE[s.n][s.questNo - 1];
 const needOf = (s) => failsNeeded(s.n, s.questNo);
 const wins = (s) => countOf(s.results, true);
@@ -954,11 +959,11 @@ function hintOf(s, seat) {
       return last ? H.voteLast : H.vote;
     case 'voted':
       if (s.reveal.ends) return H.votedEnd;
-      return isLeader ? H.votedLeader : H.voted;
+      return isLeader ? H.votedLeader : s.cfg.passPhone ? H.votedTable : H.voted;
     case 'quest':
       if (seat === null || !s.team.includes(seat)) return H.questOthers;
       return seat in s.cards ? H.questDone : H.questMember;
-    case 'quest-result': return isLeader ? H.resultLeader : H.result;
+    case 'quest-result': return isLeader ? H.resultLeader : s.cfg.passPhone ? H.resultTable : H.result;
     case 'lady': return seat !== null && seat === s.lady.step.holder ? H.ladyHolder : H.ladyOthers;
     case 'lady-peek': return seat !== null && seat === s.lady.step.holder ? H.peekHolder : H.peekOthers;
     case 'assassinate': return s.talk ? H.assassinateTalk : H.assassinate;
@@ -1002,6 +1007,8 @@ function view(state, pid) {
     hint: hintOf(s, seat),
     order: s.order.slice(),
     deck: s.deck.map((d) => ({ role: d.role, count: d.count })),
+    // the 💡 sheet's 「呢局有咩角色」 (DESIGN §7.1 re-run #5): the public deck
+    rolesInPlay: s.deck.map((d) => ({ id: d.role, count: d.count })),
     board: {
       sizes: TEAM_SIZE[s.n].slice(),
       need: TEAM_SIZE[s.n].map((_, i) => failsNeeded(s.n, i + 1)),
@@ -1012,6 +1019,8 @@ function view(state, pid) {
     },
     track: { rejects: s.rejects, max: MAX_REJECTS },
     leader: leaderOf(s),
+    // 繼續 on the public result screens is anybody's (one phone, or the leader is 💤) — else only the leader's
+    tableContinue: tableContinues(s),
     absent: (s.absent ?? []).slice(),   // 💤 marked absent by the host (public)
     proposalNo: s.proposalNo,
     lady: ladyPublic(s),
@@ -1146,11 +1155,12 @@ function focus(state) {
       return pids.length ? { pids, label: L.reveal } : null;
     }
     case 'pick': return { pids: [leaderOf(s)], open: true, step: `pick:${s.proposalNo}${redo}`, label: L.pick };
-    // a leader marked 💤 is never called (a shared phone's gate must not ask for them): anybody may tap 繼續
+    // a leader marked 💤 is never called (a shared phone's gate must not ask for them): anybody may tap 繼續. One phone
+    // (re-run F2): nobody is called either — the result goes to the middle, and the table taps 繼續 once
     case 'voted':
-      return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)], open: true, step: `voted:${s.proposalNo}`, label: L.voted };
+      return tableContinues(s) ? null : { pids: [leaderOf(s)], open: true, step: `voted:${s.proposalNo}`, label: L.voted };
     case 'quest-result':
-      return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)], open: true, step: `result:${s.questNo}`, label: L.result(s.questNo) };
+      return tableContinues(s) ? null : { pids: [leaderOf(s)], open: true, step: `result:${s.questNo}`, label: L.result(s.questNo) };
     case 'vote': {
       const pids = votersOf(s).filter((p) => s.votes[p] === undefined);
       return pids.length ? { pids, step: `vote:${s.proposalNo}${redo}`, label: L.vote(s.questNo) } : null;
@@ -1182,7 +1192,9 @@ function blocking(state, pid) {
   if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAway(s, pid)) return false;
   switch (s.phase) {
     case 'reveal': return s.cfg.revealSecs === 0 && !s.seen.includes(pid);   // timed: the clock ends it, `seen` is a decoy
-    case 'pick': case 'voted': case 'quest-result': return pid === leaderOf(s);
+    case 'pick': return pid === leaderOf(s);
+    // one phone: the table's pace (anybody taps 繼續), nobody in particular
+    case 'voted': case 'quest-result': return !s.cfg.passPhone && pid === leaderOf(s);
     case 'vote': return s.votes[pid] === undefined;
     case 'quest': return s.team.includes(pid) && !(pid in s.cards);
     case 'lady': case 'lady-peek': return pid === s.lady.step.holder;

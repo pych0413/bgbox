@@ -1540,10 +1540,10 @@ test('9upper: one phone — #11 the 諗樣\'s 「✅ 講完 · 下一位」 mark
     assert.deepEqual(sim.state.round.back, [second], 'only the skipped player came back');
     assert.equal(sim.view(judge).readMode, 'pass');
   }
-  // 代佢做 for the 諗樣 never claims the speaker finished
+  // 代佢做 for the 諗樣 never claims the speaker finished — on one phone it never plays the 諗樣's part at all (re-run #2 N1)
   const s2 = mkOne(4, 7);
   toExplain(s2);
-  assert.deepEqual(engine.autoAct(s2.state, J(s2), s2.ctx()), { type: 'done', skip: true });
+  assert.deepEqual(engine.autoAct(s2.state, J(s2), s2.ctx()), { type: 'step-down' });
   // phones of their own: the 諗樣's 下一位 still skips, and the speaker on the floor is still the one waited on
   const own = mk(5, 4);
   toExplain(own);
@@ -1786,13 +1786,35 @@ test('9upper: D4 — 💤 before the read deals the cards again without them; ba
   sim.host(PRESENT(away));
   assert.ok(sim.state.round.explainers.includes(away), 'dealt in again');
   assert.equal(sim.state.round.explainers.length, 4);
-  // pass-the-phone read: a reader who is away is passed over
-  const pp = mk(4, 2, { passPhone: true });
+  // pass-the-phone read (re-run #2 N2): a reader marked away before their look may have been the only one to read the
+  // truth — the round is dealt again without them (same 諗樣), whoever they were; one who already read keeps the round
+  const pp = mk(5, 2, { passPhone: true });
   toRead(pp);
+  const judge = J(pp);
   const first = pp.state.round.reader;
-  pp.host(ABSENT(first));
-  assert.notEqual(pp.state.round.reader, first);
-  assert.ok(pp.state.round.readDone.includes(first));
+  assert.equal(pp.host(ABSENT(first)), true);
+  assert.equal(phase(pp), 'term', 'a fresh deal');
+  assert.equal(J(pp), judge, 'same 諗樣');
+  assert.ok(!pp.state.round.explainers.includes(first) && !pp.state.round.readers.includes(first));
+  assert.deepEqual(pp.state.voids.at(-1), { n: 1, judge, term: pp.state.voids.at(-1).term, how: 'away', pid: first });
+  assert.deepEqual(pp.view(null).redo, { how: 'away', judge, kept: false, pid: first });
+  assert.ok(S.redoLine(pp.view(null).redo, (p) => nameOf(pp, p), judge).includes(`${nameOf(pp, first)} 唔喺度`));
+  assert.ok(pp.cue().text.startsWith(`${nameOf(pp, first)}唔喺度，呢輪重新派過`), pp.cue().text);
+  assert.equal(pp.state.totalRounds, 5, 'nobody lost a turn as 諗樣');
+  // a reader who has read (or is reading) keeps the round
+  const kept = mk(5, 3, { passPhone: true });
+  toRead(kept);
+  const r1 = kept.state.round.reader;
+  kept.act(r1, { type: 'peek' });
+  const r2 = kept.state.round.readers.find((p) => p !== r1);
+  kept.advance();
+  assert.ok(kept.state.round.readDone.includes(r1));
+  kept.host(ABSENT(r1));
+  assert.equal(phase(kept), 'read', 'already read: the round stands');
+  kept.act(kept.state.round.reader, { type: 'peek' });
+  assert.equal(kept.host(ABSENT(kept.state.round.reader)), true);
+  assert.equal(phase(kept), 'read', 'mid-look counts as read');
+  assert.ok(kept.state.round.readDone.includes(r2));
 });
 
 test('9upper: D4 — 💤 is refused when fewer than 3 seats would be left; an absent 諗樣 on the reveal lets anybody go on', () => {
@@ -1866,7 +1888,7 @@ test('9upper: D4 — blocking names exactly the seat the table waits on, never o
 });
 
 test('9upper: D4 — fuzz: random voids, absences and returns never leak, never stall, and keep one 諗樣 turn per seat per lap', () => {
-  const seen = { redeal: 0, stuck: 0, absent: 0, skip: 0 };
+  const seen = { redeal: 0, stuck: 0, absent: 0, skip: 0, away: 0 };
   for (const over of [{}, { preset: 'official' }, { speakOrder: 'system', passPhone: true }, { speakOrder: 'free', levelMode: 'judge' }]) {
     for (let seed = 1; seed <= 25; seed++) {
       for (const n of [4, 6]) {
@@ -3021,4 +3043,259 @@ test('9upper, one phone through the real play screen: public cards for the 諗�
     assert.ok(ph.gateText().includes(name(J(sim))));
     ph.destroy();
   });
+});
+
+// ---------- one-phone re-run #2 (docs/playtest/single/9upper-rerun.md) ----------
+
+test('9upper: one phone — re-run #2 N1: 代佢做 on an absent 諗樣 never plays a ghost round: the round is void, the seat moves on (turn kept to the end of the lap, once)', () => {
+  for (const at of ['level', 'term', 'explain', 'judge']) {
+    const sim = mkOne(4, 11, at === 'level' ? { levelMode: 'judge' } : {});
+    const judge = J(sim);
+    const total = sim.state.totalRounds;
+    if (at === 'explain') toExplain(sim);
+    if (at === 'judge') toJudge(sim);
+    assert.equal(phase(sim), at);
+    const a = engine.autoAct(sim.state, judge, sim.ctx());
+    assert.deepEqual(a, { type: 'step-down' }, at);
+    assert.equal(sim.act(judge, a), true);
+    assert.notEqual(J(sim), judge, `${at}: the next seat judges`);
+    assert.ok(['term', 'level'].includes(phase(sim)), `${at}: a fresh deal`);
+    assert.equal(sim.state.history.length, 0, 'nobody scored for a round nobody judged');
+    assert.equal(sim.state.totalRounds, total, `${at}: their turn moved to the end of the lap, not lost`);
+    assert.ok(sim.state.judges.slice(sim.state.roundNo).includes(judge), 'still to judge later in the lap');
+    assert.equal(sim.state.voids.at(-1).how, 'stuck');
+    const cue = sim.cue().text;
+    assert.ok(cue.startsWith(`呢輪重新嚟過：${nameOf(sim, judge)}遲啲先做諗樣，而家由${nameOf(sim, J(sim))}做。`), cue);
+  }
+  // the second time in the same lap the turn is lost, and the game says how many rounds are left
+  const sim = mkOne(4, 12);
+  const judge = J(sim);
+  sim.act(judge, { type: 'step-down' });
+  while (J(sim) !== judge) sim.act(J(sim), { type: 'step-down' });
+  const before = sim.state.totalRounds;
+  sim.act(judge, { type: 'step-down' });
+  assert.equal(sim.state.totalRounds, before - 1);
+  // never with phones of their own (unchanged), never for a 玩家, never in the read / reveal
+  const own = mk(4, 11);
+  assert.deepEqual(engine.autoAct(own.state, J(own), own.ctx()), { type: 'start' });
+  assert.equal(own.act(J(own), { type: 'step-down' }), false, 'phones of their own: a 諗樣 cannot step down');
+  const one = mkOne(4, 13);
+  const p = one.state.round.explainers[0];
+  assert.equal(one.act(p, { type: 'step-down' }), false, 'only the 諗樣');
+  toRead(one);
+  assert.equal(one.act(J(one), { type: 'step-down' }), false, 'not in the read');
+  assert.ok(!one.legal(J(one)).some((x) => x.type === 'step-down'), 'not a player choice: only 代佢做 sends it');
+});
+
+test('9upper: one phone — re-run #2 N2: 代佢做 on a reader never runs a look with nobody at the phone; offered again at the end, then the round is dealt again whoever they were', () => {
+  const sim = mkOne(5, 14);
+  toRead(sim);
+  const readers = sim.state.round.readers.slice();
+  const judge = J(sim);
+  const gone = sim.state.round.reader;
+  assert.equal(gone, readers[0]);
+  const a = engine.autoAct(sim.state, gone, sim.ctx());
+  assert.deepEqual(a, { type: 'later' });
+  assert.equal(sim.act(gone, a), true);
+  assert.equal(sim.state.round.readStarted, false, 'no window runs behind the gate');
+  assert.equal(sim.state.deadline, null);
+  assert.equal(sim.state.round.reader, readers[1], 'the next reader is called');
+  assert.equal(sim.focus().label, '睇卡 1/4', 'the gate counts looks taken');
+  for (const pid of readers.slice(1)) {
+    assert.equal(sim.state.round.reader, pid);
+    sim.act(pid, { type: 'peek' });
+    sim.advance();
+  }
+  assert.equal(phase(sim), 'read', 'their look is offered again before anybody explains');
+  assert.equal(sim.state.round.reader, gone);
+  assert.equal(sim.focus().label, '睇卡 4/4');
+  // back now: they read like everybody else
+  const back = clone(sim.state);
+  sim.act(gone, { type: 'peek' });
+  sim.advance();
+  assert.equal(phase(sim), 'explain');
+  assert.ok(sim.state.round.readDone.includes(gone));
+  // still not there: the second 代佢做 deals the round again — same 諗樣, nobody loses a turn, the table is told
+  sim.state = back;
+  const key = sim.state.round.key;
+  assert.equal(sim.act(gone, engine.autoAct(sim.state, gone, sim.ctx())), true);
+  assert.equal(phase(sim), 'term');
+  assert.equal(J(sim), judge);
+  assert.notEqual(sim.state.round.key, key, 'fresh cue ids');
+  assert.ok(sim.state.round.explainers.includes(gone), 'not marked away: dealt in again (💤 is the host\'s call)');
+  assert.deepEqual(sim.view(null).redo, { how: 'unread', judge, kept: false, pid: gone });
+  const nm = (p) => nameOf(sim, p);
+  assert.ok(S.redoLine(sim.view(null).redo, nm, judge).includes(`${nm(gone)} 冇睇到張卡`));
+  assert.ok(sim.cue().text.startsWith(`${nm(gone)}冇睇到張卡，呢輪重新派過`), sim.cue().text);
+  assert.ok(S.voidLine(sim.state.voids.at(-1), nm).includes('冇睇到張卡'));
+  // the same thing whether or not the one who never looked was the 老實人 (nothing leaks)
+  for (let seed = 20; seed < 40; seed++) {
+    const t = mkOne(4, seed);
+    toRead(t);
+    const r0 = t.state.round.reader;
+    t.act(r0, { type: 'later' });
+    while (t.state.round.reader !== r0) { t.act(t.state.round.reader, { type: 'peek' }); t.advance(); }
+    t.act(r0, { type: 'later' });
+    assert.equal(phase(t), 'term', `seed ${seed}`);
+    assert.equal(t.state.voids.at(-1).how, 'unread');
+  }
+  // phones of their own and the together read: unchanged
+  const own = mk(4, 14, { passPhone: true });
+  toRead(own);
+  assert.deepEqual(engine.autoAct(own.state, own.state.round.reader, own.ctx()), { type: 'later' }, 'passPhone means one phone goes round');
+  const tog = mk(4, 14);
+  toRead(tog);
+  assert.equal(engine.autoAct(tog.state, tog.state.round.explainers[0], tog.ctx()), null);
+});
+
+test('9upper: one phone — re-run #2 N3: 💤 on the 諗樣 says aloud that the round starts again and how many rounds are left', () => {
+  const sim = mkOne(4, 15);
+  toExplain(sim);
+  const gone = J(sim);
+  sim.host(ABSENT(gone));
+  const next = J(sim);
+  const cue = sim.cue().text;
+  assert.ok(cue.startsWith(`${nameOf(sim, gone)}唔喺度，呢輪重新嚟過，由${nameOf(sim, next)}做諗樣，一共 ${sim.state.totalRounds} 輪。題目係「`), cue);
+  assert.ok(!cue.includes('第 1 輪，'), 'the 諗樣 is named once');
+  // a normal round: unchanged opening
+  const plain = mkOne(4, 15);
+  assert.ok(plain.cue().text.startsWith(`第 1 輪，${nameOf(plain, J(plain))}做諗樣。題目係「`), plain.cue().text);
+  // 揀難度 mode: the level cue carries it
+  const lv = mkOne(4, 16, { levelMode: 'judge' });
+  const g2 = J(lv);
+  lv.host(ABSENT(g2));
+  assert.ok(lv.cue().text.startsWith(`${nameOf(lv, g2)}唔喺度，呢輪重新嚟過`), lv.cue().text);
+  // N7: after 換題 only the new term and the question
+  const sw = mkOne(4, 17);
+  sw.act(J(sw), { type: 'swap' });
+  const t = sw.cue().text;
+  assert.ok(t.startsWith('換咗題：「') && !t.includes('做諗樣') && t.includes('仲有冇人識'), t);
+});
+
+test('9upper: one phone — re-run #2 N4: 👉 叫佢講 keeps ✅ for a speaker who had the floor, and a ✅ player can be called again', () => {
+  const sim = mkOne(5, 18, { speakOrder: 'judge' });
+  toExplain(sim);
+  const judge = J(sim);
+  const r = () => sim.state.round;
+  const first = r().speaker;
+  const ex = r().explainers;
+  const second = ex.find((p) => p !== first);
+  // called away at once (only "up" by the queue): back to waiting, as before
+  sim.tick(1000);
+  assert.equal(sim.act(judge, { type: 'call', target: second }), true);
+  assert.ok(!r().spoken.includes(first), 'never spoke: no ✅');
+  // had the floor: the 諗樣 calls the next one by name → ✅ 已講
+  sim.tick(20000);
+  const third = ex.find((p) => p !== first && p !== second);
+  assert.equal(sim.act(judge, { type: 'call', target: third }), true);
+  assert.ok(r().spoken.includes(second) && !r().skipped.includes(second), 'spoke: ✅ 已講');
+  assert.equal(sim.view(null).turn.pid, third);
+  // a follow-up question to a ✅ player keeps the ✅
+  sim.tick(20000);
+  assert.equal(sim.act(judge, { type: 'call', target: second }), true);
+  assert.ok(r().spoken.includes(second) && r().spoken.includes(third));
+  assert.ok(sim.legal(judge).some((a) => a.type === 'call' && a.target === third), 'a ✅ player is callable on one phone');
+  // phones of their own: unchanged
+  const own = mk(5, 18, { speakOrder: 'judge' });
+  toExplain(own);
+  const f = own.state.round.speaker;
+  const s2 = own.state.round.explainers.find((p) => p !== f);
+  own.tick(20000);
+  own.act(J(own), { type: 'call', target: s2 });
+  assert.ok(!own.state.round.spoken.includes(f), 'phones of their own: the speaker taps 我講完 themselves');
+});
+
+test('9upper: one phone — re-run #2 N8: the reveal hint says anybody taps 下一輪', () => {
+  const sim = mkOne(4, 19);
+  toJudge(sim);
+  sim.act(J(sim), { type: 'pick', target: sim.state.round.explainers[0] });
+  for (const pid of [null, sim.state.round.explainers[1]]) {
+    assert.ok(sim.view(pid).hint.includes('任何一個㩒'), sim.view(pid).hint);
+  }
+  const own = mk(4, 19);
+  toJudge(own);
+  own.act(J(own), { type: 'pick', target: own.state.round.explainers[0] });
+  assert.ok(own.view(null).hint.includes('等諗樣繼續'), 'phones of their own: unchanged');
+});
+
+test('9upper: UI on one phone — re-run #2: ✅ rows stay callable, spent 收皮啦 chips go, and the 老實人\'s card only says 「你睇過」 when the card was opened (N4, N5, N6)', async () => {
+  const dom = installDom();
+  const mounted = [];
+  try {
+    const { mount } = await import('../js/games/9upper/ui.js');
+    const covers = [];
+    const onPhone = (sim, pid, { shared = true } = {}) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const Cover0 = fc.components.Cover;
+      fc.components.Cover = (props) => { const c = Cover0(props); covers.push({ pid, props }); return c; };
+      const ui = mount(root, {
+        me: pid, players: sim.players, isHost: true, send: (a) => sent.push(a), sfx() {}, toast() {},
+        now: () => sim.now, components: fc.components, meta, config: sim.config,
+        shared, wholeTable: shared, atTable: shared && pid === null, mySeats: shared ? sim.players.map((p) => p.id) : [pid],
+        tableSend: () => Promise.resolve(true),
+      });
+      mounted.push(ui);
+      return { root, sent, ui, show(ctx = {}) { ui.update(sim.view(pid), { shared, ...ctx }); return root.visibleText(); } };
+    };
+    const faceText = (root) => root.all().find((n) => n.className === 'g9-face-text')?.textContent ?? '';
+
+    // N4: on one phone a ✅ player is a 「再問佢」 button for the 諗樣
+    const sim = mkOne(5, 21, { speakOrder: 'judge', callouts: 1 });
+    toExplain(sim);
+    const done = sim.state.round.speaker;
+    sim.act(J(sim), { type: 'done', turn: 0 });
+    const jd = onPhone(sim, J(sim));
+    const t = jd.show();
+    assert.ok(t.includes('✅ 已講 · 再問佢'), t);
+    const again = buttons(jd.root).find((b) => b.textContent.includes('再問佢'));
+    again.click();
+    assert.deepEqual(jd.sent.pop(), { type: 'call', target: done });
+    assert.equal(sim.act(J(sim), { type: 'call', target: done }), true);
+    // N6: once the 收皮啦 card is used the chips go
+    sim.act(J(sim), { type: 'callout', target: done });
+    const jd2 = onPhone(sim, J(sim));
+    const t2 = jd2.show();
+    assert.ok(t2.includes('🛑 收皮啦 · 用晒'), t2);
+    assert.equal(jd2.root.all().find((n) => n.className === 'g9-callrow-chips').hidden, true, 'no disabled chips left on screen');
+
+    // N5: the 老實人 on a shared phone — the record survives the remount at every hand-over
+    const told = (seed, open) => {
+      const s = mkOne(4, seed);
+      toRead(s);
+      const H = s.state.round.honest;
+      while (s.state.round.reader !== H) { s.act(s.state.round.reader, { type: 'peek' }); s.advance(); }
+      const reader = onPhone(s, H);
+      reader.show();
+      s.act(H, { type: 'peek' });
+      reader.show();
+      if (open) covers.filter((c) => c.pid === H).at(-1).props.onOpen(true);
+      s.advance();
+      if (phase(s) === 'read') finishRead(s);
+      reader.ui.destroy();
+      const later = onPhone(s, H);   // the 老實人 takes the phone back later: a fresh mount
+      later.show();
+      return faceText(later.root);
+    };
+    assert.ok(told(31, true).includes('你睇過真正解釋喇'), 'opened: it says so, even after the remount');
+    const missed = told(32, false);
+    assert.ok(missed.includes('你冇打開到張卡') && !missed.includes('你睇過'), missed);
+    // a shared phone that never watched the look (a reload, or a look nobody took) does not claim a read
+    const s = mkOne(4, 33);
+    toExplain(s);
+    const cold = onPhone(s, s.state.round.honest);
+    cold.show();
+    const cf = faceText(cold.root);
+    assert.ok(!cf.includes('你睇過') && cf.includes('張卡冇寫'), cf);
+    // a phone of your own: unchanged (the usual line)
+    const ownSim = mk(4, 33);
+    toExplain(ownSim);
+    const own = onPhone(ownSim, ownSim.state.round.honest, { shared: false });
+    own.show();
+    assert.ok(faceText(own.root).includes('你睇過真正解釋喇'));
+  } finally {
+    for (const ui of mounted) ui.destroy();
+    dom.restore();
+  }
 });

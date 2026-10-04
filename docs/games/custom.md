@@ -105,7 +105,8 @@ for the current k, and the preset field's help is the reason line, e.g.
 
 Warnings (still `ok`): duplicate role names (`有角色同名：「X」，開牌嗰陣會分唔清。`); a deck with no special
 role at all (`冇指定任何特殊角色，所有人都係「X」。`); `killer` / `werewolf` while the host plays
-(`呢個玩法要有人做主持叫天黑：建議熄咗「房主一齊玩」，由房主做主持。`).
+(`呢個玩法要有人做主持叫天黑：建議熄咗「房主一齊玩」，由房主做主持。`); exactly 2 card holders with 2 different cards
+(`淨係 2 個人攞牌：睇完自己張牌就知對方係咩。`, one-phone re-run #2 F5).
 
 `fields(cfg, n)`: the seven/eight Fields above; the `roles` Field gets `max = k` (the + button cap) and
 `help = validate().message`, so the v1 green/red total line is the field's help text.
@@ -172,12 +173,12 @@ The table view is exactly the public part of every player's view.
 
 | button | action | enabled when | confirm text |
 |---|---|---|---|
-| 🎲 全體搖骰 | `roll-all` | some card holder exists | if any cup is locked: 有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？ |
+| 🎲 全體搖骰 | `roll-all` | some card holder exists | if any cup is locked: 有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？ — else, on a shared phone only: 全體搖骰？大家嘅骰會重新搖。 |
 | 🔓 解鎖骰盅 | `unlock-dice` | some cup is locked | — |
 | 👁 開晒啲骰 | `reveal-dice` | not yet revealed and someone rolled | 公開所有人嘅骰？ |
 | 🃏 重新派牌 | `redeal` | always | 重新派牌（唔加回合數）？大家要重新睇牌，骰唔會變。 |
 | 🔓 開晒角色 | `reveal-roles` | not yet revealed | 開晒所有角色？呢個回合就完喇。 |
-| ➡️ 下一回合（重新派牌） | `next-round` | always | none (v1 parity) |
+| ➡️ 下一回合（重新派牌） | `next-round` | always | on a shared phone only (re-run #2 F2): 下一回合？大家嘅骰會清晒、重新派牌。 — phones of their own: none (v1 parity) |
 | 🏁 結束遊戲 | `end` | always | 結束遊戲？會去結果頁，所有角色同骰都會公開。 |
 
 On a roster row whose cup is locked the host also gets a small 🔓 that unlocks just that seat.
@@ -273,15 +274,27 @@ This game has no night, so the tells are about the *table*:
   phone), rolls and locks if it wants, and taps the one button under the card: 「✓ 搞掂 · 交俾 阿明」 (the next seat of this
   phone still to look, clockwise — where the shell's walk goes), with the line 「要搖骰就而家搖、鎖埋先交」 when it may roll.
   The tap sends `seen`; the walk gates the next seat. The **last** seat's button reads 「✓ 搞掂 · 交返俾房主 阿聰」: it sends
-  `seen` and `api.handTo(host, { why: '大家睇完牌' })` — the host controls live on that seat (C3). When the host is the last
-  one, or sits on another phone, it reads 「✓ 搞掂 · 擺返中間」 and the shell puts the phone in the middle.
+  `seen` and `api.handTo(host, { open: true, why: '大家睇完牌' })` — the host controls live on that seat (C3), and nothing
+  secret is face up there (card and cup are covered), so it is the public card 「輪到 阿聰」 (re-run #2 F1). With
+  主持睇到所有人角色 (a moderator with `modSees`) the 👁 tags are on that screen, so it stays the private
+  「交俾 阿聰 · 其他人唔好望」 (`open: false`). When the host is the last one, or sits on another phone, it reads
+  「✓ 搞掂 · 擺返中間」 and the shell puts the phone in the middle.
+- **Only the host rolls (`selfRoll` off, re-run #2 F3):** the host's own walk turn says
+  「要全體搖骰就而家㩒「🎛 主持掣」，大家輪住睇牌就見到自己嘅骰」, so every seat sees its dice on its own turn of the walk.
+- **The host's own walk turn folds the controls (re-run #2 F2):** while the walk waits for the host (his card and cup on
+  screen), 主持控制 shows one button 「🎛 主持掣（睇完牌先用）」 that opens them, so a tap meant for the card or 「✓ 搞掂」
+  never lands on 下一回合 / 全體搖骰. Both of those take a second tap on a shared phone anyway.
 - A moderator or a seat that has no card never appears in `focus`.
 - Dice after 🎲 全體搖骰: everyone looks at their own cup by taking the phone with 換人 (a hand-picked seat holds, §7.1).
+  That costs one gate per seat when it happens after the walk (not done: a per-seat 「睇骰」 walk).
 - **Host controls live on the host's seat.** That is deliberate: nobody can hit 開晒角色 by accident while looking at
   their own card. **開盅 and 開角色 are shown from the middle (#22):** right after 👁 開晒啲骰 / 🔓 開晒角色 the UI calls
   `api.toTable()`, so the phone goes to the middle behind the shell's 「📱 部手機擺返中間」 card and shows the table view —
   the roster, 開盅 and the revealed roles, with nobody's card, cup or controls (`api.atTable`: 「📱 部機喺枱中間：開咗嘅骰同角色
   喺度一齊睇。」). Nobody has to lay the host's own seat face up.
+- **Host controls from the middle (re-run #2 F1):** the table screen of a phone that holds the host's seat shows
+  「🎛 主持掣 · 交俾 阿聰」 (with 「再搖骰、開角色、下一回合都喺度。」): one tap → `api.handTo(host, { open, why: '主持掣' })` → the
+  public card (private with `modSees`, as above) → the host's screen with the controls. No 揀名 trip.
 - No screen of a shared phone says 「你」: no 「（你）」 on the roster, no `.me` row (#20).
 - Not done (minor, C4): with 主持睇到所有人角色 the host seat's 👁 role tags are not behind a separate hold; that seat is
   only on screen behind its own private gate, and the public moments use the table screen.
@@ -377,7 +390,9 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 - `focus` → `{ pids: [card holders who have not seen their card], label: '睇牌、搖骰' | '睇牌' }` (seat order), `null` while
   all have seen, after the reveal, and after the end.
 - `autoAct` → `{ type: 'seen' }` for such a seat, else `null`.
-- `result` → `null` until `end`; then `{ winners: [], noScore: true, summary: '通用派牌：玩咗 N 回合', lines, carry }` (#10).
+- `result` → `null` until `end`; then `{ winners: [], noScore: true, summary: '通用派牌：玩咗 N 回合', lines,
+  linesTitle: '今局嘅牌同骰', carry }` (#10; `linesTitle` heads the recap instead of 「點解會咁」, re-run #2 F4 — the
+  scoreboard's 贏 column is the shell's).
   `noScore: true` tells the shell this game keeps no score: the results screen says 「邊個贏由你哋講」 instead of a
   winners list or 冇人贏 (decision 2026-10-04), and there are no `points`. The lines:
   1. `呢個係通用派牌：app 唔計輸贏，邊個贏由你哋自己講。`
@@ -431,9 +446,11 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 | UI renders every seat + table through random games, idempotent, never shows the hint, host controls only on the host | `custom ui: every seat and the table render…` |
 | UI ignores a foreign view (the statusLine crash), defaults a partial one, tolerates odd api | `custom ui: a view that is not ours is ignored…` |
 | UI taps → engine-accepted actions (seen on release, latch, roll, lock, per-seat unlock, every host button) | `custom ui: taps send the actions…` |
+| One-phone re-run #2: 🎛 主持掣 from the table (public card; private with `modSees`; not on a phone without the host's seat or a spectator's), 下一回合 / 全體搖骰 two taps on a shared phone and one on a phone of your own, the controls folded on the host's walk turn, the 只有主持搖 note | `custom ui: one phone — re-run #2 F1/F2/F3…` |
+| `linesTitle`; the 2-holder warning (not with 3 holders, not with two of the same card) | `custom: re-run #2 F4/F5…` |
 | One phone #15: no `seen` on release, 「✓ 搞掂 · 交俾 X」 after the peek (roll + lock in the same turn), the last seat hands back to the host (`handTo`), host-last / host elsewhere → 擺返中間, no latch while the walk waits, no dice line when only the host rolls | `custom ui: one phone — #15 the walk covers peek, roll and lock…` |
 | One phone #22: the table screen holds no card / cup / controls, 開盅 / 開角色 call `toTable`, no 「（你）」; phones of their own unchanged | `custom ui: one phone — #22 the table screen holds nobody's card or cup…` |
-| Through the REAL play screen (one whole-table phone): private gates with 睇牌、搖骰 · 搞掂 k/n, the release keeps the phone, a roll in the same turn, 「✓ 搞掂」 → the next gate, the last seat → the host's gate (大家睇完牌), 📱 擺返中間 → nobody's card or cup | `custom, one phone through the real play screen…` |
+| Through the REAL play screen (one whole-table phone): private gates with 睇牌、搖骰 · 搞掂 k/n, the release keeps the phone, a roll in the same turn, 「✓ 搞掂」 → the next gate, the last seat → the host's public card, 📱 擺返中間 → nobody's card or cup, 🎛 主持掣 → the host's public card → the controls | `custom, one phone through the real play screen…` |
 | per-round roll count: counts every roll (after an unlock too), kept by a lock and a re-deal, 1 after roll-all, 0 next round | `the roster counts this round's rolls…` |
 | UI: 🎲 已搖 ×N, the 開盅 status line, the locked-cup badge (no greyed-out buttons), 開盅 under the cup | `custom ui: 已搖 ×N, the 開盅 status line…` |
 | the rules name the lock like its button (鎖定點數) | `the rules call the dice lock by the button's name…` |

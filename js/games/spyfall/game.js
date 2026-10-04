@@ -224,6 +224,7 @@ export const rules = {
         '投票方式揀「舉手」。開局逐個傳部機睇身分，每次都有交接卡。',
         '問答嗰陣部機放喺枱中間，大家望住個鐘同地點清單，口講問答就得，唔使傳機。',
         '要指控或者亮間諜身分：㩒枱中間嘅「🛑 停鐘」，鐘即刻停，再揀返自己個名，部機交俾你揀 🙋 指控、🕵️ 我係間諜或者取消。人人都係咁㩒，唔會露底。',
+        '間諜亮咗身分就喺清單㩒一個地點，㩒咗就算，唔會亮起；3 秒內㩒錯可以撤銷。',
         '一局完咗，部機擺喺中間大家一齊睇結果，㩒一下「大家睇完」就得。',
       ].join('\n'),
     },
@@ -926,6 +927,8 @@ function closeVote(s, ctx) {
   s.tally = {
     kind: v.kind, suspect: v.suspect, by: v.by, mode: v.mode, yes, no, noCount, voters: voters.length, convicted,
     index: pos ? pos.index : null, of: pos ? pos.of : presentOf(s).length,
+    // 舉手: who tapped the result — on one phone they keep it through the final-vote tally (re-run N2, see focus)
+    reporter: v.mode === 'hands' ? v.reporter : null,
   };
   if (v.kind === 'accuse') r.accusations[r.accusations.length - 1].result = convicted ? 'passed' : 'failed';
   r.vote = null;
@@ -1386,6 +1389,14 @@ export function focus(state) {
     const wait = votersOf(s).filter((id) => !(id in v.votes));
     return wait.length ? { pids: wait, step: `vote:${r.accusations.length}:${r.finalIdx}`, label } : null;
   }
+  // one phone, 舉手 final vote (re-run N2): the reporter keeps the phone through the tally — the same signature as the
+  // vote, so no table card and no public card that hands it to its own holder between suspects. A new reporter (the
+  // dealer is the suspect) gets one public card; roundEnd and an accusation's tally still put it in the middle.
+  const t = s.tally;
+  if (s.phase === 'tally' && s.cfg.passPhone && t && t.mode === 'hands' && t.kind === 'final' && t.reporter
+    && !isAbsent(s, t.reporter)) {
+    return { pids: [t.reporter], open: true, label: `最後投票 ${t.index}/${t.of} · 結果` };
+  }
   if (s.phase === 'guess') return { pids: [r.guess.order[r.guess.idx]], open: true, label: '間諜揀地點' };
   return null;
 }
@@ -1468,7 +1479,8 @@ function hintOf(s, pid) {
     case 'tally': return '睇吓投票結果，幾秒後自動繼續。';
     case 'guess': {
       const cur = r.guess.order[r.guess.idx];
-      if (me && me === cur) return '喺地點清單揀你估嘅地點，再㩒「就係…」確定。';
+      // one phone: the screen is the table's (a public step), so the spy by name and the one-tap pick (re-run N3)
+      if (me && me === cur) return s.cfg.passPhone ? `${nameOf(s, cur)}：喺地點清單㩒一個地點就算，3 秒內可以撤銷。` : '喺地點清單揀你估嘅地點，再㩒「就係…」確定。';
       return `等${nameOf(s, cur)}喺清單揀地點：估中間諜贏，估錯大家贏。`;
     }
     case 'roundEnd':
@@ -1580,6 +1592,8 @@ export function view(state, pid) {
     round: { n: r.n, of: s.cfg.rounds },
     rules: { minutes: s.cfg.minutes, spies: s.cfg.spies, voteMode: s.cfg.voteMode, maxNo: maxNo(s), tracker: s.cfg.tracker !== false },
     seats: s.order.slice(),
+    // the 💡 sheet's 「呢局有咩角色」 (DESIGN §7.1 re-run #5): how many spies is public, who they are is not
+    rolesInPlay: [{ id: 'agent', count: Math.max(0, s.order.length - s.cfg.spies) }, { id: 'spy', count: s.cfg.spies }],
     dealer: r.dealer,
     locations: s.list.map((e, i) => ({ i, name: e.name, emoji: e.emoji, cat: e.cat, used: pastRounds.includes(i) })),
     deadline: running ? clockEnd(s) : null,

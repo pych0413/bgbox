@@ -1240,7 +1240,7 @@ test('fake-artist: endMode rounds — exactly N rounds (auto = one per player), 
   played = 0;
   while (phase(three) !== 'over') {
     assert.equal(three.view('p1').round.total, 3);
-    assert.match(three.view('p1').title, /\/3 輪/);
+    assert.match(three.view('p1').title, /\/3 局/);
     playRound(three, { caught: false });
     played++;
     assert.equal(three.view('p1').last, played === 3);
@@ -1264,9 +1264,9 @@ test('fake-artist: result lines explain every round, including what was hidden d
   allNext(sim);
   const res = sim.result();
   const [l1, why1, l2, why2] = res.lines;
-  assert.ok(l1.includes('第 1/2 輪') && l1.includes(w1) && l1.includes(name(f1)) && l1.includes('假畫家逃脫') && l1.includes(`${name(f1)} +2`), l1);
+  assert.ok(l1.includes('第 1/2 局') && l1.includes(w1) && l1.includes(name(f1)) && l1.includes('假畫家逃脫') && l1.includes(`${name(f1)} +2`), l1);
   assert.ok(why1.includes('投票：') && why1.includes('最高票唔係假畫家'), `why round 1 went so: ${why1}`);
-  assert.ok(l2.includes('第 2/2 輪') && l2.includes(w2) && l2.includes(name(f2)) && l2.includes('真畫家贏'), l2);
+  assert.ok(l2.includes('第 2/2 局') && l2.includes(w2) && l2.includes(name(f2)) && l2.includes('真畫家贏'), l2);
   assert.ok(why2.includes('揪到') && why2.includes('錯'), `why round 2 went so: ${why2}`);
   assert.ok(!why1.startsWith('第 ') && !why2.startsWith('第 '));
   assert.ok(res.lines.some((l) => l.includes('最醒目')));
@@ -1862,7 +1862,7 @@ test('fake-artist: 唔計分 (none-v2, the current print) — nobody scores, eac
   const top = Math.max(...Object.values(wins));
   assert.deepEqual(res.winners, ids(sim).filter((id) => wins[id] === top));
   assert.deepEqual(res.points, {}, 'no points reach the evening scoreboard');
-  assert.match(res.summary, /輪/);
+  assert.match(res.summary, /局/);
   // a target means nothing without points: the game is a fixed number of rounds
   const t = mk(4, { seed: 2, config: { scoring: 'none', endMode: 'target', target: 1, rounds: 2 } });
   let played = 0;
@@ -2396,13 +2396,13 @@ test('fake-artist: 呢鋪唔計 explains itself — engine.canVoid agrees with @
   const s = mk(4, { seed: 3 });
   playRound(s);
   assert.equal(phase(s), 'result');
-  assert.deepEqual(engine.canVoid(s.state), { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' });
+  assert.deepEqual(engine.canVoid(s.state), { ok: false, message: '呢局已經計咗分，大家㩒「睇完」就得' });
   // the round that decided the game says the same: everybody taps 睇完 (D3)
   const last = mk(4, { seed: 3, config: { endMode: 'rounds', rounds: 1 } });
   playRound(last);
   assert.equal(phase(last), 'result');
   assert.equal(last.view('p1').last, true);
-  assert.deepEqual(engine.canVoid(last.state), { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' });
+  assert.deepEqual(engine.canVoid(last.state), { ok: false, message: '呢局已經計咗分，大家㩒「睇完」就得' });
   assert.ok(game.rules.sections.some((x) => x.body.includes('已經計咗分')), 'the rules sheet says a scored round stays');
 });
 
@@ -2685,7 +2685,10 @@ test('fake-artist one phone: #4 every stroke is a public step (the public card, 
   settle(sim);
   assert.equal(phase(sim), 'guess');
   // #29: the spoken guess lets the phone lie in the middle for the caught fake (the answer stays under the judge's cover)
-  assert.deepEqual(sim.focus(), { pids: [R(sim).judge], open: true, label: '開口估題目' });
+  assert.deepEqual(sim.focus(), { pids: [R(sim).judge], open: true, label: '開口估題目' }, 'phones of their own: the judge');
+  assert.ok(engine.blocking(sim.state, R(sim).judge) && !engine.blocking(sim.state, R(sim).fake));
+  assert.ok(!sim.view(null).guess.handOver);
+  assert.ok(!sim.cue().text.includes('判斷'), 'phones of their own: the old line');
   const typed = mk(5, { seed: 502, config: { guess: 'typed' } });
   toVote(typed);
   allVote(typed, R(typed).fake);
@@ -2973,14 +2976,24 @@ test('fake-artist ui one phone: the look starts the walk, ballots say 「全部�
     allVote(sim, R(sim).fake);
     settle(sim);
     assert.equal(phase(sim), 'guess');
-    // spoken guess on one phone: the picture first, the answer under the cover, the note says how
+    // re-run N1, spoken guess on one phone: the caught fake has the phone (named on the card), the picture in view,
+    // says the guess, then hands it to the judge by name
+    const fakeName = sim.players.find((p) => p.id === R(sim).fake).name;
+    const judgeName = sim.players.find((p) => p.id === R(sim).judge).name;
+    const fk = await mountFakeShared(dom, sim, R(sim).fake);
+    uis.push(fk.ui);
+    let text = fk.root.visibleText();
+    assert.ok(text.includes(`${fakeName} 望住幅畫，大聲講出佢估嘅題目`) && !text.includes('你'), text);
+    assert.ok(fk.root.all().some((n) => n.className === 'fk-board'), 'the picture is on the fake’s screen');
+    uiButton(fk.root, `講完 · 交俾 ${judgeName} 判斷`).click();
+    assert.deepEqual(fk.log.handTo, [[R(sim).judge, { why: '判斷估啱唔啱' }]]);
+    assert.deepEqual(fk.log.sent, [], 'handing over sends nothing');
+    // the judge (handed the phone behind a private card): the covered answer, 啱 / 錯
     const j = await mountFakeShared(dom, sim, R(sim).judge);
     uis.push(j.ui);
-    const kids = j.root.all();
-    const boardAt = kids.findIndex((n) => n.className === 'fk-board');
-    const wordAt = kids.findIndex((n) => n.className === 'fk-judge-word');
-    assert.ok(boardAt >= 0 && boardAt < wordAt, 'the picture comes before the covered answer');
-    assert.ok(j.root.visibleText().includes('部手機擺喺中間俾'), j.root.visibleText());
+    text = j.root.visibleText();
+    assert.ok(text.includes(`${judgeName}：${fakeName} 講咗佢估嘅題目。㩒住睇答案`), text);
+    assert.ok(!text.includes('部手機擺喺中間俾'), text);
     sim.act(R(sim).judge, { type: 'verdict', correct: false });
     assert.equal(phase(sim), 'result');
     const r = await mountFakeShared(dom, sim, null);
@@ -3107,6 +3120,9 @@ async function withShell(fn) {
     dom.disarmConfirm?.();
     const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
     PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
     for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf, cancelAnimationFrame: savedCaf })) {
       if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
     }
@@ -3226,15 +3242,27 @@ test('fake-artist, one phone through the real play screen: private deal walk, ev
     await ph.tapIn('再㩒一次確定');
     assert.equal(phase(sim), 'tally');
     assert.equal(R(sim).caught, true);
-    // the spoken guess: the public card to the judge; the picture stays in view for the caught fake
+    // re-run N1, the spoken guess: the public card names the caught fake (not the judge); the fake speaks with the
+    // picture in view, then hands the phone to the judge by name behind a private card
     sim.advance();
     await ph.render();
     assert.equal(phase(sim), 'guess');
+    const judgeName = sim.players.find((p) => p.id === R(sim).judge).name;
     assert.equal(ph.gate(), 'public', ph.gateText());
+    assert.ok(ph.gateText().includes(`輪到 ${fakeName} · 開口估題目`) && !ph.gateText().includes(judgeName), ph.gateText());
     await ph.tapGate();
-    assert.equal(ph.st.activeSeat, R(sim).judge);
-    assert.ok(ph.text().includes('部手機擺喺中間俾'), ph.text());
-    sim.act(R(sim).judge, { type: 'verdict', correct: false });
+    assert.equal(ph.st.activeSeat, F);
+    assert.ok(ph.text().includes(`講完就交俾 ${judgeName} 判斷`), ph.text());
+    await ph.tapIn(`講完 · 交俾 ${judgeName} 判斷`);
+    assert.equal(ph.gate(), 'switch', ph.gateText());
+    assert.ok(ph.gateText().includes(`交俾 ${judgeName}`) && ph.gateText().includes('其他人唔好望'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, R(sim).judge, 'the judge holds it by hand until the verdict');
+    await ph.render();
+    assert.equal(ph.st.activeSeat, R(sim).judge, 'no gate bounces it back to the fake');
+    assert.ok(ph.text().includes('㩒住睇答案'), ph.text());
+    await ph.tapIn('❌ 錯');
+    await ph.tapIn('確定「錯」？再㩒一下');
     await ph.render();
     assert.equal(phase(sim), 'result');
     assert.equal(ph.gate(), 'table');
@@ -3247,4 +3275,52 @@ test('fake-artist, one phone through the real play screen: private deal walk, ev
     assert.equal(ph.gate(), 'private');
     ph.destroy();
   });
+});
+
+test('fake-artist one phone: re-run N1 — the spoken guess names the caught fake on the card and the judge in the cue; the judge is still the one waited on', () => {
+  const sim = onePhone(5, { vote: 'ballot' }, 530);
+  readyAll(sim);
+  drawAll(sim);
+  assert.ok(sim.act('p1', { type: 'start-vote' }));
+  allVote(sim, R(sim).fake);
+  settle(sim);
+  assert.equal(phase(sim), 'guess');
+  const F = R(sim).fake;
+  const J = R(sim).judge;
+  const name = (pid) => sim.players.find((p) => p.id === pid).name;
+  assert.deepEqual(sim.focus(), { pids: [F], open: true, label: '開口估題目' });
+  assert.ok(engine.blocking(sim.state, J), 'the verdict is what the game waits on');
+  assert.ok(!engine.blocking(sim.state, F));
+  assert.equal(sim.view(null).guess.handOver, true);
+  const cue = sim.cue().text;
+  assert.ok(cue.includes(`講完交俾${name(J)}判斷`), cue);
+  const hint = sim.view(F).hint;
+  assert.ok(hint.startsWith(`${name(F)}：`) && hint.includes(name(J)) && !hint.includes('你'), hint);
+  // the judge rules from a seat screen, as before
+  assert.ok(sim.legal(J).some((a) => a.type === 'verdict'));
+  assert.ok(sim.act(J, { type: 'verdict', correct: true }));
+  assert.equal(phase(sim), 'result');
+});
+
+test('fake-artist: re-run N3 — 局 is a round and 圈 a lap; 輪 is only 輪到 / 輪流', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const f of ['game.js', 'script.js', 'ui.js']) {
+    const src = readFileSync(new URL(`../js/games/fake-artist/${f}`, import.meta.url), 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    const bad = code.match(/.{0,12}輪(?![到流]).{0,12}/g) ?? [];
+    assert.deepEqual(bad, [], `${f}: 輪 as a round or lap`);
+  }
+  const sim = mk(4, { seed: 531, config: { endMode: 'rounds', rounds: 2 } });
+  assert.match(sim.view('p1').title, /^第 1\/2 局$/);
+});
+
+test('fake-artist: re-run #5 — every view (seats and table) names the roles in play for the 💡 sheet, counts only', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const app = mk(5, { seed: 532 });
+  for (const pid of [null, ...ids(app)]) assert.deepEqual(app.view(pid).rolesInPlay, [{ id: 'artist', count: 4 }, { id: 'fake', count: 1 }]);
+  const list = hintRoles(app.view(null), game.rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => [r.id, r.count]), [['artist', 4], ['fake', 1]]);
+  const qm = mk(5, { seed: 533, config: { qm: 'player' } });
+  assert.deepEqual(qm.view(null).rolesInPlay, [{ id: 'artist', count: 3 }, { id: 'fake', count: 1 }, { id: 'question-master', count: 1 }]);
 });

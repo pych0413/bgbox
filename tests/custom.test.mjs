@@ -1383,6 +1383,83 @@ const ctxOne = (sim, mySeats = sim.state.order) => {
   return { focus: pids.length ? { ...f, pids } : null, paused: false, shared: true };
 };
 
+test('custom ui: one phone — re-run #2 F1/F2/F3: 主持掣 from the middle, two taps for 下一回合 / 全體搖骰, the controls folded on the host\'s own walk turn, the 只有主持搖 note', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 21 });   // p1 is the host and holds a card
+    const show = (ph) => ph.handle.update(sim.view(ph.pid), ctxOne(sim));
+    const asks = [];
+    let armed = null;
+    const confirm = (text, node, opts) => { if (armed === opts?.key) { armed = null; return true; } armed = opts?.key; asks.push(text); return false; };
+    const ctlBody = (ph) => findEls(ph.root, (x) => x.cls.has('cu-ctlbody'))[0];
+    const toggle = (ph) => findEls(ph.root, (x) => x.cls.has('cu-ctltoggle'))[0];
+
+    // F2: the host's own walk turn — the controls are folded behind one button
+    const host = mountShared(ui, sim, 'p1', { extra: { confirm } });
+    show(host);
+    assert.ok(shown(findEls(host.root, (x) => x.cls.has('c-rolecard'))[0]));
+    assert.ok(shown(toggle(host)) && !shown(ctlBody(host)), 'folded while the walk waits for the host');
+    toggle(host).click();
+    assert.ok(shown(ctlBody(host)), 'one tap opens them');
+    toggle(host).click();
+    assert.ok(!shown(ctlBody(host)));
+    // F3: 只有主持搖 — the host's turn says when to roll for everybody
+    const solo = mk(3, { seed: 22, patch: { selfRoll: false } });
+    const sh = mountShared(ui, solo, 'p1', { mySeats: solo.state.order });
+    sh.handle.update(solo.view('p1'), ctxOne(solo));
+    sh.stub.made.cards.at(-1).props.onOpen(true);
+    sh.stub.made.cards.at(-1).props.onOpen(false);
+    const note = findEls(sh.root, (x) => x.cls.has('cu-done-note'))[0];
+    assert.ok(shown(note) && note.textContent.includes('全體搖骰就而家㩒'), note.textContent);
+    // after the walk: unfolded; 下一回合 and 全體搖骰 take a second tap on a shared phone
+    for (const pid of sim.state.order) changed(sim, pid, { type: 'seen' });
+    show(host);
+    assert.ok(!shown(toggle(host)) && shown(ctlBody(host)), 'not folded once the host has had his turn');
+    button(host.root, '➡️ 下一回合').click();
+    assert.deepEqual(host.sent, [], 'the first tap only arms');
+    assert.deepEqual(asks, ['下一回合？大家嘅骰會清晒、重新派牌。']);
+    button(host.root, '➡️ 下一回合').click();
+    assert.deepEqual(host.sent.at(-1), { type: 'next-round' });
+    host.sent.length = 0;
+    button(host.root, '🎲 全體搖骰').click();
+    assert.deepEqual(host.sent, []);
+    assert.equal(asks.at(-1), '全體搖骰？大家嘅骰會重新搖。');
+    button(host.root, '🎲 全體搖骰').click();
+    assert.deepEqual(host.sent, [{ type: 'roll-all' }]);
+    // phones of their own: unchanged — one tap each
+    const own = mk(4, { seed: 23 });
+    const ownHost = mountFor(ui, own, 'p1', { confirm });
+    ownHost.handle.update(own.view('p1'), { focus: own.focus(), paused: false });
+    button(ownHost.root, '➡️ 下一回合').click();
+    button(ownHost.root, '🎲 全體搖骰').click();
+    assert.deepEqual(ownHost.sent, [{ type: 'next-round' }, { type: 'roll-all' }]);
+    assert.ok(!shown(findEls(ownHost.root, (x) => x.cls.has('cu-ctltoggle'))[0]), 'never folded on a phone of your own');
+    ownHost.handle.destroy();
+
+    // F1: the table screen hands the phone to the host for the controls — a public card
+    const table = mountShared(ui, sim, null);
+    show(table);
+    const hb = findEls(table.root, (x) => x.cls.has('cu-tohost'))[0];
+    assert.ok(shown(hb) && hb.textContent === '🎛 主持掣 · 交俾 玩家1', hb?.textContent);
+    hb.click();
+    assert.deepEqual(table.handed, [['p1', { open: true, why: '主持掣' }]]);
+    // …private when the host is a moderator who sees every role (the 👁 tags are on that screen)
+    const mod = mk(5, { seed: 24, patch: { hostPlays: false, modSees: true } });
+    const mt = mountShared(ui, mod, null);
+    mt.handle.update(mod.view(null), ctxOne(mod));
+    findEls(mt.root, (x) => x.cls.has('cu-tohost'))[0].click();
+    assert.deepEqual(mt.handed, [['p1', { open: false, why: '主持掣' }]]);
+    // not on a phone that does not hold the host's seat, not on a spectator's phone
+    const part = mountShared(ui, sim, null, { mySeats: ['p2', 'p3'] });
+    part.handle.update(sim.view(null), ctxOne(sim, ['p2', 'p3']));
+    assert.ok(!shown(findEls(part.root, (x) => x.cls.has('cu-tohost'))[0]));
+    const spect = mountFor(ui, sim, null);
+    spect.handle.update(sim.view(null), { focus: null, paused: false });
+    assert.ok(!shown(findEls(spect.root, (x) => x.cls.has('cu-tohost'))[0]));
+    spect.handle.destroy();
+    destroyShared();
+  });
+});
+
 test('custom ui: one phone — #15 the walk covers peek, roll and lock: 「✓ 搞掂 · 交俾 X」 after the peek; the last seat hands back to the host', async () => {
   await withCustomUi(async (ui) => {
     const sim = mk(4, { seed: 9 });   // p1 is the host and holds a card
@@ -1434,7 +1511,7 @@ test('custom ui: one phone — #15 the walk covers peek, roll and lock: 「✓ �
     assert.equal(done(last).disabled, true, 'one tap only');
     done(last).click();   // a double tap hands the phone over once
     assert.deepEqual(last.sent, [{ type: 'seen' }]);
-    assert.deepEqual(last.handed, [['p1', { why: '大家睇完牌' }]]);
+    assert.deepEqual(last.handed, [['p1', { open: true, why: '大家睇完牌' }]], 're-run #2 F1: a public card — nothing secret is face up there');
     play(last);
     assert.equal(sim.focus(), null, 'everybody has looked');
     // a fresh deal comes up face down: the button waits for a new look
@@ -1526,6 +1603,20 @@ test('custom ui: one phone — #22 the table screen holds nobody\'s card or cup;
     destroyShared();
     for (const ph of [p2, ownHost]) ph.handle.destroy();
   });
+});
+
+test('custom: re-run #2 F4/F5 — the recap is headed 「今局嘅牌同骰」; two holders with two different cards get a warning', () => {
+  const sim = mk(3, { seed: 4 });
+  sim.act(sim.state.hostPid ?? 'p1', { type: 'end' });
+  assert.equal(sim.result().linesTitle, '今局嘅牌同骰', 'not 「點解會咁」 for a game that judges nothing');
+  const warn = (c, n) => config.validate(c, n).warnings.some((w) => w.includes('睇完自己張牌就知對方係咩'));
+  assert.ok(warn(config.defaults(2), 2), '2 players, 內鬼 + 好人');
+  assert.ok(warn(config.defaults(3, { preset: 'traitor', hostPlays: false }), 3), 'a moderator and 2 holders');
+  assert.ok(config.validate(config.defaults(2), 2).ok, 'a warning, never a refusal');
+  assert.ok(!warn(config.defaults(3), 3), '3 holders: your card says nothing for sure');
+  const same = { ...config.defaults(2), preset: 'custom', roles_custom: [
+    { name: '好人', emoji: '🙂', filler: true, count: 0, desc: '' }, { name: '內鬼', emoji: '🎭', count: 0, desc: '' }] };
+  assert.ok(!warn(same, 2), 'both cards the same: nothing to tell');
 });
 
 test('custom: result() says the app keeps no score (noScore), so the shell can say 「邊個贏由你哋講」', () => {
@@ -1838,9 +1929,9 @@ test('custom, one phone through the real play screen: one hand-over per seat cov
       await ph.tapIn((n) => n.cls.has('cu-done'));
       assert.deepEqual(ph.acts.at(-1), { pid, action: { type: 'seen' } });
     }
-    // the walk is over: back to the host (a hand-over gate naming them), whose seat has the controls
-    assert.equal(ph.gate(), 'switch');
-    assert.ok(ph.gateText().includes(`交俾 ${name('p1')}`) && ph.gateText().includes('大家睇完牌'), ph.gateText());
+    // the walk is over: back to the host (a public card naming them, re-run #2 F1), whose seat has the controls
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(name('p1')) && !ph.gateText().includes('其他人唔好望'), ph.gateText());
     await ph.tapGate();
     assert.equal(ph.st.activeSeat, 'p1');
     assert.ok(ph.text().includes('主持控制') && ph.text().includes('大家都睇咗牌'), ph.text());
@@ -1853,6 +1944,13 @@ test('custom, one phone through the real play screen: one hand-over per seat cov
     assert.equal(ph.st.activeSeat, null);
     assert.equal(ph.find((n) => n.cls.has('c-rolecard') || n.cls.has('c-dicecup')).filter(shShown).length, 0);
     assert.ok(ph.text().includes('部機喺枱中間') && !ph.text().includes('主持控制'), ph.text());
+    // re-run #2 F1: the controls are one tap from the middle — 「🎛 主持掣 · 交俾 玩家1」, a public card, the host's screen
+    await ph.tapIn((n) => n.cls.has('cu-tohost'));
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(name('p1')), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p1');
+    assert.ok(ph.text().includes('主持控制'), ph.text());
     ph.destroy();
   });
 });

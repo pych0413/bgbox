@@ -1058,6 +1058,12 @@ function overView(s) {
   };
 }
 
+/** `view.rolesInPlay` (shell hints): `{ id, count }` for every role dealt this game, in the rules' order. */
+function rolesInPlay(c0) {
+  const n = { civilian: c0?.civilians ?? 0, undercover: c0?.undercovers ?? 0, blank: c0?.blanks ?? 0 };
+  return ['civilian', 'undercover', 'blank'].filter((id) => n[id] > 0).map((id) => ({ id, count: n[id] }));
+}
+
 function view(s, pid) {
   const v = {
     phase: s.phase,
@@ -1077,6 +1083,8 @@ function view(s, pid) {
       win: s.cfg.win,
     },
     seats: s.seats.map((id) => ({ id, alive: isAlive(s, id) })),
+    // the deck of THIS game for the shell's 💡 role list (no 白板 line when none was dealt; counts are public)
+    rolesInPlay: rolesInPlay(s.counts0),
     absent: s.seats.filter((id) => isAbsent(s, id)),        // public (D4): shown as 💤, never waited on
     outs: s.outs.map((o) => ({ pid: o.pid, round: o.round, role: disclose(s, o.role) })),
     history: s.history.map((h) => ({
@@ -1400,8 +1408,11 @@ export const engine = {
         return s;
       }
       case 'done': {
-        // `at` (the step id from the view) stops a double tap from skipping the next speaker.
+        // `at` (the step id from the view: round, kind and turn number) stops a double tap from skipping the next
+        // speaker: a tap made on a step that has already moved on is stale and dropped. A whole-table tap (the shared
+        // phone in the middle, `table: true`) must carry it — anyone at the table may tap, so a bare one is never trusted.
         if (s.phase !== 'speak' || (a.at !== undefined && a.at !== speakId(s))) return s;
+        if (a.table === true && a.at === undefined) return s;
         endTurn(s, ctx);
         return s;
       }

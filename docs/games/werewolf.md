@@ -146,7 +146,7 @@ Narration (exact):
 
 | step | open | close |
 |---|---|---|
-| begin | night 1: 「天黑請閉眼。大家將部手機放喺面前，閉埋眼，唔好偷望。」 later: 「第二晚，天黑請閉眼。」 | — |
+| begin | night 1: 「天黑請閉眼。大家將部手機放喺面前，閉埋眼，唔好偷望。」 later: 「第二晚，天黑請閉眼。」 — one phone (`passPhone`): night 1 「天黑請閉眼。部手機擺喺枱中間，大家閉埋眼，叫到你嘅角色先拎起佢。」, later 「第二晚，天黑請閉眼。部手機擺返枱中間，大家閉埋眼，叫到你嘅角色先拎起佢。」 with at least night 1's `minMs` (`BEGIN_PASS_MIN_MS`, re-run #4: the 遺言 speaker may still hold the phone) | — |
 | 守衛 | 「守衛請開眼。今晚你想守邊個？」 | 「守衛請閉眼。」 |
 | 狼人 | night 1 「狼人請開眼。互相認一認隊友，再揀今晚殺邊個。」 later 「狼人請開眼。揀今晚殺邊個。」 | 「狼人請閉眼。」 |
 | 女巫 | 「女巫請開眼。睇吓手機，決定今晚用唔用藥。」 | 「女巫請閉眼。」 |
@@ -176,7 +176,7 @@ What each seat's info card says:
 |---|---|---|---|
 | 守衛 (alive) | 「上一晚你守咗 X，今晚唔可以再守佢。」 / first night 「你可以守任何人，包括自己。」 / after a skip 「上一晚你空守…」 | every living seat except last night's target (tagged 🚫上晚) | 空守（今晚唔守人） |
 | 狼人 (alive) | 「🐺 隊友：6號阿F、7號阿G」(+ 已出局 mates) and 「揀今晚要殺邊個。你揀嘅同隊友揀嘅會即時顯示。」; hint = the `wolfVote` rule. Chips show a coloured dot per wolf who currently picked it; mates carry a 🐺 tag | every living seat (a mate or himself = 自刀) | 空刀（唔殺人） |
-| 女巫 (alive, a potion left) | while the antidote is unused: 「今晚被狼人襲擊嘅係：X」 (「（你自己）」, 「呢個規則你唔可以自救」) or 「今晚冇人被狼人襲擊」; once used: 「解藥已經用咗，唔會再知道邊個被襲擊」; always 「解藥：有　毒藥：有」. The victim's chip is tagged 💊. **Her pick names the potion**: 確定 becomes 「💊 用解藥救 X」 / 「☠️ 用毒藥毒 X」 and the potions line gives way to 「☠️ 揀咗毒 X：時間到都會用，再㩒佢一次取消。」 (after 確定: 「☠️ 已確定：用毒藥毒 X」 / 「已確定：今晚唔用藥」) — it takes that line's place, so her panel never grows a line when she taps. The hint follows what she can still do (both · 「㩒一個人＝用毒藥…」 · 「…毒藥已經用咗」 · 「今晚冇藥用得…」). Her closing line says what was spent: 「💊 今晚你用咗解藥救 X。」 / 「☠️ …」 / 「今晚你冇用藥。」 | the victim chip = **antidote** (when allowed); every other living seat except herself = **poison** (when the poison is left). One tentative pick, so one potion a night. | 唔用藥 |
+| 女巫 (alive, a potion left) | while the antidote is unused: 「今晚被狼人襲擊嘅係：X」 (「（你自己）」, and when she may not save herself the rule this table plays: 「今局淨係第一晚可以自救。」 / 「今局女巫唔可以自救。」, re-run #6) or 「今晚冇人被狼人襲擊」; once used: 「解藥已經用咗，唔會再知道邊個被襲擊」; always 「解藥：有　毒藥：有」. The victim's chip is tagged 💊. **Her pick names the potion**: 確定 becomes 「💊 用解藥救 X」 / 「☠️ 用毒藥毒 X」 and the potions line gives way to 「☠️ 揀咗毒 X：時間到都會用，再㩒佢一次取消。」 (after 確定: 「☠️ 已確定：用毒藥毒 X」 / 「已確定：今晚唔用藥」) — it takes that line's place, so her panel never grows a line when she taps. The hint follows what she can still do (both · 「㩒一個人＝用毒藥…」 · 「…毒藥已經用咗」 · 「今晚冇藥用得…」). Her closing line says what was spent: 「💊 今晚你用咗解藥救 X。」 / 「☠️ …」 / 「今晚你冇用藥。」 | the victim chip = **antidote** (when allowed); every other living seat except herself = **poison** (when the poison is left). One tentative pick, so one potion a night. | 唔用藥 |
 | 預言家 (alive) | 「揀一個人驗…」; after 確定: 「X 係：🐺 狼人 / ✅ 好人」. Past results are tags on the chips (✅/🐺) | living seats except himself and anybody already checked | 今晚唔驗 |
 | 獵人 (alive) | 「你今晚冇被毒 👍 如果你出局，可以開槍…」 or 「你今晚被毒咗 👎 就算出局都開唔到槍」 (decoy chips) | decoy: every living seat | 知道喇 |
 | **decoy** (everybody else; a dead role holder; a witch with both potions spent) | 「呢一步同你冇關係，繼續閉眼。」 / 「你已經出局，今晚冇得揀。」 / 「兩支藥都用晒喇…」 + 「想㩒就㩒：揀個人、㩒確定，扮有嘢做都得。」 | every living seat | 跳過 |
@@ -381,19 +381,30 @@ table view) between them; the engine supplies `focus` (§5) and, with `passPhone
   wolf with `ctx.coWakers` = all of them, the two info lines read 「🐺 你哋一齊揀：1號阿聰、6號阿珍」 / 「一齊指一個人，㩒一下「確定」就計晒你哋。」,
   and every tap carries `seats: ctx.coWakers`, so one pick and one 確定 (or 空刀) count for every wolf — never a silent 空刀 from a wolf who
   never got the phone. On one phone a **dead wolf is not called** (night 2 of the playtest went 空刀 because the dead wolf got the card); with
-  phones of their own he still is, after the living. No chained walk, no 換人.
+  phones of their own he still is, after the living. No chained walk, no 換人. Since the re-run: **空刀 takes a second tap** on that screen
+  (`api.confirm('今晚空刀？')`: it locks every wolf at once and the screen goes, #3a); when every living wolf is on it the split-vote hint gives
+  way to 「時間到未㩒確定，都照計你哋指住嗰個；冇指人就空刀。」 (#3b; two of three wolves on one phone in a room of phones keep the rule); and
+  the recap names a shared pick as one — 「🐺 狼人：1號阿聰、6號阿珍（一齊揀）→3號小美　⇒ 襲擊 3號小美」 (`rec.wolves.shared`, #3c) — never
+  each wolf as if they had chosen it, since the screen cannot tell whose finger tapped.
 - **Dawn and announcements.** The 天光 card puts the phone in the middle whoever acted last (the playtest's blocker: the seer was named every
   morning); the table screen shows the dawn, the speaking order, the 票型 and the 🗳 fold (`engine.view(state, null)` is complete and public).
 - **Speeches and 遺言 (#10).** `focus = { pids: [speaker], open: true, label: '發言' | 'PK 發言' | '遺言', hold: true }` from the opening line on:
   a public card for the speaker, then their own screen with 我講完 and their own 💥 (the table watches it, so it names them —
   「🎙 3號阿明 發言緊 — 講完㩒「我講完」」 — never 「輪到你」 or 「（你）」, and the role card and 📓 cover are not on it). The speech clock is held
-  while the card is unanswered. The 新手慢慢嚟 preset (no clocks) no longer stalls: the speaker always has the button.
+  while the card is unanswered — and looks it (re-run #1): the speech `Timer` gets `held: ctx.clockHeldAt` (the shell also tells every
+  Timer), so it stands still and stays silent behind the card, and the speaker list reads 「⏳ 等緊開始」 instead of 「🎙 講緊」 until the
+  speaker takes the phone. The 新手慢慢嚟 preset (no clocks) no longer stalls: the speaker always has the button.
 - **最後行動.** The dead player's private card during the opening line (label 「最後行動」, clock held at the card); they keep the phone for the
   whole window, confirmed or not, and it goes back to the middle when the window ends — the same for a hunter and anybody else (handing it
   back on 確定 would time the decision: the panel tells everybody but a hunter to wait the window out). A 💤 seat is not handed the phone; its
   window runs on its own clock.
 - **出局後睇到全場 (`spectate`)** does not apply on one phone (not offered, and the engine ignores it): a dead player's 遺言 is a public screen.
-- **Votes.** One private card per voter, clockwise from the holder (label 「第 N 日投票」).
+- **Votes.** One private card per voter, clockwise from the holder (label 「第 N 日投票」). The host's 🤖 代佢做 at a vote gate casts an
+  abstain the seat never chose, so with `passPhone` `autoAct` sends `{ type: 'vote', target: null, proxy: true }` and the 票型 lists it apart:
+  「代做（當棄權）：2號阿明」, and 「2號阿明（代做）」 on the tally screen (re-run #5; a forged `proxy` on a phone of its own does nothing).
+- **Night ambience (U8, re-run #7).** `meta.nightAmbient: true`: a whole-table phone plays the shell's neutral noise bed under every night
+  window, so reaching for the phone at the witch and seer steps is not heard against silence.
+- **Every night's 天黑 line** says 「部手機擺返枱中間」 and waits at least as long as night 1's (re-run #4).
 - `defaults(n, prev, { singleDevice: true })` sets `pace: 'slow'` because every step now includes a hand-over, `voteSecs: 0` because the phone has
   to reach every voter before the vote can close, and `passPhone: true`.
 - Realistically fine up to ~8 players; 12 people around one phone is cramped (the research says so too).
@@ -608,3 +619,16 @@ Requests for the framework (status 2026-10-03 UTC):
 7. **Explode during another player's speech on one phone** (2026-10-04). Only the speaker holds the phone, so the "any time in the day"
    explode becomes "own speech only". A 「💥 有人要自爆？」 on the speaker's public screen would need the phone handed over mid-speech and
    back (an `askWho` that returns to the speaker); deliberately left out.
+
+## 9. One-phone re-run (2026-10-04 UTC, `docs/playtest/single/werewolf-rerun.md`)
+
+| finding | change |
+|---|---|
+| #1 the speech timer counts down and beeps behind the unanswered card | the speech `Timer` gets `held` from `ctx.clockHeldAt` (and the shell's `setClockHold`); 「⏳ 等緊開始」 for the speaker while held |
+| #3 combined wolf screen | (a) 空刀 takes a second tap there; (b) 「時間到未㩒確定，都照計你哋指住嗰個；冇指人就空刀。」 instead of the split-vote rule when every living wolf is on it; (c) `rec.wolves.shared` → 「…（一齊揀）→ X」 in the recap |
+| #4 night 2+ drops the one-phone line and wakes the wolves after 3 s | `cueBegin(n, { pass })` says 「部手機擺返枱中間」 every night; `minMs` ≥ `BEGIN_PASS_MIN_MS` (night 1's) |
+| #5 🤖 代佢做 at a vote gate looks like a chosen abstain | one phone: `autoAct` sends `proxy: true`; ballots keep it (`rec.votes`, `sayInfo.votes`, `voteLog`); 「代做（當棄權）：…」 in the 票型 and 「（代做）」 on the tally screen |
+| #6 「呢個規則你唔可以自救」 | 「今局淨係第一晚可以自救。」 / 「今局女巫唔可以自救。」 |
+| #7 no night noise bed | `meta.nightAmbient: true` |
+| #2 the 💡 sheet lists every role | `view.rolesInPlay` = the board (`{ id, count }`) in every seat view and the table view; the shell's sheet lists only those |
+| #8–#10 | shell (RoleCard label, the closing line) or kept as documented (dead wolves are not called on one phone) |

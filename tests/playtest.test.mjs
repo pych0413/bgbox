@@ -5,7 +5,10 @@
 import { test, assert } from './lib.mjs';
 import { createNarrator, estimateMs } from '../js/core/narrator.js';
 import { focusSig } from '../js/ui/logic.js';
-import { decide, gateTarget, otherName, showKey, stepSig, makeLock, chatLine, fakeTTS, WAIT_MAX_S } from '../tools/playtest/pt.mjs';
+import {
+  decide, gateTarget, otherName, showKey, stepSig, makeLock, chatLine, fakeTTS, WAIT_MAX_S,
+  orchestratorGate, diffLines, compactBody, COMPACT_NOTE, COMPACT_MAX_LINES, parseHear, hearText, HEAR_DEFAULT, HEAR_MAX,
+} from '../tools/playtest/pt.mjs';
 
 // ---------- a 4-seat one-phone table ----------
 const PLAYERS = [
@@ -217,6 +220,128 @@ test('playtest: hear lines — the narrator reads 「🔊 旁白：…」, peopl
   assert.equal(chatLine({ t, seat: 'p2', name: '阿明', text: '我講完' }), '[12:34:56Z] 阿明(p2): 我講完');
   assert.equal(chatLine({ t, seat: 'p1', name: '阿聰', note: true, text: '📱 阿聰（房主）㩒咗「小美 唔喺度？」' }), '[12:34:56Z] 📱 阿聰（房主）㩒咗「小美 唔喺度？」');
   assert.equal(WAIT_MAX_S, 90, 'wait stays under an agent shell call (120 s)');
+});
+
+// ---------- the avalon re-run: players must not stop or restart a table ----------
+test('playtest (avalon re-run): stop is the orchestrator\'s — a player\'s stop is refused, and the refusal does not hand over the flag', () => {
+  const no = orchestratorGate('stop');
+  assert.match(no, /^refused: stop/);
+  assert.match(no, /only the orchestrator/);
+  assert.ok(!no.includes('--orchestrator'), 'a seat agent that is "cleaning up" must not be told the magic word');
+  assert.notEqual(orchestratorGate('stop', { orchestrator: false, running: true, leftover: true }), null);
+  assert.equal(orchestratorGate('stop', { orchestrator: true }), null, 'the orchestrator\'s stop goes through');
+});
+
+test('playtest (avalon re-run): start on a name that already exists (running or left over) needs the orchestrator; a new name does not', () => {
+  assert.equal(orchestratorGate('start', { running: false, leftover: false }), null, 'a fresh name starts freely');
+  assert.equal(orchestratorGate('start'), null);
+  for (const state of [{ running: true }, { leftover: true }, { running: true, leftover: true }]) {
+    const no = orchestratorGate('start', state);
+    assert.match(no, /^refused: this session name already exists/, JSON.stringify(state));
+    assert.ok(!no.includes('--orchestrator'));
+    assert.equal(orchestratorGate('start', { ...state, orchestrator: true }), null, 'the orchestrator may');
+  }
+  // only stop and start are gated: everything a player does is untouched
+  for (const op of ['see', 'tap', 'draw', 'wait', 'say', 'hear', 'setup', 'reload']) assert.equal(orchestratorGate(op, { running: true, leftover: true }), null, op);
+});
+
+// ---------- draw / wait print what changed ----------
+const LAST = {
+  text: ['誰是臥底 第 1 輪', '輪到 阿明 講', '阿明 講完喇 ▸', '大熊 未講'].join('\n'),
+  behind: null,
+  items: ['[1] button "💡"', '[2] button "阿明 講完喇 ▸"', '[3] canvas 300×100'],
+};
+const NOW = (over = {}) => ({ ...LAST, items: LAST.items.slice(), ...over });
+
+test('playtest compact: diffLines is a multiset difference — a line that appears more often than before is new', () => {
+  assert.deepEqual(diffLines(['a', 'b', 'c'], ['a', 'b', 'c']), []);
+  assert.deepEqual(diffLines(['a', 'b'], ['a', 'x', 'b', 'y']), ['x', 'y']);
+  assert.deepEqual(diffLines(['a'], ['a', 'a', 'a']), ['a', 'a'], 'two more copies than before');
+  assert.deepEqual(diffLines([], ['q']), ['q']);
+  assert.deepEqual(diffLines(['gone'], []), []);
+  assert.deepEqual(diffLines(null, ['q']), ['q'], 'nothing to compare with');
+});
+
+test('playtest compact: an unchanged screen collapses to two short lines and points at --full', () => {
+  const c = compactBody(NOW(), LAST);
+  assert.deepEqual(c.lines, [
+    '--- screen text --- (same as your last screen)',
+    '--- controls --- (3 controls, same as your last screen)',
+  ]);
+  assert.equal(c.elided, true);
+  assert.match(COMPACT_NOTE, /--full/);
+});
+
+test('playtest compact: only the changed screen lines are printed, and the controls when any of them changed', () => {
+  const text = LAST.text.replace('輪到 阿明 講', '輪到 小美 講');
+  const c = compactBody(NOW({ text }), LAST);
+  assert.equal(c.lines[0], '--- screen text: 1 of 4 lines are new ---');
+  assert.equal(c.lines[1], '輪到 小美 講');
+  assert.equal(c.lines[2], '--- controls --- (3 controls, same as your last screen)');
+  const moved = compactBody(NOW({ text, items: ['[1] button "💡"', '[2] button "小美 講完喇 ▸"', '[3] canvas 300×100'] }), LAST);
+  assert.deepEqual(moved.lines.slice(2), ['--- controls ---', '[1] button "💡"', '[2] button "小美 講完喇 ▸"', '[3] canvas 300×100'], 'changed controls are listed in full, numbers included');
+  assert.ok(!moved.lines.some((l) => l.includes('阿明 講完喇')), 'the old control is gone');
+});
+
+test('playtest compact: the text behind a public card is compared too; a screen with no text says so', () => {
+  const was = { ...LAST, behind: '畫板\n阿聰 畫緊' };
+  const c = compactBody(NOW({ behind: '畫板\n小美 畫緊' }), was);
+  const i = c.lines.findIndex((l) => l.startsWith('--- behind the card'));
+  assert.ok(i >= 0);
+  assert.equal(c.lines[i + 1], '小美 畫緊');
+  assert.match(c.lines[i], /1 of 2 lines are new/);
+  const blank = compactBody({ text: '', behind: null, items: [] }, LAST);
+  assert.equal(blank.lines[0], '--- screen text --- (no text)');
+  assert.deepEqual(blank.lines.slice(1), ['--- controls ---', '(none)']);
+});
+
+test('playtest compact: a huge change is cut at COMPACT_MAX_LINES with a count of what was left out', () => {
+  const many = Array.from({ length: COMPACT_MAX_LINES + 7 }, (_, i) => `新行 ${i}`);
+  const c = compactBody(NOW({ text: many.join('\n') }), LAST);
+  assert.equal(c.lines.length, 1 + COMPACT_MAX_LINES + 1 + 1, 'heading, the kept lines, the 「more」 line, the controls line');
+  assert.equal(c.lines[COMPACT_MAX_LINES + 1], '… 7 more new lines');
+  assert.equal(c.elided, true);
+  // with nothing to compare against (a seat's first command) every line is new and the heading says no more than the plain one
+  const first = compactBody(NOW(), null);
+  assert.equal(first.lines[0], '--- screen text ---');
+  assert.equal(first.lines.length, 1 + 4 + 1 + 3, 'all 4 text lines, then all 3 controls');
+});
+
+// ---------- hear N ----------
+const row = (t, text, seat = 'p1', name = '阿聰') => ({ t, seat, name, text });
+const ROWS = Array.from({ length: 12 }, (_, i) => row(`2026-10-05T10:00:${String(i * 5).padStart(2, '0')}.000Z`, `話 ${i + 1}`));
+const lineCount = (txt) => txt.split('\n').filter((l) => /^\[\d\d:\d\d:\d\dZ\]/.test(l)).length;
+
+test('playtest hear: N is a line count and is honoured (default 30, at most 1000), with or without a seat id in front', () => {
+  assert.deepEqual(parseHear([]), { n: HEAR_DEFAULT });
+  assert.deepEqual(parseHear(['5']), { n: 5 });
+  assert.deepEqual(parseHear(['p2', '5'], ['p1', 'p2']), { n: 5 }, 'hear <session> p2 5');
+  assert.deepEqual(parseHear(['5', 'p2'], ['p1', 'p2']), { n: 5 });
+  assert.deepEqual(parseHear(['p2'], ['p1', 'p2']), { n: HEAR_DEFAULT }, 'a seat id alone is just the default');
+  assert.deepEqual(parseHear(['500']), { n: 500 }, 'no longer clipped at 200');
+  assert.deepEqual(parseHear(['99999']), { n: HEAR_MAX });
+  assert.deepEqual(parseHear(['0']), { n: HEAR_DEFAULT });
+  const out = hearText(ROWS, ['3']);
+  assert.equal(lineCount(out), 3);
+  assert.ok(out.includes('話 12') && out.includes('話 11') && out.includes('話 10') && !out.includes('話 9'), 'the last three');
+  assert.match(out, /^\(9 earlier lines not shown\)\n/);
+  assert.equal(lineCount(hearText(ROWS, ['p2', '7'], ['p1', 'p2'])), 7);
+  assert.equal(lineCount(hearText(ROWS, [])), 12, 'fewer rows than N: all of them');
+  assert.ok(!hearText(ROWS, ['12']).includes('earlier line'), 'nothing was left out, so nothing is said');
+  assert.match(hearText(ROWS, ['11']), /^\(1 earlier line not shown\)/);
+});
+
+test('playtest hear: 90s / 2m is a time window; nothing said and unreadable arguments are told plainly', () => {
+  assert.deepEqual(parseHear(['90s']), { sinceMs: 90000 });
+  assert.deepEqual(parseHear(['2m']), { sinceMs: 120000 });
+  assert.deepEqual(parseHear(['2min']), { sinceMs: 120000 });
+  const now = Date.parse('2026-10-05T10:01:00.000Z');   // the rows run 10:00:00 … 10:00:55
+  assert.equal(lineCount(hearText(ROWS, ['20s'], [], now)), 4, 'the rows from the last 20 s (10:00:40, :45, :50, :55)');
+  assert.equal(lineCount(hearText(ROWS, ['5m'], [], now)), 12);
+  assert.equal(hearText(ROWS, ['5s'], [], now + 60000), '(nothing said in the last 5 s)');
+  assert.equal(hearText([], []), '(nobody has said anything yet)');
+  assert.equal(hearText([], ['30s']), '(nobody has said anything yet)');
+  for (const bad of [['banana'], ['3', '4'], ['-2'], ['--full']]) assert.throws(() => parseHear(bad, ['p1']), /hear <session> \[n/, bad.join(' '));
 });
 
 // ---------- the fake text-to-speech, driven by the app's own narrator ----------

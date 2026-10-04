@@ -24,7 +24,9 @@ const ACCENT = '#a78bfa';
 /** Why a vote put nobody out (engine `elim.reason`). */
 const NO_OUT = { nobody: '冇人投票', nomajority: '冇人過半數', alltied: '全部人同票', pktie: 'PK 再平票', tie: '平票' };
 const BANNER = { civilians: ['is-civ', '🧑 平民贏！'], infiltrators: ['is-inf', '🕵️ 臥底方贏！'], blank: ['is-inf', '⬜ 白板贏！'] };
-const LOCKOUT_MS = 1500;           // 睇完 stays dead this long after a result appears, so a stray tap cannot skip it
+/** U5: 開始投票 on a whole-table phone is two taps; the armed button reads 「再㩒一次：開始投票？全枱傾夠未？」. */
+const START_ASK = '開始投票？全枱傾夠未？';
+const LOCKOUT_MS = 1500;           // 睇完 after a result appears, and a shared phone's next 「X 講完喇」, stay dead this long
 const RETRY_MS = 4000;             // a tap the host never confirmed comes back as a button after this long
 const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
 /** Nobody here holds a role, only a word: the card's own words (RoleCard says 角色牌). */
@@ -85,7 +87,7 @@ export function mount(root, api) {
   /** …and that phone holds every seated player: one tap there is the table's decision (U5). */
   const wholeTable = () => atTable() && !!api.wholeTable;
   /** A whole-table tap from the table screen (api.tableSend); false while the table card is still up (U5). */
-  const tableTap = (action) => (ctx.tableLocked ? false : api.tableSend?.(action) ?? false);
+  const tableTap = (action, opts) => (ctx.tableLocked ? false : api.tableSend?.(action, opts) ?? false);
 
   /** "That is you" only means something on a phone of your own; on a shared one the seat on screen is just whoever held it last. */
   const isMe = (id) => id != null && id === meId() && !sharedDevice();
@@ -258,6 +260,14 @@ export function mount(root, api) {
     const box = el('section', { class: 'uc-screen' }, who, sub, timer.el, action, hint, order);
     let actionStep = null;
     let tableBtn = null;
+    let doneBtn = null;               // the 「X 講完喇 ▸」 on screen (table or shared seat): the bounce lock applies to it
+    let bounce = false;               // re-run #2 N1: the new speaker's button is dead for a moment after an advance
+    let bounceTimer = null;
+    const paintLock = () => {
+      if (tableBtn) tableBtn.disabled = bounce || !!ctx.tableLocked;     // U5: not while the 「擺返中間」 card is up
+      else if (doneBtn) doneBtn.disabled = bounce;
+      who.classList.toggle('is-new', bounce);                           // the new speaker's name pulses meanwhile
+    };
 
     return {
       el: box,
@@ -281,22 +291,33 @@ export function mount(root, api) {
           : i < sp.turn ? el('span', { class: 'uc-order-tick' }, sp.spoke.includes(id) ? '✓' : '💤') : null)));
 
         if (actionStep !== sp.id) {
+          // re-run #2 N1: on a shared phone the button for the NEXT speaker is rebuilt in the same spot the moment a
+          // turn ends, so a double tap (or two people tapping together) would end that turn too. Each tap carries the
+          // step it was made on (`at`, stale ones are dropped by the engine), and after an advance the new button stays
+          // dead for LOCKOUT_MS while the new name pulses. Not on the first paint, not on a phone of your own.
+          const advanced = actionStep !== null;
           actionStep = sp.id;
           tableBtn = null;
+          doneBtn = null;
+          const at = sp.id;
           if (atTable()) {
             // §7.1: the phone lies in the middle while the clues go round — anyone taps for the speaker who finished
-            tableBtn = button(`${nameOf(sp.pid)} 講完喇 ▸`, () => tableTap({ type: 'done', at: sp.id }));
+            tableBtn = button(`${nameOf(sp.pid)} 講完喇 ▸`, () => { if (!bounce) tableTap({ type: 'done', at }); });
             action.replaceChildren(tableBtn);
           } else {
             const canDone = v.me && (mine || sharedDevice());
-            action.replaceChildren(canDone
-              ? button(mine ? '講完喇 ▸' : `${nameOf(sp.pid)} 講完喇 ▸`, () => api.send({ type: 'done', at: sp.id }))
-              : (v.me && !v.me.alive ? el('p', { class: 'uc-note' }, '你已經出局，聽住大家講。') : ''));
+            doneBtn = canDone
+              ? button(mine ? '講完喇 ▸' : `${nameOf(sp.pid)} 講完喇 ▸`, () => { if (!bounce) api.send({ type: 'done', at }); })
+              : null;
+            action.replaceChildren(doneBtn ?? (v.me && !v.me.alive ? el('p', { class: 'uc-note' }, '你已經出局，聽住大家講。') : ''));
           }
+          clearTimeout(bounceTimer);
+          bounce = advanced && (atTable() || sharedDevice());
+          if (bounce) bounceTimer = setTimeout(() => { bounce = false; paintLock(); }, LOCKOUT_MS);
         }
-        if (tableBtn) tableBtn.disabled = !!c.tableLocked;       // U5: not while the 「擺返中間」 card is up
+        paintLock();
       },
-      destroy() { timer.destroy(); },
+      destroy() { timer.destroy(); clearTimeout(bounceTimer); },
     };
   }
 
@@ -315,12 +336,12 @@ export function mount(root, api) {
     let tableBtn = null;
     /**
      * §7.1 the shared phone in the middle: one tap counts for every seat it holds (api.tableSend). A phone that holds
-     * the whole table opens the vote with it, so it takes a second tap there (U5): 「再㩒一次：全枱傾夠未？」.
+     * the whole table opens the vote with it, so it takes a second tap there (U5): the shell's confirm arms the button
+     * as 「再㩒一次：開始投票？全枱傾夠未？」 (re-run #2 N3: the armed label still says what the second tap does).
      */
     function tableStart() {
       if (ctx.tableLocked) return;
-      if (wholeTable() && api.confirm && !api.confirm('全枱傾夠未？', tableBtn)) return;
-      if (tableTap({ type: 'start-vote' }) === false) return;
+      if (tableTap({ type: 'start-vote' }, { confirm: START_ASK, node: tableBtn }) === false) return;
       pending = true;
       clearTimeout(retry);
       retry = setTimeout(() => { pending = false; render(); }, RETRY_MS);
@@ -329,7 +350,7 @@ export function mount(root, api) {
     /** A seat's own 開始投票 (it also counts the phone's other seats). On a whole-table phone it is the table's call: two taps (U5). */
     function seatStartBtn() {
       const b = button('開始投票 🗳️', () => {
-        if (api.wholeTable && api.confirm && !api.confirm('全枱傾夠未？', b)) return;
+        if (api.wholeTable && api.confirm && !api.confirm(START_ASK, b)) return;
         pending = true;
         api.send(withMates({ type: 'start-vote' }));
         clearTimeout(retry);

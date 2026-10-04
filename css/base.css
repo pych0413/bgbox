@@ -615,6 +615,20 @@ button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: no
 .c-passgate.is-public .c-passgate-lock { font-size: 2rem; animation: none; margin-bottom: .25rem; }
 .c-passgate.is-public .c-passgate-card h2 { font-size: 1.25rem; }
 .c-passgate.is-public .c-passgate-card p { margin-bottom: .875rem; }
+/* re-run #3: a public card never hides the bottom of the screen — the page is not scroll-locked, a vertical drag
+   goes through the backdrop (taps are still swallowed), and the page is padded by the card's height while it shows */
+.c-passgate.is-public { touch-action: pan-y; }
+/* the 擺返中間 / 天光 card is compact: icon beside the title, a short subtitle, the button */
+.c-passgate[data-gate="table"] .c-passgate-card { display: grid; grid-template-columns: auto 1fr; column-gap: .625rem; align-items: center; text-align: left; padding: .75rem .875rem .875rem; }
+.c-passgate[data-gate="table"] .c-passgate-lock { grid-row: span 2; font-size: 1.75rem; margin: 0; }
+.c-passgate[data-gate="table"] .c-passgate-card h2 { font-size: 1.125rem; margin: 0; }
+.c-passgate[data-gate="table"] .c-passgate-card p { margin: 0 0 .625rem; font-size: .875rem; }
+.c-passgate[data-gate="table"] .c-passgate-card > .btn { grid-column: 1 / -1; }
+body.has-gate-card .screen.play { padding-bottom: calc(var(--gate-card-h, 13rem) + 1.5rem + var(--safe-b)); }
+body.has-gate-card .screen.play.has-narrator { padding-bottom: max(14rem, calc(var(--gate-card-h, 13rem) + 1.5rem + var(--safe-b))); }
+body.has-gate-card .screen.play.has-narrator.narrator-compact { padding-bottom: calc(var(--gate-card-h, 13rem) + 1.5rem + var(--safe-b)); }
+/* re-run #3: for ~400 ms after a card is tapped away every tap is swallowed (a bounce never lands underneath) */
+.c-passgate-shield { position: fixed; inset: 0; z-index: 200; background: transparent; touch-action: none; }
 /* #18: the host's quiet 「X 唔喺度？」 under a named gate */
 .c-passgate-escape { margin-top: 1rem; display: flex; flex-direction: column; align-items: center; gap: .5rem; }
 .c-passgate-escape > .btn { width: auto; opacity: .75; }

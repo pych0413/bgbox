@@ -135,3 +135,14 @@ export function needsEyesClosed(meta) {
   if (typeof meta?.eyesClosed === 'boolean') return meta.eyesClosed;
   return meta?.narration === 'required';
 }
+
+/**
+ * U8: does this game want the night's neutral noise bed on a whole-table phone? `meta.nightAmbient` (true / false)
+ * wins; absent, every eyes-closed night (`needsEyesClosed`: onuw, werewolf, cheese-thief) gets it — reaching for
+ * the phone in the middle must not be heard against silence. The play screen plays it only on a whole-table phone,
+ * at night, and never in 靜音.
+ */
+export function wantsNightAmbient(meta) {
+  if (typeof meta?.nightAmbient === 'boolean') return meta.nightAmbient;
+  return needsEyesClosed(meta);
+}

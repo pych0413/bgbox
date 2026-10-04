@@ -8,6 +8,7 @@ import {
   savedOrderDiffers, savedGroupNames, presetMatches,
   scoreboardMode, resultHero, confettiSet, turnBadge, skipNeedsConfirm, SKIP_CONFIRM, recentFolds,
   nightChrome, NIGHT_WORDS, hintRoleText, focusSig, walkOrder, gateSubtitle, narrationChoices,
+  openStepChip, tableConfirmText, TABLE_CONFIRM, hintRoles,
 } from '../js/ui/logic.js';
 import { paintStrokes, PAPER } from '../js/ui/ink.js';
 import { isIOS, motionWords, motionDeviceName } from '../js/core/shake.js';
@@ -1176,7 +1177,7 @@ const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(
  * phone unless `room.singleDevice: false`). setActiveSeat changes the state at once, like the real app; `up(patch)`
  * applies a state patch and re-renders. The game UI records every mount (its api) and every update (view, ctx).
  */
-async function sharedPhone(dom, clock, { st: patch = {}, hostCtl = {}, meta = {}, seats = ['p1', 'p2', 'p3', 'p4'] } = {}) {
+async function sharedPhone(dom, clock, { st: patch = {}, hostCtl = {}, meta = {}, rules = undefined, seats = ['p1', 'p2', 'p3', 'p4'] } = {}) {
   const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
   const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
   const calls = [];
@@ -1217,6 +1218,7 @@ async function sharedPhone(dom, clock, { st: patch = {}, hostCtl = {}, meta = {}
   };
   const game = {
     meta: { id: 'g', name: '測試', ...meta },
+    rules,
     ui: {
       mount: (root, api) => {
         const m = { api, updates: [], destroyed: false };
@@ -1703,5 +1705,323 @@ test('§7.1 U1 lobby: one phone + an eyes-closed night hides 🔇 靜音 and say
     assert.equal(modeBtn('silent').hidden, false);
     assert.ok(!lobby.el.textContent.includes('要搵個唔玩嘅人讀'));
     lobby.destroy();
+  }));
+});
+
+// ============================================================
+// one-phone re-run fixes (shared shell / core items 1–7)
+// ============================================================
+
+test('§7.1 re-run logic: openStepChip (#6), tableConfirmText (#2), hintRoles (#5)', () => {
+  assert.equal(openStepChip('阿明', '擺喺枱中間畫'), '📱 枱中間 — 阿明 畫緊');
+  assert.equal(openStepChip('小美', '發言'), '📱 枱中間 — 小美 講緊');
+  assert.equal(openStepChip('小美', '遺言'), '📱 枱中間 — 小美 講緊');
+  assert.equal(openStepChip('大熊', '揀隊員'), '📱 枱中間 — 大熊 揀緊');
+  assert.equal(openStepChip('阿珍', ''), '📱 枱中間 — 輪到 阿珍');
+  assert.equal(openStepChip('阿珍'), '📱 枱中間 — 輪到 阿珍');
+  assert.equal(tableConfirmText('再㩒一次：開始投票？'), '開始投票？', 'the arm adds 「再㩒一次：」 itself');
+  assert.equal(tableConfirmText('開始投票？'), '開始投票？');
+  assert.equal(tableConfirmText(true), TABLE_CONFIRM);
+  assert.equal(tableConfirmText(''), '');
+  assert.equal(tableConfirmText(undefined), '');
+  const rules = { roles: [
+    { id: 'wolf', name: '狼人', emoji: '🐺', team: 'wolf', text: '做乜：殺人 點贏：狼多過人' },
+    { id: 'seer', name: '預言家', emoji: '🔮', team: 'village', text: '驗人' },
+    { id: 'hunter', name: '獵人', emoji: '🏹', team: 'village', text: '開槍' },
+  ] };
+  const all = hintRoles({}, rules);
+  assert.equal(all.inPlay, false, 'no rolesInPlay: every role of the game, never 「呢局」');
+  assert.deepEqual(all.roles.map((r) => r.id), ['wolf', 'seer', 'hunter']);
+  const some = hintRoles({ rolesInPlay: ['seer', 'wolf', 'wolf', 'ghost'] }, rules);
+  assert.equal(some.inPlay, true);
+  assert.deepEqual(some.roles.map((r) => [r.id, r.count]), [['seer', null], ['wolf', 2]], 'in the view\'s order; a repeated id counts; an unknown id is skipped');
+  assert.deepEqual(hintRoles({ rolesInPlay: [{ id: 'wolf', count: 2 }, { id: 'seer', n: 1 }] }, rules).roles.map((r) => [r.id, r.count]), [['wolf', 2], ['seer', 1]]);
+  assert.deepEqual(hintRoles({ roleList: [{ role: 'hunter', count: 1 }] }, rules).roles.map((r) => r.id), ['hunter'], 'onuw\'s view.roleList is read too');
+  assert.deepEqual(hintRoles({ rolesInPlay: [{ id: 'x', name: '自訂', emoji: '🃏', count: 3 }] }, rules).roles.map((r) => [r.name, r.count]), [['自訂', 3]], 'a custom role with its own name');
+  assert.equal(hintRoles({ rolesInPlay: ['ghost'] }, rules).inPlay, false, 'nothing known: back to every role');
+  assert.equal(hintRoles({}, { roles: [] }), null);
+});
+
+test('§7.1 re-run N1/R1: the first walk after a quiet day starts from seat order — never the last night holder; a day holder still leads (#17)', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const all = ['p1', 'p2', 'p3', 'p4'];
+    const views = (night) => Object.fromEntries(all.map((pid) => [pid, night ? { phase: 'night', night: true, title: '夜晚', me: pid } : { phase: 'day', title: '日頭', me: pid }]));
+    const nightSt = { views: views(true), table: { phase: 'night', night: true, title: '夜晚' } };
+    const dawn = { focus: null, views: views(false), table: { phase: 'day', title: '日頭' } };
+    const vote = { focus: { pids: all, together: true, label: '投票' } };
+    // a lone waker, still holding the phone when the night ends
+    const lone = async (waker) => {
+      const ph = await sharedPhone(dom, clock, { st: nightSt });
+      await ph.up({ focus: { pids: [waker], anonymous: '預言家請醒' } });
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, waker);
+      await ph.up(dawn);
+      assert.equal(ph.gateKind(), 'table');
+      await ph.tapGate();
+      await ph.up(vote);                         // nobody picked a seat by day
+      const text = ph.gateText();
+      ph.destroy();
+      return text;
+    };
+    for (const w of ['p2', 'p3', 'p4']) {
+      const t = await lone(w);
+      assert.ok(t.includes('交俾 阿明'), 'waker ' + w + ': the vote starts at seat 1, not at the night holder: ' + t);
+    }
+    // co-wakers: the engine drops the first, the second keeps the screen, then dawn
+    const co = await sharedPhone(dom, clock, { st: nightSt });
+    await co.up({ focus: { pids: ['p3', 'p4'], anonymous: '狼人請醒' } });
+    await co.tapGate();
+    await co.up({ focus: { pids: ['p4'], anonymous: '狼人請醒' } });
+    assert.equal(co.st.activeSeat, 'p4');
+    await co.up(dawn);
+    await co.tapGate();
+    await co.up(vote);
+    assert.ok(co.gateText().includes('交俾 阿明'), co.gateText());
+    co.destroy();
+    // by day an eyes-closed step (avalon's Assassin) straight into a walk: never from the Assassin
+    const day = await sharedPhone(dom, clock);
+    await day.up({ focus: { pids: ['p3'], anonymous: '刺客請拎起部手機' } });
+    await day.tapGate();
+    assert.equal(day.st.activeSeat, 'p3');
+    await day.up(vote);
+    assert.ok(day.gateText().includes('交俾 阿明'), day.gateText());
+    day.destroy();
+    // #17 by day is unchanged: a seat picked by hand after dawn leads the walk
+    const ph = await sharedPhone(dom, clock, { st: nightSt });
+    await ph.up({ focus: { pids: ['p2'], anonymous: '預言家請醒' } });
+    await ph.tapGate();
+    await ph.up(dawn);
+    await ph.tapGate();
+    tap(ph.chip()); tap(btnWith(ph.menu(), '大熊')); await ph.render(); await ph.tapGate();
+    tap(ph.home()); await ph.render(); await ph.tapGate();       // back in the middle behind the card
+    await ph.up(vote);
+    assert.ok(ph.gateText().includes('交俾 大熊'), 'the day holder still leads: ' + ph.gateText());
+    ph.destroy();
+  }));
+});
+
+test('§7.1 re-run #2: api.tableSend(action, { confirm }) takes a second tap on a whole-table phone; part of the table sends at once', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    const btn = new FEl('button');
+    btn.append('🗳️ 大家夠鐘投票');
+    fakeDocument.body.append(btn);
+    const api = ph.live().api;
+    assert.equal(api.tableSend({ type: 'ready-vote', on: true }, { confirm: '再㩒一次：開始投票？', node: btn }), false, 'the first tap only arms');
+    assert.equal(ph.acts.length, 0);
+    assert.equal(btn.textContent, '再㩒一次：開始投票？', 'no doubled 「再㩒一次」');
+    clock.advance(600);
+    assert.ok(api.tableSend({ type: 'ready-vote', on: true }, { confirm: '開始投票？', node: btn }));
+    assert.deepEqual(ph.acts.at(-1), { pid: 'p1', action: { type: 'ready-vote', on: true, seats: ['p1', 'p2', 'p3', 'p4'], table: true } });
+    assert.equal(btn.textContent, '🗳️ 大家夠鐘投票', 'the button gets its face back');
+    // a plain table tap is still one tap
+    clock.advance(4000);
+    api.tableSend({ type: 'seen' });
+    assert.equal(ph.acts.at(-1).action.type, 'seen');
+    // no button to relabel: the arm says so in a toast
+    clock.advance(4000);
+    assert.equal(api.tableSend({ type: 'done' }, { confirm: true }), false);
+    assert.ok(fakeDocument.getElementById('toast').textContent.includes('再㩒一次：' + TABLE_CONFIRM));
+    ph.destroy();
+    // a phone holding part of the table: its tap is not the table's decision — sent at once
+    const part = await sharedPhone(dom, clock, { seats: ['p1', 'p2'], st: { room: { singleDevice: false } } });
+    assert.ok(part.live().api.tableSend({ type: 'ready-vote' }, { confirm: '開始投票？' }));
+    assert.deepEqual(part.acts.at(-1).action.seats, ['p1', 'p2']);
+    part.destroy();
+  }));
+});
+
+test('§7.1 re-run #3: a tapped card leaves a ~400 ms tap shield; a bottom card pads the page instead of locking it', async () => {
+  await withDom(async (_, clock) => withRaf(async () => {
+    const { PassGate, SHIELD_MS } = await import('../js/ui/components/PassGate.js?v=1');
+    const body = fakeDocument.body;
+    const gateEl = () => findAll(body, (n) => n.cls.has('c-passgate'))[0];
+    const shields = () => findAll(body, (n) => n.cls.has('c-passgate-shield'));
+    assert.equal(SHIELD_MS, 400);
+    const lockedBefore = body.cls.has('modal-open');
+    let done = false;
+    PassGate.show({ title: '部手機擺返中間', kind: 'table', button: '👀 大家睇緊 · 㩒一下' }).then(() => { done = true; });
+    assert.ok(body.cls.has('has-gate-card'), 'the page is padded under the card');
+    assert.equal(body.cls.has('modal-open'), lockedBefore, 'a public card never locks the page');
+    tap(findAll(gateEl(), (n) => n.tag === 'button')[0]);
+    await Promise.resolve();
+    assert.equal(done, true);
+    assert.ok(!body.cls.has('has-gate-card'), 'the padding goes with the card');
+    assert.equal(shields().length, 1, 'a shield swallows the bounce');
+    assert.equal(PassGate.shielded(), true);
+    clock.advance(SHIELD_MS);
+    assert.equal(PassGate.shielded(), false);
+    // a private gate still locks the page, and a gate taken away by the app leaves no shield
+    PassGate.show({ title: '交俾 阿明' });
+    assert.ok(body.cls.has('modal-open'));
+    assert.ok(!body.cls.has('has-gate-card'));
+    body.replaceChildren();
+    PassGate.hide();
+    assert.equal(body.cls.has('modal-open'), lockedBefore);
+    assert.equal(shields().length, 0, 'no shield when nobody tapped');
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'css', 'base.css'), 'utf8');
+    assert.ok(/\.c-passgate-shield\s*\{[^}]*position:\s*fixed/.test(css));
+    assert.ok(/body\.has-gate-card \.screen\.play\s*\{[^}]*--gate-card-h/.test(css));
+  }));
+});
+
+test('§7.1 re-run #4 (U10): a held clock looks frozen on every Timer and never beeps; api.clockNow / ctx.clockHeldAt', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const { Timer, setClockHold, clockHeldAt, timerBeep } = await import('../js/ui/components/Timer.js?v=1');
+    const d = clock.t + 30_000;
+    const props = { deadline: d, now: () => clock.t, label: '發言', warnAt: [10] };
+    const t = Timer(props);
+    const clk = () => findAll(t.el, (n) => n.cls.has('c-timer-clock'))[0].textContent;
+    const tag = () => findAll(t.el, (n) => n.cls.has('c-timer-paused'))[0];
+    assert.equal(clk(), '0:30');
+    assert.equal(tag().hidden, true);
+    setClockHold(clock.t);
+    clock.advance(25_000);
+    t.update(props);
+    assert.equal(clk(), '0:30', 'frozen at the moment the hold began');
+    assert.equal(tag().hidden, false);
+    assert.equal(tag().textContent, '⏸ 等緊接手');
+    assert.ok(t.el.cls.has('held'));
+    assert.equal(timerBeep(11, 9, [10], { held: true }), null, 'no warning behind a gate');
+    assert.equal(timerBeep(1, 0, [10], { held: true }), null, 'no zero either');
+    assert.equal(timerBeep(11, 9, [10]), 'warn');
+    assert.equal(timerBeep(1, 0, [10]), 'zero');
+    assert.equal(timerBeep(4.2, 3.9, [10]), 'tap');
+    t.update({ ...props, held: false });
+    assert.equal(clk(), '0:05', '`held: false` ignores the room hold');
+    // released: the session moved the deadline on by the time held
+    setClockHold(null);
+    t.update({ ...props, deadline: d + 25_000 });
+    assert.equal(clk(), '0:30');
+    assert.equal(tag().hidden, true);
+    // a game may hold one Timer itself
+    t.update({ ...props, deadline: d + 25_000, held: true });
+    clock.advance(3_000);
+    t.update({ ...props, deadline: d + 25_000, held: true });
+    assert.equal(clk(), '0:30');
+    t.destroy();
+    // the play screen tells every Timer, and gives the game the same clock
+    const ph = await sharedPhone(dom, clock);
+    assert.equal(ph.ctx().clockHeldAt, null);
+    assert.equal(ph.live().api.clockNow(), clock.t);
+    await ph.up({ room: { clockHeld: true, clockHeldAt: clock.t - 4_000 } });
+    assert.equal(ph.ctx().clockHeld, true);
+    assert.equal(ph.ctx().clockHeldAt, clock.t - 4_000);
+    assert.equal(clockHeldAt(), clock.t - 4_000);
+    const at = clock.t - 4_000;
+    clock.advance(2_000);
+    assert.equal(ph.live().api.clockNow(), at, 'stands still while held');
+    await ph.up({ room: { clockHeld: true, clockHeldAt: undefined } });
+    assert.equal(ph.live().api.clockNow(), clock.t, 'a core without clockHeldAt: frozen from when the screen saw it');
+    clock.advance(1_000);
+    assert.equal(ph.live().api.clockNow(), clock.t - 1_000);
+    await ph.up({ room: { clockHeld: false, clockHeldAt: null } });
+    assert.equal(ph.live().api.clockNow(), clock.t);
+    assert.equal(clockHeldAt(), null);
+    await ph.up({ room: { clockHeld: true, clockHeldAt: 5 } });
+    ph.destroy();
+    assert.equal(clockHeldAt(), null, 'leaving the play screen lets go');
+  }));
+});
+
+test('§7.1 re-run #5: 💡 lists only the roles in play, and shows no role cover on the table view or a public step', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const rules = { roles: [
+      { id: 'wolf', name: '狼人', emoji: '🐺', team: 'wolf', text: '殺人' },
+      { id: 'seer', name: '預言家', emoji: '🔮', team: 'village', text: '驗人' },
+      { id: 'hunter', name: '獵人', emoji: '🏹', team: 'village', text: '開槍' },
+    ] };
+    const views = Object.fromEntries(['p1', 'p2', 'p3', 'p4'].map((pid) => [pid, { phase: 'day', title: '日頭', me: pid, roleId: pid === 'p2' ? 'seer' : 'wolf', rolesInPlay: ['wolf', 'seer'] }]));
+    const ph = await sharedPhone(dom, clock, { rules, st: { views, table: { phase: 'day', title: '枱中間', rolesInPlay: ['wolf', 'wolf', 'seer'] } } });
+    const sheet = () => findAll(fakeDocument.body, (n) => n.cls.has('hint-sheet-wrap')).at(-1);
+    const openHint = async () => { tap(findAll(ph.screen.el, (n) => n.attrs['aria-label'] === '提示：而家要做咩')[0]); await settle(); };
+    await openHint();
+    let text = sheet().textContent;
+    assert.ok(text.includes('🎭 呢局有咩角色') && text.includes('狼人 × 2') && text.includes('預言家'), text);
+    assert.ok(!text.includes('獵人'), 'a role not in this game is not listed');
+    assert.ok(!text.includes('㩒住睇你嘅角色'), 'no cover on the phone in the middle');
+    tap(btnWith(sheet(), '✕'));
+    // a public (open) step for 小美: her screen is face up — still no cover
+    await ph.up({ focus: { pids: ['p2'], open: true, label: '揀隊員' } });
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    await openHint();
+    text = sheet().textContent;
+    assert.ok(!text.includes('㩒住睇你嘅角色') && text.includes('🎭 呢局有咩角色'), text);
+    tap(btnWith(sheet(), '✕'));
+    // her own private screen (a seat picked by hand): the hold-to-peek cover, as before
+    await ph.up({ focus: null });
+    await ph.tapGate();
+    tap(ph.chip()); tap(btnWith(ph.menu(), '小美')); await ph.render(); await ph.tapGate();
+    await openHint();
+    assert.ok(sheet().textContent.includes('㩒住睇你嘅角色'), sheet().textContent);
+    tap(btnWith(sheet(), '✕'));
+    ph.destroy();
+  }));
+});
+
+test('§7.1 re-run #6: during a public one-person step the chip says the phone lies in the middle, never 「而家睇」; no 📱 擺返中間; locked while X draws', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    // draw-guess: 小美 draws on the phone in the middle — a 換人 would take the canvas off the table's screen
+    await ph.up({ focus: { pids: ['p2'], open: true, label: '擺喺枱中間畫', step: 'draw:1' }, canInk: ['p2'] });
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    assert.equal(ph.chip().textContent, '📱 枱中間 — 小美 畫緊');
+    assert.ok(ph.chip().disabled, 'locked while she draws');
+    assert.equal(ph.home().hidden, true);
+    // a speech (werewolf) / the 諗樣's explain (9upper): the same words, but anyone may still pick their own name (#9)
+    await ph.up({ focus: { pids: ['p3'], open: true, label: '發言', step: 'speech:3' }, canInk: [] });
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p3');
+    assert.ok(ph.chip().textContent.startsWith('📱 枱中間 — 大熊 講緊'), ph.chip().textContent);
+    assert.ok(!ph.chip().textContent.includes('而家睇'));
+    assert.equal(ph.chip().disabled, false);
+    assert.equal(ph.home().hidden, true, 'no 擺返中間: it already lies there');
+    tap(ph.chip());
+    assert.ok(ph.menu().textContent.includes('邊個要睇自己？'));
+    assert.equal(btnWith(ph.menu(), '📱 擺返枱中間'), undefined);
+    tap(btnWith(ph.menu(), '阿珍'));
+    await ph.render();
+    assert.equal(ph.gateKind(), 'switch');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p4');
+    assert.ok(ph.chip().textContent.includes('而家睇：阿珍'), 'her own private screen');
+    assert.equal(ph.home().hidden, false);
+    // the step turns private for a seat: the usual chip and 擺返中間
+    await ph.up({ focus: { pids: ['p2'], step: 'guess' } });
+    await ph.tapGate();
+    assert.ok(ph.chip().textContent.includes('而家睇：小美'));
+    assert.equal(ph.chip().disabled, false);
+    assert.equal(ph.home().hidden, false);
+    ph.destroy();
+    // a single-seat phone never sees any of it
+    const one = await sharedPhone(dom, clock, { seats: ['p2'], st: { activeSeat: 'p2', mode: 'host', isHost: false, room: { singleDevice: false } } });
+    await one.up({ focus: { pids: ['p2'], open: true, label: '畫畫' } });
+    assert.equal(one.chip().hidden, true);
+    one.destroy();
+  }));
+});
+
+test('§7.1 re-run #7 (U8): the night bed defaults to every eyes-closed night (werewolf, cheese-thief); meta.nightAmbient false opts out', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const night = { focus: { pids: [], anonymous: '狼人請醒' }, table: { phase: 'night', night: true } };
+    const bedFor = async (meta) => {
+      const ph = await sharedPhone(dom, clock, { meta });
+      await ph.up(night);
+      const out = ph.ambient.slice();
+      ph.destroy();
+      return out;
+    };
+    assert.deepEqual(await bedFor({ narration: 'required', eyesClosed: true }), [true], 'werewolf / cheese-thief meta');
+    assert.deepEqual(await bedFor({ narration: 'required' }), [true]);
+    assert.deepEqual(await bedFor({ narration: 'recommended', eyesClosed: true, nightAmbient: true }), [true], 'onuw');
+    assert.deepEqual(await bedFor({ narration: 'required', nightAmbient: false }), [], 'a game may opt out');
+    assert.deepEqual(await bedFor({ narration: 'optional' }), [], 'no eyes-closed night, no bed');
+    // phones of their own: never
+    const multi = await sharedPhone(dom, clock, { meta: { narration: 'required' }, st: { room: { singleDevice: false } } });
+    await multi.up(night);
+    assert.deepEqual(multi.ambient, []);
+    multi.destroy();
   }));
 });

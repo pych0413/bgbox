@@ -281,7 +281,8 @@ function checkLeaks(sim) {
     walkStrings(v, (str, path) => {
       if (!ROLE_IDS.includes(str)) return;
       const own = path === '$.mine.role' && pid !== null;
-      const deck = /^\$\.deck\[\d+\]\.role$/.test(path);
+      // the public deck, and the same deck again as the 💡 sheet's roles in play (re-run #5)
+      const deck = /^\$\.(deck\[\d+\]\.role|rolesInPlay\[\d+\]\.id)$/.test(path);
       const flip = flipped && /^\$\.assassinate\.flipped\[\d+\]\.role$/.test(path);
       assert.ok(own || deck || flip, `role "${str}" leaks at ${path} (${label})`);
     });
@@ -1988,7 +1989,7 @@ test('avalon: during a fuzzed game every secret step starts with a tap for every
 
 test('avalon: views are built field by field and carry no private state', () => {
   const sim = mkTimed(8, 3);
-  const topCommon = ['absent', 'board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'subtitle', 'timerLabel', 'title', 'track'];
+  const topCommon = ['absent', 'board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'rolesInPlay', 'subtitle', 'tableContinue', 'timerLabel', 'title', 'track'];
   const seatV = Object.keys(sim.view('p2')).sort();
   assert.deepEqual(seatV, [...topCommon, 'mine'].sort());
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topCommon.slice().sort());
@@ -3286,7 +3287,7 @@ test('avalon: in a real Room each phone only ever receives its own card, and a w
         walkStrings(m, (str, path) => {
           if (!ROLE_IDS.includes(str)) return;
           const own = path === `$.bySeat.${pid}.mine.role`;
-          const deck = /\.deck\[\d+\]\.role$/.test(path);
+          const deck = /\.(deck\[\d+\]\.role|rolesInPlay\[\d+\]\.id)$/.test(path);
           const flip = /\.assassinate\.flipped\[\d+\]\.role$/.test(path);
           assert.ok(own || deck || flip, `role "${str}" reached ${pid}'s phone at ${path}`);
         });
@@ -3696,12 +3697,19 @@ test('avalon ui, one phone (#22 #4 #20): no identity card on the public screens,
     lead.paint();
     assert.equal(mini(lead.root).hidden, false, 'the leader\'s own ballot is private: the card is back');
     voteAll(sim, 'approve');
-    lead.paint();
-    assert.equal(mini(lead.root).hidden, true, 'the vote reveal is public');
+    // re-run F2: the vote reveal is nobody's step on one phone — it lies in the middle, on the table screen
+    assert.equal(sim.focus(), null);
+    const tbl = mountOne(ui, comps, sim, null);
+    tbl.paint();
+    assert.ok(!mini(tbl.root) || mini(tbl.root).hidden, 'no identity card on the table screen');
+    assert.ok(visible(actBtn(tbl.root, 'continue')), 'the table goes on');
     const note = (root) => findAll(root, (n) => hasCls(n, 'av-show-note'))[0];
-    assert.ok(visible(note(lead.root)) && note(lead.root).textContent === S.T.voted.tableNote, 'the leader is reminded to show the table before 繼續');
+    assert.ok(!note(tbl.root) || !visible(note(tbl.root)));
+    lead.paint();
+    assert.ok(visible(note(lead.root)) && note(lead.root).textContent === S.T.voted.tableNote, 'a leader who picked their own name is reminded to show the table');
     hand.paint();
-    assert.ok(!note(hand.root) || !visible(note(hand.root)), 'only on the screen of the leader');
+    assert.ok(visible(note(hand.root)) && visible(actBtn(hand.root, 'continue')), 'on one phone anybody may go on, so any seat picked by hand gets it too');
+    tbl.handle.destroy();
     // a phone of its own: unchanged
     const own = mk(6, { seed: 5 });
     revealAll(own);
@@ -3751,7 +3759,9 @@ test('avalon ui, one phone (#27): the talk screen is the same on every screen, w
 
 test('avalon ui, one phone: the table screen goes on with one tap when the leader is 💤; otherwise 繼續 is the leader\'s', async () => {
   await withFakeDom(async (ui, comps) => {
-    const sim = mkOne(7, { seed: 9 });
+    // a shared phone in a room of several phones (no passPhone): 繼續 is the leader's until they are 💤
+    const sim = new Sim(game, { n: 7, seed: 9, config: config.defaults(7, { ...REV }) });
+    assert.equal(st(sim).cfg.passPhone, false);
     revealAll(sim);
     pickTeam(sim);
     voteAll(sim, 'approve');
@@ -3854,6 +3864,9 @@ async function withShell(fn) {
     dom.disarmConfirm?.();
     const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
     PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
     for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
       if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
     }
@@ -3953,6 +3966,88 @@ test('avalon, one phone through the real play screen: 我睇完 waits 8 s from t
     assert.equal(ph.gate(), 'private');
     assert.ok(ph.gateText().includes(`交俾 ${name}`) && ph.gateText().includes('任務 1 投票'), ph.gateText());
     assert.equal(ph.st.activeSeat, null, 'behind the card lies the table view, never the ballot');
+    ph.destroy();
+  });
+});
+
+test('avalon one phone: re-run F2 — the vote and quest results are nobody\'s step: the table taps 繼續 (any seat, a table tap), nobody is waited on; phones of their own still wait on the leader', () => {
+  const sim = mkOne(6, { seed: 21 });
+  revealAll(sim);
+  const L = leader(sim);
+  const other = ids(6).find((p) => p !== L);
+  pickTeam(sim);
+  voteAll(sim, 'approve');
+  assert.equal(phase(sim), 'voted');
+  assert.equal(sim.focus(), null, 'the result goes to the middle');
+  assert.equal(sim.view(null).tableContinue, true);
+  assert.deepEqual(ids(6).filter((p) => engine.blocking(sim.state, p)), [], 'the table\'s pace, nobody in particular');
+  assert.equal(sim.view(null).hint, S.HINT.votedTable);
+  assert.ok(sim.legal(other).some((a) => a.type === 'continue'));
+  ok(sim, other, { type: 'continue', seats: ids(6), table: true });
+  assert.equal(phase(sim), 'quest');
+  playCards(sim);
+  assert.equal(phase(sim), 'quest-result');
+  assert.equal(sim.focus(), null);
+  assert.equal(sim.view(null).hint, S.HINT.resultTable);
+  ok(sim, ids(6).find((p) => p !== L && p !== other), { type: 'continue' });
+  assert.equal(phase(sim), 'pick');
+  assert.deepEqual(sim.focus().pids, [leader(sim)], 'the next pick is the new leader\'s public step');
+  // phones of their own: unchanged
+  const own = mk(6, { seed: 21 });
+  revealAll(own);
+  pickTeam(own);
+  voteAll(own, 'approve');
+  assert.deepEqual(own.focus(), { pids: [leader(own)], open: true, step: 'voted:1', label: '投票結果' });
+  assert.equal(own.view(null).tableContinue, false);
+  assert.equal(own.act(ids(6).find((p) => p !== leader(own)), { type: 'continue' }), false, 'only the leader goes on');
+});
+
+test('avalon: re-run #5 — every view names the public deck as the roles in play, so the 💡 sheet lists this game\'s roles (never a seat\'s own cover on the table)', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const sim = mkOne(7, { seed: 22 });
+  const deck = st(sim).deck.map((d) => ({ id: d.role, count: d.count }));
+  for (const pid of [null, ...ids(7)]) assert.deepEqual(sim.view(pid).rolesInPlay, deck);
+  const list = hintRoles(sim.view(null), rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => r.id), deck.map((d) => d.id));
+  assert.ok(list.roles.length < rules.roles.length, 'only this deck, not every role of the game');
+});
+
+test('avalon, one phone through the real play screen: re-run F2 — after the vote walk and the quest walk the result goes to the middle and one table tap goes on', async () => {
+  await withShell(async (dom) => {
+    const sim = mkOne(5, { seed: 7 });
+    revealAll(sim);
+    const ph = await onePhoneShell(dom, sim);
+    // the pick (public card to the leader), then the private vote walk
+    while (phase(sim) === 'pick' || phase(sim) === 'vote') {
+      if (ph.gate()) await ph.tapGate();
+      if (phase(sim) === 'pick') pickTeam(sim);
+      else ok(sim, ph.st.activeSeat, { type: 'vote', vote: 'approve' });
+      await ph.render();
+    }
+    assert.equal(phase(sim), 'voted');
+    assert.equal(ph.gate(), 'table', `the vote reveal goes to the middle: ${ph.gateText()}`);
+    const cont = () => shFind(ph.game(), (n) => n.attrs['data-act'] === 'continue')[0];
+    assert.equal(cont().disabled, true, 'locked behind the table card (U5)');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(cont().disabled, false);
+    await ph.tapIn((n) => n.attrs['data-act'] === 'continue');
+    assert.equal(ph.acts.at(-1).action.table, true, 'a whole-table tap');
+    assert.equal(phase(sim), 'quest');
+    // the quest walk: private cards to the team, then the result in the middle
+    while (phase(sim) === 'quest') {
+      assert.equal(ph.gate(), 'private', ph.gateText());
+      await ph.tapGate();
+      ok(sim, ph.st.activeSeat, { type: 'quest', card: 'success' });
+      await ph.render();
+    }
+    assert.equal(phase(sim), 'quest-result');
+    assert.equal(ph.gate(), 'table', ph.gateText());
+    await ph.tapGate();
+    await ph.tapIn((n) => n.attrs['data-act'] === 'continue');
+    assert.equal(phase(sim), 'pick');
+    assert.equal(ph.gate(), 'public', 'the next leader\'s pick');
     ph.destroy();
   });
 });

@@ -38,6 +38,14 @@ const LEVELS = [
   { level: 3, name: '困難', pts: 3, sub: '冇提示，作起嚟最辣' },
 ];
 
+/**
+ * One phone (re-run #2 N5): did this seat open its card in its read window? A shared phone mounts a fresh UI for every
+ * hand-over, so a per-mount record is gone by the time the 老實人 takes the phone back to check their card — this one
+ * lives as long as the page. Keyed by the deal (round key, term, readers) and the seat; trimmed to the last entries.
+ */
+const READ_LOG = new Map();
+const READ_LOG_MAX = 60;
+
 export function mount(root, api) {
   const { Cover, PlayerPicker, Timer } = api.components;
   const nameOf = (pid) => api.players.find((p) => p.id === pid)?.name ?? '?';
@@ -57,8 +65,21 @@ export function mount(root, api) {
   let callSeen = null;       // { round, count } — so a new 收皮啦 sounds once, not on every update
   let termSeen = null;       // { round, text } — so a 換題 is announced on every phone, once
   // `${round}|${seat}` → did this seat open its card during its read window? Set when this phone watched the window;
-  // missing (a reload after it) means "don't know", and the card then says what it always said.
-  const readLog = new Map();
+  // missing (a reload after it) means "don't know", and the card then says what it always said. A shared phone keeps it
+  // in READ_LOG (above), keyed by the whole deal, so it survives the remount at every hand-over.
+  const ownLog = new Map();
+  const dealKey = (v) => `${roundKey(v)}|${v.term?.text ?? ''}|${(v.explainers ?? []).join(',')}|${v.me}`;
+  const readLog = {
+    get: (v) => (shared() ? READ_LOG.get(dealKey(v)) : ownLog.get(`${roundKey(v)}|${v.me}`)),
+    has: (v) => (shared() ? READ_LOG.has(dealKey(v)) : ownLog.has(`${roundKey(v)}|${v.me}`)),
+    set(v, opened) {
+      if (!shared()) { ownLog.set(`${roundKey(v)}|${v.me}`, opened); return; }
+      const k = dealKey(v);
+      READ_LOG.delete(k);
+      READ_LOG.set(k, opened);
+      while (READ_LOG.size > READ_LOG_MAX) READ_LOG.delete(READ_LOG.keys().next().value);
+    },
+  };
   const timers = new Set();  // setTimeout handles owned by the UI
 
   const later = (fn, ms) => {
@@ -187,8 +208,13 @@ export function mount(root, api) {
     if (v.mine?.honest) {
       if (v.mine.explain) return { role: '你係老實人 🙋', text: v.mine.explain, note: '用自己嘅講法講，唔好照讀。' };
       // this phone watched the whole window and the card was never opened: do not pretend it was read
-      if (readLog.get(key) === false) {
+      const opened = readLog.get(v);
+      if (opened === false) {
         return { role: '你係老實人 🙋', text: '你冇打開到張卡，問到就答「張卡冇寫」。', note: '唔好話俾人知你冇睇到。' };
+      }
+      // a shared phone that does not know (a reload, or a look nobody took) never claims a read either (re-run #2 N5)
+      if (opened !== true && shared()) {
+        return { role: '你係老實人 🙋', text: '照你記得張卡寫乜講；唔肯定就答「張卡冇寫」。', note: '用自己嘅講法講，唔好照讀。' };
       }
       return { role: '你係老實人 🙋', text: '你睇過真正解釋喇，用自己嘅講法講。', note: '唔記得嘅細節可以話「張卡冇寫」。' };
     }
@@ -267,7 +293,9 @@ export function mount(root, api) {
     const paint = () => {
       const v = last;
       el.hidden = v.callouts.max === 0;
-      head.textContent = `🛑 收皮啦 · 剩 ${v.callouts.left} 張`;
+      // re-run #2 N6: once every card is used the chips go (disabled, they read like a second target list)
+      head.textContent = v.callouts.left > 0 ? `🛑 收皮啦 · 剩 ${v.callouts.left} 張` : '🛑 收皮啦 · 用晒';
+      chips.hidden = v.callouts.left === 0;
       const sig = JSON.stringify([v.explainers, v.callouts, armed, v.me]);
       if (sig === drawn) return;
       drawn = sig;
@@ -416,9 +444,9 @@ export function mount(root, api) {
     // did this seat open its card in its window? (the 老實人's reminder must not claim a read that never happened)
     // Only a phone that watched the window from its start can say "never opened": a reload mid-window does not know
     // whether the card was opened before it, so it records nothing and the usual line stays.
-    const key = `${roundKey(v0)}|${v0.me}`;
-    if (showCard && role === 'player' && fresh && !readLog.has(key)) readLog.set(key, false);
-    const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(key, true); }) : null;
+    // (a shared phone's window always starts on this mount: the reader taps 開始睇卡 on it, so it is a fresh record)
+    if (showCard && role === 'player' && fresh && (!readLog.has(v0) || (shared() && sub === 'peek'))) readLog.set(v0, false);
+    const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(v0, true); }) : null;
     const timer = makeTimer();
     const note = h('p', { class: 'g9-note' });
     const wait = sub === 'wait' ? waitBlock('📱', '') : null;
@@ -508,7 +536,7 @@ export function mount(root, api) {
     decideBtn.addEventListener('click', () => api.send({ type: 'decide' }));
     const ASK = '可以問任何關於個詞嘅嘢，但唔可以問人係咩身份。';
     const noteText = role === 'judge'
-      ? { judge: pass ? `㩒名叫佢講，講完㩒「✅ 講完」。${ASK}` : `㩒名叫佢講，次序由你話事。${ASK}`,
+      ? { judge: pass ? `講完㩒「✅ 講完」，或者直接㩒下一個嘅名。${ASK}` : `㩒名叫佢講，次序由你話事。${ASK}`,
         system: `電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「${pass ? '⏭ 跳過' : '下一位'}」，佢最尾會再輪到。${ASK}`,
         free: `大家自己傾邊個先講，講完㩒佢個名。${ASK}` }[mode]
       : role === 'player'
@@ -559,9 +587,11 @@ export function mount(root, api) {
             const state = pid === now ? 'now' : away(v, pid) ? 'away' : skipped.includes(pid) ? 'skipped'
               : spoken.includes(pid) ? 'done' : 'todo';
             const called = v.callouts.used.includes(pid);
+            // one phone (re-run #2 N4): a ✅ player can be called again for a follow-up, and keeps the ✅
             const act = role !== 'judge' ? null
               : state === 'todo' ? (free ? 'done' : system ? null : 'call')
-                : state === 'skipped' && !free && !system ? 'call' : null;
+                : state === 'skipped' && !free && !system ? 'call'
+                  : state === 'done' && pass && !free && !system ? 'call' : null;
             const row = h(act ? 'button' : 'div', {
               class: `g9-speaker ${state}${act ? ' callable' : ''}`, style: `--seat:${colorOf(pid)}`,
               type: act ? 'button' : null,
@@ -569,7 +599,8 @@ export function mount(root, api) {
             h('span', { class: 'g9-speaker-dot' }),
             h('span', { class: 'g9-speaker-name', text: (system ? `${i + 1}. ` : '') + seatName(pid, v.me) }),
             h('span', { class: 'g9-speaker-state',
-              text: state === 'away' ? '💤 唔喺度' : state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗') : state === 'done' ? '✅ 已講'
+              text: state === 'away' ? '💤 唔喺度' : state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗')
+                : state === 'done' ? (act ? '✅ 已講 · 再問佢' : '✅ 已講')
                 : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
             called ? h('span', { class: 'g9-speaker-call', text: '🛑' }) : null);
             if (act) {

@@ -79,6 +79,23 @@ export function roleFor(my, n, opts, nameOf = (p) => p) {
  */
 export const RECHECK = '🔁 天光喇：再㩒住睇一次你張身份牌 — 夜晚可能有人畀大盜拉咗做共犯。';
 export const RECHECK_DONE = '✓ 睇咗。記住：身份牌嘅嘢唔好畀人睇到。';
+/**
+ * The same dawn re-check on the phone lying in the middle of a shared table (re-run N4): the seats' own screens are
+ * behind the chip there, so the table screen says it once, for everyone alike (5p+, never whether anything changed).
+ */
+export const RECHECK_TABLE = '🔁 天光喇：大家輪流㩒上面揀名，再睇一次自己張身份牌。';
+
+/**
+ * 大家夠鐘投票 from the middle of a whole-table phone ends the talk for everybody, so it takes a second tap (re-run N2,
+ * DESIGN §7.1 `tableSend(…, { confirm })`); the question names the time still on the clock.
+ */
+export const TABLE_READY = '🗳️ 大家夠鐘投票';
+export const TABLE_READY_PART = '🗳️ 呢部機嘅人都夠鐘投票';
+export function tableReadyConfirm(leftMs) {
+  if (!Number.isFinite(leftMs) || leftMs <= 0) return '全枱傾夠未？';
+  const sec = Math.ceil(leftMs / 1000);
+  return `全枱傾夠未？仲有 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
 
 /** Under every peek (the same for every peeker, so it says nothing): a missed result is kept for the day. */
 export const PEEK_LATER = '睇唔切唔緊要：天光喺 📓 夜晚記錄睇得返。';
@@ -1133,12 +1150,19 @@ function buildTable(E) {
   const count = el('p', { class: 'ct-count' });
   const away = el('p', { class: 'ct-count ct-away', hidden: true });
   const timerSlot = el('div', { class: 'ct-timer', hidden: true });
-  // §7.1 #5: the phone in the middle of a shared table — 夠鐘投票 is one tap for every seat on it
+  // the dawn re-check, said once to the whole table (re-run N4)
+  const recheck = el('p', { class: 'ct-recheck ct-table-recheck', hidden: true, text: RECHECK_TABLE });
+  // §7.1 #5: the phone in the middle of a shared table — 夠鐘投票 is one table decision for every seat on it; on a
+  // whole-table phone it ends the talk for everybody, so the shell asks for a second tap (re-run N2)
   const readyBtn = el('button', { class: 'btn btn-primary btn-lg ct-table-ready', type: 'button' });
   setHidden(readyBtn, true);
-  readyBtn.addEventListener('click', () => { api.tableSend?.({ type: 'day-ready', on: true }); });
+  readyBtn.addEventListener('click', () => {
+    const dl = current?.phase === 'day' ? current.deadline : null;
+    const now = typeof api.clockNow === 'function' ? api.clockNow() : api.now();
+    api.tableSend?.({ type: 'day-ready', on: true }, { confirm: tableReadyConfirm(dl != null ? dl - now : NaN), node: readyBtn });
+  });
   let timer = null;
-  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar.el, timerSlot, readyBtn, count, away);
+  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar.el, timerSlot, recheck, readyBtn, count, away);
   let current = null;
 
   const iv = setInterval(() => { if (current?.phase === 'night') bar.tick(current, current.__ctx); }, 120);
@@ -1176,9 +1200,11 @@ function buildTable(E) {
         default: break;
       }
       setHidden(count, !count.textContent);
+      // 5p+ can have followers: the phone in the middle reminds every seat to re-peek (4p never has one)
+      setHidden(recheck, !(table && view.n >= 5));
       setHidden(readyBtn, !table);
       if (table) {
-        setText(readyBtn, E.whole() ? '🗳️ 大家夠鐘投票 ✓（一下就得）' : '🗳️ 呢部機嘅人都夠鐘投票');
+        if (!readyBtn.classList.contains('armed')) setText(readyBtn, E.whole() ? TABLE_READY : TABLE_READY_PART);
         // U5: locked while the 「擺返中間」 card is still up
         readyBtn.disabled = !!ctx?.tableLocked;
       }

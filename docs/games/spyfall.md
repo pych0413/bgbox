@@ -217,6 +217,13 @@ tap a location (it highlights), then 「就係「銀行」！」 in the bar fixe
 and the spy's card is pushed below it. Everyone else sees 「等 阿華 揀地點…」
 and the list with picks marked.
 
+**One phone (`passPhone`, re-run N3, 2026-10-05):** the guess is a public step, so the whole table reads the spy's
+screen. There the pick is **one tap with a short undo**: nothing highlights and the place is never printed —
+「🕵️ 阿華 揀地點」 · 「阿華：喺下面清單㩒一個地點，㩒咗就算（3 秒內可以撤銷）。」; after a tap 「阿華 揀好咗，3 秒後
+公佈。㩒錯就㩒撤銷。」 with 「↩ 撤銷（3）」 (also in the bottom bar); after 3 s the `guess` goes out. The table cannot
+watch the spy try places out, and no line says 「你」. The 💡 hint reads 「阿華：喺地點清單㩒一個地點就算，3 秒內可以撤銷。」
+Phones of their own keep the highlight + 「就係…」 confirm.
+
 **Narration (cue `guess`):** 「{spy}話佢係間諜！鐘停咗，等佢喺地點清單揀一個。」
 
 **Two spies.** The second spy stays hidden until the first has named a place, then is forced out too
@@ -307,8 +314,13 @@ mounted with `api.me = null` and the public table view — or is **held** by one
   「指控投票 · 報舉手結果」): the shell hands over with the public card, the screen stays in view, and the UI hides the
   role card on it. In `phone` mode every voter gets a private gate (`label: '指控投票'`).
 - **spy stop:** the revealed spy picks the location in front of everybody: `focus = { pids: [spy], open: true, label:
-  '間諜揀地點' }` (no role card on screen).
+  '間諜揀地點' }` (no role card on screen). The pick is one tap with a 3-second 撤銷 and nothing highlighted (§3.5,
+  re-run N3).
 - **final vote:** the dealer (or the next seat) reports each suspect — the same public step (「最後投票 2/5 · 報舉手結果」).
+  The reporter **keeps the phone through each tally** (re-run N2): `focus` names `tally.reporter` (`open`, label
+  「最後投票 i/n · 結果」) while a 舉手 final-vote result shows, so the focus signature does not change between suspects
+  with the same reporter — no table card, no public card that hands the phone to its own holder. A new reporter (the
+  dealer is the suspect) gets one public card; an accusation's tally and the round end still put it in the middle.
 - **roundEnd:** the phone goes to the middle; 「大家睇完 ✓（一下就得）」 is a whole-table tap
   (`{ type: 'next-round', seats, table: true }`) after the usual 2-second lock, with no 「等緊：…」 list (a shared phone
   that holds only some seats: 「睇完 ✓（呢部機嘅人）」 and the list stays).
@@ -320,6 +332,9 @@ mounted with `api.me = null` and the public table view — or is **held** by one
 No paper mode.
 
 ## 5. Engine
+
+Every view (seats and the table) carries `rolesInPlay: [{ id: 'agent', count }, { id: 'spy', count }]` — how many
+spies is public, who is not — so the 💡 sheet lists 「呢局有咩角色」 (DESIGN §7.1 re-run #5).
 
 ### 5.1 State (PRIVATE marked)
 
@@ -347,7 +362,8 @@ round: {
   vote {kind, suspect, by, mode, votes{pid:bool}, noCount, reporter}   votes are private until closed
   guess {order[], idx, picks{}}
 }
-tally          public result of the last vote, while phase = 'tally'
+tally          public result of the last vote, while phase = 'tally' (+ `reporter` for 舉手: one-phone focus only,
+               not in the views)
 phase, deadline, clockLeft, cue, seq
 ```
 
@@ -393,6 +409,8 @@ A timer that fires up to 250 ms early is ignored.
 - vote, phone: present seats that have not voted (accuser and suspect excluded; `step` per vote, `label` 「指控投票」 /
   「最後投票 i/n」); hands: `[reporter]` with `open: true` (a public step) and `label` 「… · 報舉手結果」
 - roundEnd: `null` (no pass gate for reading); stall detection still sees the unread seats through `legalActions`
+- tally, one phone (`passPhone`), a 舉手 final vote: `[tally.reporter]` with `open: true`, `label` 「最後投票 i/n · 結果」
+  (re-run N2: the reporter keeps the phone between suspects); every other tally `null`
 - guess: the spy whose turn it is, `open: true`, `label: '間諜揀地點'`
 - otherwise `null` (play, halted or not: the phone lies in the middle)
 
@@ -525,6 +543,9 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 | one phone: 舉手 + no tracker by default (#21, U11), the validate warning, the help; 🛑 stop / resume (only a shared phone's table tap; frozen time kept through an accusation or a spy reveal); focus labels / `open`; whole-table 睇完; the 一部手機玩 rules | `spyfall one phone: …` (5 tests) |
 | one phone UI: the table screen (clock, list without strikes, 🛑 → askWho, halted controls, tracker off), the asked seat's 🙋 / 🕵️ / 取消, other seat screens send people back to the middle, the public reporter / spy screens hide the role card, one-tap 大家睇完 | `spyfall ui one phone: …` (3 tests) |
 | one phone through the real play screen: look walk, table card, 🛑 → name → switch gate → 取消 (resumes, back to the middle), the spy's public pick, one-tap reveal, the next look gated | `spyfall, one phone through the real play screen …` |
+| re-run N2: the 舉手 reporter keeps the phone through every final-vote tally (engine focus + the real play screen: one card, only when the dealer takes over) | `spyfall one phone: re-run N2 …`, `spyfall, one phone through the real play screen: re-run N2 …` |
+| re-run N3: the public guess — the spy by name, no 「你」, no highlight, no printed place, 3-second 撤銷; phones of their own unchanged | `spyfall ui one phone: re-run N3 …` |
+| re-run #5: `rolesInPlay` (counts only) in every view; the one-phone guess hint | `spyfall one phone: re-run #5 …` |
 | cues never leak, unique ids | `cues never speak a secret…` |
 | autoAct | `autoAct readies, votes no…` |
 | junk input | `act never throws and ignores junk…` |

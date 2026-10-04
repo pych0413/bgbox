@@ -325,9 +325,14 @@ one seat behind a pass gate.
 - **speak / discuss / elim** (focus `null`): the phone goes to the middle behind the shell's public card 「📱 部手機擺返
   中間」. The **table screen** carries the public controls as whole-table taps (`api.tableSend`, `{ …, seats, table: true }`),
   locked while that card is up (U5):
-  - speak: 「阿強 講緊…」 and 「阿強 講完喇 ▸」 — anybody presses it for the speaker who finished.
+  - speak: 「阿強 講緊…」 and 「阿強 講完喇 ▸」 — anybody presses it for the speaker who finished. The tap carries
+    the step it was made on (`at`); a whole-table `done` without `at` is ignored. After each advance the button for
+    the next speaker (same spot) stays disabled for 1.5 s while the new name pulses (`.uc-who.is-new`), so a double
+    tap or two people tapping together end one turn, not two (re-run #2 N1). Also on a shared phone's seat screen;
+    never on a phone of your own.
   - discuss: 「開始投票 🗳️」. On a phone that holds the **whole table** it is the table's decision, so it takes a
-    **second tap** (U5): `api.confirm('全枱傾夠未？')` → 「再㩒一次：全枱傾夠未？」; the 「想開始投票 n / need」 line is not
+    **second tap** (U5): `api.tableSend(…, { confirm: '開始投票？全枱傾夠未？', node })` → 「再㩒一次：開始投票？全枱傾夠未？」
+    (re-run #2 N3: the armed label still says what the second tap does); the 「想開始投票 n / need」 line is not
     shown there. A shared phone that holds only some seats taps once for its own seats and keeps the count.
   - elim: 「大家睇完 ✓（一下就得）」 (whole table) / 「睇完 ✓（呢部機嘅人）」, after the usual short lock, with no
     「等緊：…」 list on a whole-table phone. One tap reads the result for every seat the phone holds (#5).
@@ -390,7 +395,10 @@ one seat behind a pass gate.
 
 Anything else (wrong phase, unknown seat, an absent seat, malformed payload, `__proto__` types…) returns the state
 unchanged; nothing throws. "Any seat" for 講完喇 is deliberate: a shared phone acts as whichever seat is on screen.
-The UI decides who is shown the button; `done` carries `at` against double taps.
+The UI decides who is shown the button; `done` carries `at` (round, kind, turn) against double taps: a tap on a step
+that has moved on is dropped, and a whole-table tap (`table: true`) without `at` is ignored. On a shared phone the UI
+also locks the next speaker's button for 1.5 s after an advance (§4), because the rebuilt button would otherwise
+carry the new step.
 
 ### 5.3 advance / deadlines
 
@@ -420,7 +428,8 @@ that step. Views carry `deadline` + `timerLabel` (『發言』『討論』『投
 
 Public part, identical for every seat (**tested: `view(A)` minus `me` and `hint` deep-equals the table view**): `phase`,
 `title`, `subtitle`, `round`, `counts`, `flags` (`revealRole`, `abstain`, `blankGuess`, `guessWinner`, `tie`, `pkVoters`,
-`majority`, `win`), `seats`, `absent` (D4: the seats marked absent, shown as 💤), `outs`, `history` (with ballots and
+`majority`, `win`), `seats`, `rolesInPlay` (`[{ id, count }]` for the roles dealt this game, the public counts, for
+the shell's 💡 list: no 白板 line when none was dealt), `absent` (D4: the seats marked absent, shown as 💤), `outs`, `history` (with ballots and
 `reason`), `deadline`/`timerLabel`, and `deal` (`total` = present seats) / `speak` / `discuss` (`{ want, need, total }`, D2)
 / `vote` / `elim` (with `seen: { who, total }`, D3) / `over` for the phase. `me` (own seat only): `id`, `alive`, `word` (`null` for
 the white card), `ready`, and — only for the white card — `blank: true`; in a vote `canVote`, `targets`, `myVote`;
@@ -486,7 +495,7 @@ last `result().carry` per game id in host memory (`js/core/room.js` `carries`) a
 | deal gate, idempotent ready | nobody speaks until every seat has confirmed |
 | garbage actions, foreign seats | foreign seats, garbage … ; garbage thrown at every phase |
 | speaking order, wrap, dead skipped, rotation from first speaker | speaking starts …; later rounds start … |
-| double tap on 講完喇 | a stale or double tap … |
+| double tap on 講完喇 | a stale or double tap …; re-run #2 N1 — 「X 講完喇」 cannot double-advance … |
 | speak/discuss/vote timers, no-timer default | speaking timer …; discussion ends …; a vote timer … |
 | ballot validation, dead seats, abstain, overwrite, auto-resolve | ballots are validated …; a dead seat …; abstaining …; the vote resolves … |
 | nobody votes | nobody voting means nobody leaves |
@@ -511,7 +520,8 @@ last `result().carry` per game id in host memory (`js/core/room.js` `carries`) a
 | D4: absent — deal, clue turn skipped (also mid-turn), majority shrinks, no vote (ballot kept if cast), still a candidate, @present re-joins the vote; absent white card forfeits; refusals; fuzz | D4: an absent seat skips …; D4: an absent white card …; D4: fuzz … |
 | UI: 開始投票 n / need, 睇完 n / m after the lock, `secretChoice`, 💤, `seats` on a shared phone | undercover ui D2/D3/D6 … |
 | one phone (§4): whole-table taps in the engine; focus labels / steps (the white card re-gated to guess); device-neutral cue and rules; 冇投錯 only when true | undercover one phone: whole-table taps …; the gate names every private step …; the deal cue and the rules …; #10 — result lines … |
-| one phone UI: the table screen's 講完喇 / 開始投票 (two taps on a whole-table phone, one otherwise) / 大家睇完, locked behind the table card; 睇返我個詞 by name; no 「你」 | undercover ui one phone: … (3 tests) |
+| one phone UI: the table screen's 講完喇 / 開始投票 (two taps on a whole-table phone through `tableSend`'s confirm, one otherwise) / 大家睇完, locked behind the table card; 睇返我個詞 by name; no 「你」 | undercover ui one phone: … (3 tests) |
+| 💡 roles: `view.rolesInPlay` lists only the roles dealt (no 白板 without a white card) | re-run #2 N2 — the 💡 role list … |
 | one phone through the real play screen: deal walk, table card, two-tap vote, gated first ballot, one-tap result, 睇返我個詞 → switch gate → 擺返中間 | undercover, one phone through the real play screen … |
 
 ## 7. 貼心 touches

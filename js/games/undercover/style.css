@@ -64,6 +64,8 @@
 }
 .uc-who .uc-dot { width: 1rem; height: 1rem; }
 .uc-who.is-me { border-color: var(--accent); animation: uc-pulse 1.4s ease-in-out infinite; }
+/* one phone: the next speaker's name pulses while their 「講完喇」 is still locked (a double tap cannot skip them) */
+.uc-who.is-new { border-color: var(--accent); animation: uc-pulse .5s ease-in-out 3; }
 @keyframes uc-pulse {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
   50% { box-shadow: 0 0 0 .5rem transparent; }
@@ -133,5 +135,5 @@
 .uc-wordinner { width: 100%; display: grid; justify-items: center; }
 
 @media (prefers-reduced-motion: reduce) {
-  .uc-screen, .uc-who.is-me { animation: none; }
+  .uc-screen, .uc-who.is-me, .uc-who.is-new { animation: none; }
 }

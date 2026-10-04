@@ -496,7 +496,8 @@ export function cueDeal({ mod }) {
 
 /** `pass` = one phone in the middle of the table (cfg.passPhone): nobody has a phone of their own to put down. */
 export function cueBegin(n, { pass = false } = {}) {
-  if (n !== 1) return `第${numZh(n)}晚，天黑請閉眼。`;
+  // one phone (re-run #4): from night 2 the 遺言 speaker may still hold the phone — every night says where it goes
+  if (n !== 1) return pass ? `第${numZh(n)}晚，天黑請閉眼。部手機擺返枱中間，大家閉埋眼，叫到你嘅角色先拎起佢。` : `第${numZh(n)}晚，天黑請閉眼。`;
   return pass
     ? '天黑請閉眼。部手機擺喺枱中間，大家閉埋眼，叫到你嘅角色先拎起佢。'
     : '天黑請閉眼。大家將部手機放喺面前，閉埋眼，唔好偷望。';
@@ -595,6 +596,12 @@ export function cueMinMs(text) {
 }
 
 /**
+ * One phone (re-run #4): the 天黑 line stays up at least as long as night 1's, every night, so the phone is back in the
+ * middle before 「狼人請開眼」 (night 2 used to give 3 s against night 1's 8 s).
+ */
+export const BEGIN_PASS_MIN_MS = cueMinMs(cueBegin(1, { pass: true }));
+
+/**
  * The dawn result is THE public fact of the night and, in 靜音, the only place it is said: people pick their phones up
  * at different moments, so it stays on screen at least this long (playtest: ≈3 s was missed by half the table).
  */
@@ -640,6 +647,10 @@ export const PANEL = {
     // U2: every living wolf on ONE shared phone looks at one combined screen (these replace the two info lines)
     together: (names) => `🐺 你哋一齊揀：${names}`,
     togetherPick: '一齊指一個人，㩒一下「確定」就計晒你哋。',
+    // re-run #3b: on ONE screen the wolves cannot disagree, so the split-vote rule is replaced by what does apply
+    ruleTogether: '時間到未㩒確定，都照計你哋指住嗰個；冇指人就空刀。',
+    // re-run #3a: on one screen 空刀 locks every wolf at once, so it takes a second tap
+    skipConfirm: '今晚空刀？',
     rulePlurality: '意見唔一致：票數最多嘅人被殺，同票隨機。',
     ruleUnanimous: '一定要全部狼人揀同一個人先殺到人，否則空刀。',
     first: '第一晚：認清楚你嘅隊友。',
@@ -649,7 +660,8 @@ export const PANEL = {
     victim: (who, self) => `今晚被狼人襲擊嘅係：${who}${self ? '（你自己）' : ''}`,
     victimNone: '今晚冇人被狼人襲擊。',
     victimHidden: '解藥已經用咗，唔會再知道邊個被襲擊。',
-    noSelfSave: '呢個規則你唔可以自救。',
+    // re-run #6: name the rule this table plays
+    noSelfSave: (save) => (save === 'first' ? '今局淨係第一晚可以自救。' : '今局女巫唔可以自救。'),
     potions: (save, poison) => `解藥：${save ? '有' : '冇'}　毒藥：${poison ? '有' : '冇'}`,
     // the hint follows what she can still do tonight
     hint: '㩒被襲擊嗰位＝用解藥救佢；㩒其他人＝用毒藥。同一晚淨係用得一支。',
@@ -786,6 +798,8 @@ export const UI = {
     wordsShared: (who) => `🗣 ${who} 講緊遺言 — 講完㩒「我講完」`,
     speakWait: '等緊發言…',
     speakNow: '🎙 講緊',
+    // a whole-table phone holds the speech clock until the speaker takes the phone (U10, re-run #1)
+    speakHeld: '⏳ 等緊開始',
     speakNext: '⏳ 等緊',
     speakSpoke: '✅ 已講',
     speechHead: (idx, total, pk) => (pk ? `PK 發言 ${idx + 1}/${total}` : `發言 ${idx + 1}/${total}`),
@@ -822,6 +836,7 @@ export const UI = {
     voteLogHead: '🗳 之前嘅投票（票型）',
     voteLogRound: (d, round) => `第 ${d} 日・${round === 1 ? '投票' : 'PK 投票'}`,
     abstain: '棄權',
+    abstainProxy: '（代做）',
     continue: '下一步',
     waitHost: '等主持繼續…',
   },
@@ -948,10 +963,17 @@ export function recapNight(rec, nm, rl) {
   if (G) L.push(G.pick ? `　🛡️ 守衛（${nm(G.by)}）守咗 ${nm(G.pick)}` : `　🛡️ 守衛（${nm(G.by)}）空守`);
   const W = rec.wolves;
   if (W) {
-    const picks = W.picks.map((p) => `${nm(p.by)}→${p.pick == null ? (p.set ? '空刀' : '冇揀') : nm(p.pick)}`).join('、');
-    const how = W.target
-      ? { agree: '一致', partial: '其他狼人冇揀', plurality: '票數最多', random: '同票，隨機揀' }[W.how]
-      : { none: '冇狼人揀', split: '意見唔一致', random: '同票，隨機揀中空刀' }[W.how];
+    const what = (p) => (p.pick == null ? (p.set ? '空刀' : '冇揀') : nm(p.pick));
+    // re-run #3c: wolves on ONE shared screen made one pick together — named as a group, never each as its author
+    const grp = Array.isArray(W.shared) ? W.picks.filter((p) => W.shared.includes(p.by)) : [];
+    const together = grp.length > 1 && grp.every((p) => p.set === grp[0].set && p.pick === grp[0].pick);
+    const picks = together
+      ? [`${grp.map((p) => nm(p.by)).join('、')}（一齊揀）→${what(grp[0])}`, ...W.picks.filter((p) => !W.shared.includes(p.by)).map((p) => `${nm(p.by)}→${what(p)}`)].join('、')
+      : W.picks.map((p) => `${nm(p.by)}→${what(p)}`).join('、');
+    const how = together && grp.length === W.picks.length && (W.how === 'agree' || W.how === 'empty') ? ''
+      : W.target
+        ? { agree: '一致', partial: '其他狼人冇揀', plurality: '票數最多', random: '同票，隨機揀' }[W.how]
+        : { none: '冇狼人揀', split: '意見唔一致', random: '同票，隨機揀中空刀' }[W.how];
     L.push(`　🐺 狼人：${picks}　⇒ ${W.target ? `襲擊 ${nm(W.target)}` : '空刀'}${how ? `（${how}）` : ''}`);
   }
   const T = rec.witch;
@@ -979,18 +1001,24 @@ export function recapNight(rec, nm, rl) {
   return L;
 }
 
-/** 票型 grouped by target, most votes first: 「7號阿G 3 票（1號阿A、2號阿B）」, then the abstainers. */
+/** A proxied abstain in the 票型 (one phone, the host's 🤖 代佢做 at a vote gate). */
+export const PROXY_ABSTAIN = '代做（當棄權）';
+
+/** 票型 grouped by target, most votes first: 「7號阿G 3 票（1號阿A、2號阿B）」, then the abstainers, then proxied abstains. */
 export function voteParts(rec, nm) {
   const by = new Map();
   const abstain = [];
+  const proxied = [];   // one phone: 🤖 代佢做 at a vote gate — an abstain the seat never chose (re-run #5)
   for (const v of rec.votes) {
-    if (!v.to) { abstain.push(v.by); continue; }
+    if (!v.to) { (v.proxy ? proxied : abstain).push(v.by); continue; }
     if (!by.has(v.to)) by.set(v.to, []);
     by.get(v.to).push(v.by);
   }
   const parts = [...by.entries()].sort((a, b) => b[1].length - a[1].length)
     .map(([t, vs]) => `${nm(t)} ${vs.length} 票（${vs.map(nm).join('、')}）`);
-  if (abstain.length) parts.push(by.size ? `棄權：${abstain.map(nm).join('、')}` : '全部棄權');
+  if (abstain.length && (by.size || proxied.length)) parts.push(`棄權：${abstain.map(nm).join('、')}`);
+  else if (abstain.length) parts.push('全部棄權');
+  if (proxied.length) parts.push(`${PROXY_ABSTAIN}：${proxied.map(nm).join('、')}`);
   return parts;
 }
 

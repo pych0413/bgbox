@@ -25,6 +25,8 @@ const CHOOSE_MS = 20000;        // research says 12 s; on a shared phone the han
 const GRACE_MS = 3000;          // after the first accept: the drawer may add co-winners or undo
 const BUZZER_MS = 2000;         // shout mode: a late tap right after the buzzer still counts (r = 0)
 const REVEAL_MS = 7000;
+const REVEAL_PASS_MS = 10000;   // one phone (re-run N4): the reveal is the table's only big look at the answer and picture,
+                                // and the 「擺返中間」 card sits in front of it first
 const STANDINGS_MS = 5000;      // the leaderboard between cycles
 const LATE_MS = 5000;           // foul flags and typed late-accepts stay open this long into the reveal
 const EXTEND_MS = 30000;
@@ -796,7 +798,7 @@ function finishTurn(s, ctx, outcome) {
   t.grace = null;
   t.ruling = null;
   if (outcome === 'voided') voidBookkeeping(s, ctx);
-  s.revealMs = REVEAL_MS;
+  s.revealMs = s.cfg.passPhone ? REVEAL_PASS_MS : REVEAL_MS;
   s.phase = 'reveal';
   s.deadline = ctx.now + s.revealMs;
   s.timerLabel = '';
@@ -859,7 +861,8 @@ function rawCue(s) {
       if (t.sub === 'buzzer') return null;
       if (t.stage === 0) {
         return { id: `t${t.n}:play`, minMs: 2500,
-          text: S.cuePlay({ secs: Math.round(t.T / 1000), boxes: t.boxes, typed: s.cfg.guessMode === 'typed', pass: !!s.cfg.passPhone }) };
+          text: S.cuePlay({ secs: Math.round(t.T / 1000), boxes: t.boxes, typed: s.cfg.guessMode === 'typed', pass: !!s.cfg.passPhone,
+            drawer: nm(t.drawer) }) };
       }
       const kind = t.log[t.stage - 1];
       if (kind === 'cat') return { id: `t${t.n}:s${t.stage}`, minMs: 1500, text: S.cueCat({ cat: t.word.cat }) };
@@ -1248,6 +1251,12 @@ function view(state, pid) {
     scoring: s.teams ? (s.cfg.starsAsPoints ? 'stars' : 'flat') : 'time',
     turn: { n: t.n, total: s.queue.length, drawer: t.drawer, team: t.team, again: t.again },
     upNext: over ? [] : s.queue.slice(s.qi + 1, s.qi + 4).map((q) => q.drawer),   // the queue preview (public)
+    // the 💡 sheet's 「呢局有咩角色」 (DESIGN §7.1 re-run #5): this turn's parts, all public
+    rolesInPlay: [
+      { id: 'drawer', count: 1 },
+      { id: 'guesser', count: t.eligible.length },
+      ...(teamsOn ? [{ id: 'rival', count: Math.max(0, s.order.length - 1 - t.eligible.length) }] : []),
+    ].filter((r) => r.count > 0),
     scores: { ...s.scores },
     teams: teamsOn ? s.teams.map((tm, i) => ({ i, members: tm.members.slice(), score: s.teamScores[i] })) : null,
     myTeam: teamsOn && seat !== null ? s.teamOf[seat] : null,

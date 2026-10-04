@@ -12,19 +12,22 @@
 //   node tools/playtest/pt.mjs tap    <session> <seat> <n|"label">  tap control n (or the first control whose label contains the text)
 //   node tools/playtest/pt.mjs hold   <session> <seat> <n|"label"> [ms]   press and hold (hold-to-peek); prints the screen WHILE held
 //   node tools/playtest/pt.mjs type   <session> <seat> <n|"label"> <text> focus a text box and type
-//   node tools/playtest/pt.mjs draw   <session> <seat> <n> "x,y x,y …"   drag a finger on a canvas (0–1 coordinates)
+//   node tools/playtest/pt.mjs draw   <session> <seat> <n|canvas> "x,y x,y …" [--full]   drag a finger on a canvas (0–1 coordinates)
 //   node tools/playtest/pt.mjs scroll <session> <seat> <dy>          scroll the page (px, negative = up)
-//   node tools/playtest/pt.mjs wait   <session> <seat> [sec=25]     block (max 90 s) until this screen changes or someone speaks, then print it
+//   node tools/playtest/pt.mjs wait   <session> <seat> [sec=25] [--full]   block (max 90 s) until this screen changes or someone speaks, then print it
 //   node tools/playtest/pt.mjs key    <session> <seat> [Enter|Escape|Backspace|Tab]   press a key (Enter / Escape also answer an open dialog)
 //   node tools/playtest/pt.mjs dialog <session> <seat> accept|dismiss [text]   answer the native confirm()/prompt() open on this phone
 //   node tools/playtest/pt.mjs reload <session> <seat>              reload this phone's tab (the only safe way to reload — keeps tap coordinates right)
 //   node tools/playtest/pt.mjs shot   <session> <seat>              save a PNG screenshot, print its path
 //   node tools/playtest/pt.mjs show   <session> <seat> [off]        --shared only: the holder lays their screen face up for everyone (read-only)
 //   node tools/playtest/pt.mjs say    <session> <seat> <text>       talk at the table (everyone can hear)
-//   node tools/playtest/pt.mjs hear   <session> [n=30]              the last n things said at the table (the narrator too: 「🔊 旁白：…」)
+//   node tools/playtest/pt.mjs hear   <session> [n=30 | 90s | 2m]   the last n lines said at the table (or the last 90 s / 2 min); the narrator too: 「🔊 旁白：…」
 //   node tools/playtest/pt.mjs eval   <session> <seat> <js>         ORCHESTRATOR ONLY (setup / final result) — players must not use it
-//   node tools/playtest/pt.mjs stop   <session>
+//   node tools/playtest/pt.mjs stop   <session>                     ORCHESTRATOR ONLY: ends the table for every seat — players never run it
 //   node tools/playtest/pt.mjs selftest                             offline self-check of the console itself (own Chrome, local page, cleans up)
+//
+// `draw` and `wait` print a COMPACT screen by default: the holder line, what changed since the last screen this seat was
+// shown, and the controls only when they changed. `--full` prints everything. Every other command prints the whole screen.
 //
 // Native dialogs (window.confirm / prompt / alert / beforeunload):
 //   * confirm / prompt  freeze the page like on a real phone. `see` shows  [dialog] confirm "…"  with controls
@@ -36,9 +39,14 @@
 // --shared: ONE phone for the whole table (一部手機玩); a referee follows the app's one-phone contract (DESIGN §7.1).
 //
 // Node 18+ (global WebSocket: Node 22+). No packages. Rules for AI players: tools/playtest/README.md
+//
+// For the orchestrator (not part of `help`): players must never stop or restart a shared session — the avalon re-run died
+// when seat agents ran stop / start. So `stop`, and `start` on a name that already exists (running, or a table talk log
+// left over), refuse unless the command carries `--orchestrator`; the daemon itself refuses a `stop` that does not.
+// Every refusal, and why a table ended, is noted in tools/playtest/.sessions/<session>.log.
 // ============================================================
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
@@ -66,6 +74,15 @@ const ESCAPE_AFTER_MS = Math.max(0, Number(process.env.PT_ESCAPE_AFTER ?? 60)) *
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessFile = (s) => path.join(SESS_DIR, `${s}.json`);
 const chatFile = (s) => path.join(SESS_DIR, `${s}.chat.jsonl`);
+const logFile = (s) => path.join(SESS_DIR, `${s}.log`);
+
+/** One line in .sessions/<session>.log: refused stop / start attempts and why a table ended. Never creates a log for a name that does not exist. */
+function logEvent(session, text) {
+  try {
+    if (!fs.existsSync(sessFile(session)) && !fs.existsSync(chatFile(session)) && !fs.existsSync(logFile(session))) return;
+    fs.appendFileSync(logFile(session), `${new Date().toISOString()} ${text}\n`);
+  } catch { /* a log must never break the console */ }
+}
 
 function freePort() {
   return new Promise((res, rej) => {
@@ -122,6 +139,104 @@ export function chatLine(r) {
   if (r?.narr) return `${t} 🔊 旁白${r.from ? `（${r.from}部機）` : ''}：${r.text}`;
   if (r?.note) return `${t} ${r.text}`;
   return `${t} ${r?.name}(${r?.seat}): ${r?.text}`;
+}
+
+/**
+ * Players never stop or restart a table (the avalon re-run died when seat agents ran stop, then start). `stop`, and
+ * `start` on a name that already exists (a running session, or the table talk of an earlier one), refuse unless the
+ * orchestrator passed --orchestrator. → null (go ahead) or the refusal to print. The refusal does not spell the flag out:
+ * a seat agent that is "cleaning up" would just add it.
+ */
+export function orchestratorGate(op, { orchestrator = false, running = false, leftover = false } = {}) {
+  if (orchestrator) return null;
+  if (op === 'stop') {
+    return 'refused: stop ends the table for every seat, and only the orchestrator runs it. Players never stop or restart a session.\n'
+      + 'If your phone looks stuck, try see / wait / reload for your own seat, and say so out loud at the table.';
+  }
+  if (op === 'start' && (running || leftover)) {
+    return 'refused: this session name already exists, and only the orchestrator starts or restarts a table. Players never start a session.\n'
+      + 'If the table looks dead, say so out loud at the table (say) and wait; the orchestrator will deal with it.';
+  }
+  return null;
+}
+
+/** Lines of `now` that `prev` did not already have (a multiset difference: a line repeated more often than before counts). */
+export function diffLines(prev, now) {
+  const have = new Map();
+  for (const l of prev ?? []) have.set(l, (have.get(l) ?? 0) + 1);
+  const fresh = [];
+  for (const l of now ?? []) {
+    const n = have.get(l) ?? 0;
+    if (n > 0) have.set(l, n - 1); else fresh.push(l);
+  }
+  return fresh;
+}
+
+/** How many new screen lines a compact view prints before it says 「… N more」. */
+export const COMPACT_MAX_LINES = 40;
+
+/**
+ * The body of a COMPACT screen (`draw`, `wait`): what changed since the last screen this seat was shown, instead of the
+ * whole thing. `s` = the screen about to be shown, `prev` = the last one this seat was shown ({ text, behind, items }).
+ * Screen text and the text behind a public card show only the new lines; the controls are listed only when they changed
+ * (taps re-read the screen, so a control the player did not see listed again can still be tapped by number or label).
+ * → { lines, elided } — `elided` says something was left out, so the caller can point at --full.
+ */
+export function compactBody(s, prev, max = COMPACT_MAX_LINES) {
+  const split = (t) => String(t ?? '').split('\n').filter(Boolean);
+  const lines = [];
+  let elided = false;
+  const section = (title, now, was) => {
+    const cur = split(now);
+    if (!cur.length) { lines.push(`--- ${title} --- (no text)`); return; }
+    const fresh = diffLines(split(was), cur);
+    if (!fresh.length) { lines.push(`--- ${title} --- (same as your last screen)`); elided = true; return; }
+    const kept = fresh.slice(0, max);
+    lines.push(`--- ${title}${fresh.length < cur.length ? `: ${fresh.length} of ${cur.length} lines are new` : ''} ---`, ...kept);
+    if (fresh.length < cur.length) elided = true;
+    if (fresh.length > kept.length) { lines.push(`… ${fresh.length - kept.length} more new lines`); elided = true; }
+  };
+  section('screen text', s.text, prev?.text);
+  if (s.behind != null) section('behind the card (everyone sees it; taps blocked)', s.behind, prev?.behind);
+  const items = s.items ?? [];
+  if (items.length && JSON.stringify(items) === JSON.stringify(prev?.items ?? null)) {
+    lines.push(`--- controls --- (${items.length} controls, same as your last screen)`);
+    elided = true;
+  } else lines.push('--- controls ---', ...(items.length ? items : ['(none)']));
+  return { lines, elided };
+}
+
+/** The footer a compact view ends with when it left something out. */
+export const COMPACT_NOTE = '(compact view: unchanged parts left out — add --full to print everything)';
+
+export const HEAR_DEFAULT = 30;
+export const HEAR_MAX = 1000;
+
+/**
+ * What `hear` was asked for. `hear <session> [n]` is a LINE count (the last n lines, default 30, at most 1000);
+ * `90s` / `2m` is a time window instead. A seat id is tolerated (`hear t1 p2 10`: everybody hears the same table).
+ * → { n } | { sinceMs } — or throws with the usage when something else is given.
+ */
+export function parseHear(args, seats = []) {
+  const usage = 'hear <session> [n | 90s | 2m]  — n lines (default 30, at most 1000) or the last 90 s / 2 min';
+  const picks = (args ?? []).map((a) => String(a).trim()).filter((a) => a && !seats.includes(a));
+  if (picks.length > 1) throw new Error(`${usage}\n(got: ${picks.join(' ')})`);
+  if (!picks.length) return { n: HEAR_DEFAULT };
+  const m = picks[0].match(/^(\d+)\s*(s|sec|m|min)?$/i);
+  if (!m) throw new Error(`${usage}\n(got: ${picks[0]})`);
+  const v = Number(m[1]);
+  if (m[2]) return { sinceMs: v * (/^m/i.test(m[2]) ? 60000 : 1000) };
+  return { n: v > 0 ? Math.min(HEAR_MAX, v) : HEAR_DEFAULT };
+}
+
+/** The `hear` reply for the table talk `rows`, newest last. Says so when older lines were left out. */
+export function hearText(rows, args, seats = [], now = Date.now()) {
+  const want = parseHear(args, seats);
+  const all = rows ?? [];
+  const keep = want.sinceMs != null ? all.filter((r) => now - Date.parse(r.t) <= want.sinceMs) : all.slice(-want.n);
+  if (!keep.length) return all.length ? `(nothing said in the last ${want.sinceMs / 1000} s)` : '(nobody has said anything yet)';
+  const cut = all.length - keep.length;
+  return `${cut > 0 ? `(${cut} earlier line${cut === 1 ? '' : 's'} not shown)\n` : ''}${keep.map(chatLine).join('\n')}`;
 }
 
 /** The focus signature the app uses (logic.focusSig): called seats sorted + anonymous + step + open. */
@@ -659,11 +774,15 @@ async function daemon(session, seats, base, names, shared = false) {
     if (p.dialog) return dialogScreen(p.dialog);
     return evaluate(seat, `(${pageSee.toString()})()`);
   };
-  const fmt = (seat, s) => {
+  // what each seat was last shown: a compact view (draw, wait) prints only what changed since then
+  const lastShown = new Map();
+  /** `opt.compact`: only what changed since this seat's last screen (the whole screen when it has none to compare with). */
+  const fmt = (seat, s, opt = {}) => {
     const p = phones[seat];
     const out = [`== ${seat} ${nameOf(seat)}${shared ? ' | 📱 shared phone' : ''} | ${s.title} | scroll ${s.scroll} ==`];
     for (const n of p.notices.splice(0)) out.push(`[${n.type}] "${n.message}" — ${n.how}`);
     if (s.dialog) {
+      lastShown.delete(seat);
       const d = s.dialog;
       d.seen = true;   // from now on tap 1 / tap 2 / key Enter / Escape answer it
       out.push(`[dialog] ${d.type} ${JSON.stringify(d.message)}${d.type === 'prompt' ? ` (default ${JSON.stringify(d.defaultPrompt)})` : ''}`,
@@ -674,6 +793,14 @@ async function daemon(session, seats, base, names, shared = false) {
     }
     for (const o of s.overlays) out.push(`[overlay] ${o.cls} — covers the screen at ${o.cover}% darkness${o.pe === 'none' ? ' (taps pass through)' : ''}${o.text ? ` · "${o.text}"` : ''}`);
     if (s.gate) out.push(`[pass gate: ${s.gate.kind}] ${s.gate.public ? 'a light card — the screen behind stays visible, taps on it are blocked' : 'covers the whole screen'}`);
+    const prev = opt.compact ? lastShown.get(seat) : null;
+    lastShown.set(seat, { text: s.text, behind: s.behind, items: s.items.slice() });
+    if (prev) {
+      const c = compactBody(s, prev);
+      out.push(...c.lines);
+      if (c.elided) out.push(COMPACT_NOTE);
+      return out.join('\n');
+    }
     out.push('--- screen text ---', s.text || '(no text)');
     if (s.behind != null) out.push('--- behind the card (everyone sees it; taps blocked) ---', s.behind || '(no text)');
     out.push('--- controls ---', ...(s.items.length ? s.items : ['(none)']));
@@ -803,25 +930,28 @@ async function daemon(session, seats, base, names, shared = false) {
     lastG.set(seat, g);
     return { g, r, s };
   };
-  const refusal = (seat, g) => `== ${seat} ${nameOf(seat)} | 📱 shared phone ==\n${g.why}`;
-  const readOnly = (seat, s, g) => `${g.why}\n${fmt(seat, { ...s, items: ['(read-only: the phone is not in your hands)'] })}`;
-  const gateView = (seat, s, g) => {
+  const refusal = (seat, g) => {
+    lastShown.delete(seat);   // whatever shows next is new to this seat
+    return `== ${seat} ${nameOf(seat)} | 📱 shared phone ==\n${g.why}`;
+  };
+  const readOnly = (seat, s, g, opt) => `${g.why}\n${fmt(seat, { ...s, items: ['(read-only: the phone is not in your hands)'] }, opt)}`;
+  const gateView = (seat, s, g, opt) => {
     const items = s.items.map((line, i) => (g.tap === 'all' || (g.tap === 'escape' && s.meta?.[i]?.esc) ? line : `${line} — 唔係你㩒`));
-    return `${g.why}\n${fmt(seat, { ...s, items })}`;
+    return `${g.why}\n${fmt(seat, { ...s, items }, opt)}`;
   };
   /** What this person gets to see, given the referee's decision. */
-  const present = (seat, g, s) => {
-    if (g.level === 'full') return g.why ? `${g.why}\n${fmt(seat, s)}` : fmt(seat, s);
-    if (g.level === 'table') return `${g.why}\n${fmt(seat, s)}`;
-    if (g.level === 'read') return readOnly(seat, s, g);
-    if (g.level === 'gate') return gateView(seat, s, g);
+  const present = (seat, g, s, opt) => {
+    if (g.level === 'full') return g.why ? `${g.why}\n${fmt(seat, s, opt)}` : fmt(seat, s, opt);
+    if (g.level === 'table') return `${g.why}\n${fmt(seat, s, opt)}`;
+    if (g.level === 'read') return readOnly(seat, s, g, opt);
+    if (g.level === 'gate') return gateView(seat, s, g, opt);
     return refusal(seat, g);
   };
-  /** The screen as this seat may see it now (multi-phone: simply its own phone). */
-  const screen = async (seat) => {
-    if (!shared) return fmt(seat, await see(seat));
+  /** The screen as this seat may see it now (multi-phone: simply its own phone). `opt.compact`: only what changed (draw, wait). */
+  const screen = async (seat, opt) => {
+    if (!shared) return fmt(seat, await see(seat), opt);
     const { g, s } = await observe(seat);
-    return present(seat, g, s);
+    return present(seat, g, s, opt);
   };
   const answerAndShow = async (seat, accept, text) => {
     const d = await answerDialog(seat, accept, text);
@@ -954,7 +1084,7 @@ async function daemon(session, seats, base, names, shared = false) {
       await sleep(600);
       return `(${seat} reloaded${abandoned ? `; the open ${abandoned.type} was dismissed` : ''})\n${await screen(seat)}`;
     },
-    async draw({ seat, args }) {
+    async draw({ seat, args, full }) {
       const b = await resolve(seat, args[0]);
       const pts = String(args.slice(1).join(' ')).trim().split(/\s+/).map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
       if (pts.length < 2) throw new Error('draw needs at least two points "x,y x,y" in 0–1');
@@ -970,7 +1100,8 @@ async function daemon(session, seats, base, names, shared = false) {
       }
       await mouse(seat, 'mouseReleased', x0, y0);
       await sleep(400);
-      return screen(seat);
+      const drew = `(drew ${pts.length} points on ${args[0]}, ${Math.round(b.w)}×${Math.round(b.h)} px)`;
+      return `${drew}\n${await screen(seat, { compact: !full })}`;
     },
     async scroll({ seat, args }) {
       await evaluate(seat, `window.scrollBy(0, ${Number(args[0]) || 400})`);
@@ -978,17 +1109,18 @@ async function daemon(session, seats, base, names, shared = false) {
       return screen(seat);
     },
     // Runs WITHOUT the phone's lock: it takes the lock for each look only, so the others keep playing meanwhile.
-    async wait({ seat, args }) {
+    async wait({ seat, args, full }) {
       const limit = Math.min(WAIT_MAX_S, Math.max(1, Number(args[0]) || 25)) * 1000;
       const p = phoneOf(seat);
       const said0 = chatRows().length;
+      const opt = { compact: !full };   // a compact screen: only what changed since this seat's last one (--full: all of it)
       const look = () => p.lock.run(async () => {
         if (shared) {
           const { g, s } = await observe(seat);
-          return { key: g.level === 'none' ? `none|${g.why}` : `${g.level}|${s.hash}`, out: () => present(seat, g, s) };
+          return { key: g.level === 'none' ? `none|${g.why}` : `${g.level}|${s.hash}`, out: () => present(seat, g, s, opt) };
         }
         const s = await see(seat);
-        return { key: String(s.hash), dialog: !!s.dialog, out: () => fmt(seat, s) };
+        return { key: String(s.hash), dialog: !!s.dialog, out: () => fmt(seat, s, opt) };
       });
       // anything said at the table meanwhile (people, the narrator) wakes the waiter too (T6)
       const heard = () => {
@@ -1027,9 +1159,7 @@ async function daemon(session, seats, base, names, shared = false) {
       return `(${nameOf(seat)} said it out loud)`;
     },
     async hear({ args }) {
-      const n = Math.min(200, Number(args[0]) || 30);
-      const rows = chatRows().slice(-n);
-      return rows.map(chatLine).join('\n') || '(nobody has said anything yet)';
+      return hearText(chatRows(), args, seats);
     },
     async eval({ seat, args }) {
       const v = await evaluate(seat, `(async () => { ${args.join(' ')} })()`);
@@ -1070,12 +1200,20 @@ async function daemon(session, seats, base, names, shared = false) {
           config: a.state.room.config, valid: a.state.room.configValid, summary: a.state.room.configSummary, narration: a.state.room.narration }; })()`);
       return JSON.stringify(res, null, 1);
     },
-    async stop() { setTimeout(() => shutdown(), 50); return 'stopping'; },
+    async stop({ orch }) {
+      // Players never end a table (the avalon re-run): only a request the orchestrator's CLI marked goes through
+      if (!orch) { logEvent(session, 'refused: stop from a player (no orchestrator flag)'); throw new Error(orchestratorGate('stop')); }
+      stopping = true;
+      logEvent(session, 'stop: the orchestrator ended the table');
+      setTimeout(() => shutdown(), 50);
+      return 'stopping';
+    },
   };
 
   // Chrome's exit (from stop, or a crash) ends the daemon. The profile goes too: Chrome's helper processes hold
   // files in it for a moment after the browser exits, so retry instead of leaving ~60 MB in tmp per session.
   let finishing = false;
+  let stopping = false;   // the orchestrator's stop is what ends this table (not a crash, not a player)
   const finish = () => {
     if (finishing) return;
     finishing = true;
@@ -1099,7 +1237,7 @@ async function daemon(session, seats, base, names, shared = false) {
     req.on('data', (c) => { body += c; });
     req.on('end', async () => {
       try {
-        const { op, seat, args } = JSON.parse(body || '{}');
+        const { op, seat, args, full, orch } = JSON.parse(body || '{}');
         if (!ops[op]) throw new Error(`unknown op ${op}`);
         const a = args ?? [];
         const exec = async () => {
@@ -1107,7 +1245,7 @@ async function daemon(session, seats, base, names, shared = false) {
             const deny = await guard(seat, op, a);
             if (deny) return deny;
           }
-          try { return await ops[op]({ seat, args: a }); } catch (e) {
+          try { return await ops[op]({ seat, args: a, full: full === true, orch: orch === true }); } catch (e) {
             if (!(e instanceof DialogOpen) || !SCREEN_OPS.has(op)) throw e;
             // a dialog in the way is part of what this phone shows, not a failure
             const now = UNLOCKED.has(op) ? await phoneOf(seat).lock.run(() => screen(seat)) : await screen(seat);
@@ -1123,29 +1261,34 @@ async function daemon(session, seats, base, names, shared = false) {
     });
   });
   server.listen(hport, '127.0.0.1');
-  chrome.on('exit', finish);
+  chrome.on('exit', (code, signal) => {
+    if (!finishing) logEvent(session, `chrome exited (code ${code}, signal ${signal}): the table ended ${stopping ? 'after the orchestrator\'s stop' : 'on its own, not by a stop'}`);
+    finish();
+  });
   fs.writeFileSync(sessFile(session), JSON.stringify({ hport, dport, pid: process.pid, chromePid: chrome.pid, profile, seats: seatNames, shared, base, started: new Date().toISOString() }, null, 1));
+  logEvent(session, `table up: ${seats.join(',')}${shared ? ' (one shared phone)' : ''}, daemon pid ${process.pid}`);
 }
 
 // ------------------------------------------------------------
 // CLI
 // ------------------------------------------------------------
 
-async function rpc(session, op, seat, args, timeoutMs) {
+/** `extra`: more fields for the daemon's request — full (print the whole screen), orch (the orchestrator's CLI vouches for this stop). */
+async function rpc(session, op, seat, args, timeoutMs, extra = {}) {
   if (!fs.existsSync(sessFile(session))) throw new Error(`no running session "${session}" — start it first`);
   const { hport } = JSON.parse(fs.readFileSync(sessFile(session), 'utf8'));
-  const r = await fetch(`http://127.0.0.1:${hport}/`, { method: 'POST', body: JSON.stringify({ op, seat, args }), ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
+  const r = await fetch(`http://127.0.0.1:${hport}/`, { method: 'POST', body: JSON.stringify({ op, seat, args, ...extra }), ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
   return r.json();
 }
 
-async function call(session, op, seat, args) {
-  const j = await rpc(session, op, seat, args);
+async function call(session, op, seat, args, extra) {
+  const j = await rpc(session, op, seat, args, undefined, extra);
   if (!j.ok) { console.error(j.out); process.exit(1); }
   console.log(j.out);
 }
 
 async function startSession(session, seats, names, base, sharedTable = false) {
-  if (fs.existsSync(sessFile(session))) throw new Error(`session ${session} is already running (stop it first)`);
+  if (fs.existsSync(sessFile(session))) throw new Error(`session ${session} is already running (the orchestrator stops it first: stop ${session} --orchestrator)`);
   if (!CHROME) throw new Error('no Chrome/Edge found (set PT_CHROME)');
   // a new table starts with an empty `hear`: an earlier match under the same name keeps its talk, under a UTC-stamped name
   if (fs.existsSync(chatFile(session))) fs.renameSync(chatFile(session), path.join(SESS_DIR, `${session}.chat.${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`));
@@ -1173,6 +1316,8 @@ const SELFTEST_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport
 <button id="c">count</button>
 <p id="out">idle</p>
 <div role="img" aria-label="4 點">⚃</div>
+<canvas id="cv" width="300" height="100" style="display:block;width:300px;height:100px;border:1px solid #888"></canvas>
+<script>window.__moves = 0; document.getElementById('cv').addEventListener('mousemove', (e) => { if (e.buttons) window.__moves++; });</script>
 <div id="m" aria-modal="true" hidden style="position:fixed;inset:0;background:#111;color:#fff;padding:16px">
 <div class="c-passgate-card" style="opacity:0">交俾 阿明<button onclick="document.getElementById('m').hidden = true">close</button></div>
 <div class="c-cover"><div class="c-cover-front" style="opacity:.001">秘密角色</div></div></div>
@@ -1266,6 +1411,36 @@ async function selftest() {
     const wr = await w;
     check(wr.ok && wr.out.includes('阿聰(a): 我講完') && Date.now() - t0 < 4000, 'wait wakes on table talk and prints what was said');
 
+    // draw and wait print a COMPACT screen (what changed since this seat's last one); --full prints everything
+    await out('see', 'b');
+    r = await out('draw', 'b', 'canvas', '0.1,0.2 0.9,0.8');
+    check(/^\(drew 2 points on canvas, 30\d×10\d px\)/.test(r), 'draw: confirms in one line (and `canvas` finds the canvas)');
+    check(Number(await out('eval', 'b', 'return window.__moves')) > 3, 'draw: the finger really dragged across the canvas');
+    check(r.includes('same as your last screen') && !r.includes('"ask"') && r.includes('add --full'), 'draw: prints a compact screen — the unchanged controls are not listed again');
+    const drawFull = await rpc(session, 'draw', 'b', ['canvas', '0.1,0.2 0.9,0.8'], 30000, { full: true });
+    check(drawFull.ok && drawFull.out.includes('--- screen text ---') && drawFull.out.includes('"ask"') && drawFull.out.length > r.length, 'draw --full: prints the whole screen');
+    await out('see', 'b');
+    r = await out('wait', 'b', '1');
+    check(r.includes('(nothing changed in 1 s)') && r.includes('same as your last screen') && !r.includes('"ask"') && r.split('\n').length < 10, 'wait: nothing changed → a short note, not a full dump');
+    const waitFull = await rpc(session, 'wait', 'b', ['1'], 30000, { full: true });
+    check(waitFull.ok && waitFull.out.includes('--- screen text ---') && waitFull.out.includes('"ask"'), 'wait --full: prints the whole screen');
+    await out('see', 'b');
+    const woken = rpc(session, 'wait', 'b', ['10'], 30000);
+    await sleep(900);
+    await out('eval', 'b', `document.getElementById('out').textContent = 'a brand new line'`);   // the page's own line changes
+    r = (await woken).out;
+    check(r.includes('a brand new line') && /: 1 of \d+ lines are new/.test(r) && r.includes('same as your last screen') && !r.includes('"ask"'), 'wait: wakes on a change and prints only the lines that changed');
+
+    // hear honours N (a line count), tolerates a seat id and takes 90s / 2m as a time window
+    for (const word of ['one', 'two', 'three', 'four']) await out('say', 'a', `line ${word}`);
+    const said = (txt) => txt.split('\n').filter((l) => /^\[\d\d:\d\d:\d\dZ\]/.test(l));
+    r = await out('hear', null, '2');
+    check(said(r).length === 2 && r.includes('line four') && r.includes('line three') && !r.includes('line two') && r.includes('earlier line'), 'hear 2: exactly the last 2 lines, and it says older ones are not shown');
+    check(said(await out('hear', null, 'b', '3')).length === 3, 'hear <seat> 3: a seat id in front is tolerated, 3 lines');
+    check((await out('hear', null, '5m')).includes('line one'), 'hear 5m: a time window');
+    const badHear = await rpc(session, 'hear', null, ['banana'], 5000);
+    check(!badHear.ok && /hear <session> \[n/.test(badHear.out), 'hear with something it cannot read says how to use it instead of guessing');
+
     // phone metrics: taps land where the finger is
     check((await tapLands('a')) === true, 'tap lands on the control centre');
     // T4: concurrent players on one phone never interleave their CDP calls
@@ -1300,19 +1475,43 @@ async function selftest() {
     });
     await outside('b', [['Emulation.setPageScaleFactor', { pageScaleFactor: 2 }]]);
     check((await tapLands('b')) === true && (await out('eval', 'b', 'return visualViewport.scale')) === '1', 'after an outside page zoom the tap resets the zoom and lands on the centre');
+
+    // players never stop or restart the table (the avalon re-run): stop and start-over need the orchestrator's flag
+    const cli = (...a) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...a], { encoding: 'utf8', timeout: 30000 });
+    let c = cli('stop', session);
+    check(c.status === 1 && /only the orchestrator/.test(c.stderr) && !c.stderr.includes('--orchestrator'), 'stop without --orchestrator is refused, and the refusal does not hand over the flag');
+    check((await out('see', 'a')).includes('"ask"'), 'the table is still up after the refused stop');
+    c = cli('start', session, '--seats', 'a,b', '--base', base);
+    check(c.status === 1 && /already exists/.test(c.stderr) && JSON.parse(fs.readFileSync(sessFile(session), 'utf8')).pid === daemonPid, 'start on an existing name is refused without --orchestrator, and nothing is restarted');
+    c = cli('start', session, '--seats', 'a,b', '--base', base, '--orchestrator');
+    check(c.status === 1 && /already running/.test(c.stderr), 'even with --orchestrator a running table is not started over (it has to be stopped first)');
+    const rawStop = await rpc(session, 'stop', null, [], 5000);
+    check(!rawStop.ok && /only the orchestrator/.test(rawStop.out), 'the daemon itself refuses a stop the orchestrator did not vouch for');
+    check((await out('see', 'a')).includes('"ask"'), 'the table is still up after every refusal');
+    const log = fs.readFileSync(logFile(session), 'utf8');
+    check(/refused: stop from the command line/.test(log) && /refused: start on an existing name/.test(log) && /refused: stop from a player/.test(log), 'every refusal is noted in the session log');
+    c = cli('stop', session, '--orchestrator');
+    check(c.status === 0 && c.stdout.includes('stopping'), 'stop --orchestrator ends the table');
   } finally {
-    try { await rpc(session, 'stop', null, [], 5000); } catch { /* already stopped */ }
+    try { await rpc(session, 'stop', null, [], 5000, { orch: true }); } catch { /* already stopped */ }
     srv.close();
   }
   const running = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   for (let i = 0; i < 60 && (running(daemonPid) || running(chromePid)); i++) await sleep(250);   // the daemon exits once the profile is gone
   check(!running(chromePid) && !running(daemonPid) && !fs.existsSync(sessFile(session)) && !fs.existsSync(profile), 'stop leaves no Chrome, no daemon, no session file and no Chrome profile behind');
-  try { fs.unlinkSync(chatFile(session)); } catch { /* nothing said */ }
+  check(/stop: the orchestrator ended the table/.test(fs.readFileSync(logFile(session), 'utf8')), 'the session log says the orchestrator ended the table');
+  for (const f of [chatFile(session), logFile(session)]) { try { fs.unlinkSync(f); } catch { /* nothing there */ } }
   console.log('selftest passed');
 }
 
+/** Ops whose arguments are free text: a literal "--full" in them is the player's own words. */
+const TEXT_OPS = new Set(['type', 'say', 'eval', 'dialog']);
+
 async function main() {
-  const [op, session, ...rest] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  // --orchestrator belongs to start / stop only: the orchestrator vouches that this is not a player ending or restarting the table
+  const orchestrator = (argv[0] === 'start' || argv[0] === 'stop') && argv.includes('--orchestrator');
+  const [op, session, ...rest] = orchestrator ? argv.filter((x) => x !== '--orchestrator') : argv;
   if (op === 'selftest') return selftest();
   if (!op || op === 'help' || !session) {
     const lines = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n');
@@ -1327,6 +1526,12 @@ async function main() {
     return;
   }
   if (op === 'start') {
+    const refuse = orchestratorGate('start', { orchestrator, running: fs.existsSync(sessFile(session)), leftover: fs.existsSync(chatFile(session)) || fs.existsSync(logFile(session)) });
+    if (refuse) {
+      logEvent(session, 'refused: start on an existing name (no orchestrator flag)');
+      console.error(refuse);
+      process.exit(1);
+    }
     const sharedTable = rest.includes('--shared');
     const f = flags(rest.filter((x) => x !== '--shared'));
     const seats = String(f.seats ?? 'p1,p2,p3').split(',').map((s) => s.trim()).filter(Boolean);
@@ -1340,10 +1545,22 @@ async function main() {
     const o = { game: f.game, config: f.config ? JSON.parse(f.config) : null, narration: f.narration };
     return call(session, 'setup', null, [JSON.stringify(o)]);
   }
-  if (op === 'hear' || op === 'stop') return call(session, op, null, rest);
-  const [seat, ...args] = rest;
+  if (op === 'stop') {
+    const refuse = orchestratorGate('stop', { orchestrator });
+    if (refuse) {
+      logEvent(session, 'refused: stop from the command line (no orchestrator flag)');
+      console.error(refuse);
+      process.exit(1);
+    }
+    return call(session, 'stop', null, rest, { orch: true });
+  }
+  if (op === 'hear') return call(session, op, null, rest);
+  const [seat, ...more] = rest;
   if (!seat) throw new Error(`${op} needs a seat`);
-  return call(session, op, seat, args);
+  // `--full` anywhere after the seat: draw and wait print everything instead of what changed (the other ops always do)
+  const full = !TEXT_OPS.has(op) && more.includes('--full');
+  const args = full ? more.filter((x) => x !== '--full') : more;
+  return call(session, op, seat, args, full ? { full: true } : undefined);
 }
 
 // run as a command (not when tests import the helpers above)

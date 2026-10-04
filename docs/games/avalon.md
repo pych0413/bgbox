@@ -398,11 +398,16 @@ middle (the public table view) between them. The engine marks each step (`focus`
 2. `pick` (**open**, 「揀隊員」): a public card for the leader; the table watches the pick (#4). No identity card on that screen (#22).
 3. `vote` (private, 「任務 N 投票」): every seat that has not voted. The leader comes from a public step, so **their own ballot is gated
    again** even though they hold the phone (#2: a new `step` key); the vote stays hidden (the view only ever carries the viewer's own vote).
-4. `voted` (**open**, 「投票結果」): the reveal with names goes to the leader on a public card — never 「其他人唔好望」 — and the table reads it
-   with them; the leader taps 繼續. With the leader 💤 the focus is null and the table screen itself has 繼續 (one table tap).
+4. `voted` (re-run F2, 2026-10-05): on a whole-table phone (`passPhone`) **nobody is called** — the focus is null, so after the last
+   ballot the phone goes to the middle behind the shell's 「部手機擺返中間」 card, and the table screen shows the reveal with names and
+   **繼續 as one table tap** (`api.tableSend({ type: 'continue' })`, locked while the card is up, U5). The table no longer waits on the
+   leader's two taps (their public card, then 繼續). Any present seat may continue (`mayContinue`, `view.tableContinue: true`), the
+   leader is not `blocking`, and the 💡 hint for the others reads 「記住邊個投咩，大家睇清楚就㩒「繼續」。」. A shared phone in a room
+   of several phones keeps the old step: an **open** card to the leader, who taps 繼續 (the table screen has it only while the leader is 💤).
 5. `quest` (private, 「任務 N 出牌」): only the members who still owe a card; a leader on the team is gated again for their own card (#2).
    「確定出牌」 waits 4 s from the card (U9, §3.5).
-6. `quest-result` (**open**, 「任務 N 結果」): the leader, publicly, as for `voted`.
+6. `quest-result`: as for `voted` — on one phone the result goes to the middle and the table taps 繼續 once (hint
+   「睇吓有幾多張失敗，大家睇清楚就㩒「繼續」。」); otherwise an **open** card to the leader (「任務 N 結果」).
 7. `lady` (**open**: whom the holder checks is public) → `lady-peek` (private, gated again: only the holder reads the answer).
 8. `assassinate`: first evil's face-up talk (§3.8, #27), then `{ pids: [assassin], anonymous: '刺客請拎起部手機' }` — the gate says
    **刺客請拎起部手機 · 其他人閉埋眼，唔好望** and never a name.
@@ -446,7 +451,9 @@ shot {assassin, target, hit, merlin}, pendingEnd {winner, reason}, winner, reaso
 
 `view(state, pid)` is built field by field. Common: `me, phase, n, title, subtitle, hint, deadline?, timerLabel?, order, deck, board {sizes, need, results, questNo,
 wins, losses}, track {rejects, max}, leader, absent [pid…], proposalNo, lady {holder, held, log, step}|null, history [public proposals, each with `absent`], quests [public quests],
-opts {reveal, quest, flipEvil}`, and `redo: true` while a step restarted by 呢鋪唔計 is running (public). Seats also get `mine {role, knows {kind, pids, blind {mordred, oberon}}, seen}` (`blind`: whom Merlin cannot see, from the public deck and setup; both false for every other role); the table view has no `mine`.
+opts {reveal, quest, flipEvil}`, `tableContinue` (anybody may tap 繼續 on `voted` / `quest-result`: one phone, or the leader is 💤),
+`rolesInPlay` (the public deck as `{ id, count }`, so the 💡 sheet lists this game's roles — re-run #5; the shell never shows a role cover
+on the table or on a public step), and `redo: true` while a step restarted by 呢鋪唔計 is running (public). Seats also get `mine {role, knows {kind, pids, blind {mordred, oberon}}, seen}` (`blind`: whom Merlin cannot see, from the public deck and setup; both false for every other role); the table view has no `mine`.
 Per phase: `pick {leader, size, need, canPick}` · `vote {leader, team, progress {done,total}, mine}` · `voted {leader, team, votes, approves, rejects,
 approved, needed, before, after, ends, nextLeader, absent}` · `quest {no, team, size, need, mode, mine, progress?}` where `mine` is
 `{member, done, flip, canFail}` for a member (the **same keys for good and evil**) and `null` otherwise · `outcome {no, team, leader, successes, fails,
@@ -461,7 +468,7 @@ need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (hol
 | `{type:'seen'}` | any seat | `reveal` | once per seat. Tap mode: all seen → `pick`. Timed mode: nothing public, never ends the window |
 | `{type:'pick', team:[pid…]}` | the leader | `pick` | exactly `TEAM_SIZE[n][quest-1]` distinct, real seats → `vote` (team stored in seat order) |
 | `{type:'vote', vote:'approve'\|'reject'}` | any seat | `vote` | may overwrite until the last vote; the last vote tallies → `voted` |
-| `{type:'continue'}` | the leader | `voted`, `quest-result` | see §3.4, §3.6 |
+| `{type:'continue'}` | the leader; anybody at the table while the leader is 💤 or on one phone (`passPhone`, re-run F2) | `voted`, `quest-result` | see §3.4, §3.6 |
 | `{type:'quest', card:'success'\|'fail'}` | a team member who has not played | `quest` | `fail` only from an evil role (refused for good). Tap mode / after the clock: the last card resolves |
 | `{type:'lady', target}` | the holder | `lady` | not themself, not a past holder → `lady-peek` |
 | `{type:'lady-done'}` | the holder | `lady-peek` | token → target, next quest |
@@ -485,7 +492,7 @@ just beeps; the assassination clock stays on 0:00 until the shot or the host's �
 
 ### `focus`
 
-`reveal` → present seats that have not looked · `pick`/`voted`/`quest-result` → `[leader]` (`voted`/`quest-result` with the leader 💤 → null: anybody taps 繼續) · `vote` → present seats that have not voted · `quest` → members who have not played ·
+`reveal` → present seats that have not looked · `pick`/`voted`/`quest-result` → `[leader]` (`voted`/`quest-result` with the leader 💤, or on one phone (`passPhone`, re-run F2) → null: anybody taps 繼續) · `vote` → present seats that have not voted · `quest` → members who have not played ·
 `lady`/`lady-peek` → `[holder]` · `assassinate` → `{ pids: [shooter], anonymous: '刺客請拎起部手機' }` (the Assassin, or the stand-in when the Assassin is 💤; null during the one-phone talk) · `shot` → `[assassin]` · `over` → null.
 
 One-phone hints on the named steps (DESIGN §7.1; a phone of its own ignores them, so they ride along in every room): `open: true` on
@@ -593,7 +600,10 @@ One phone in the middle (2026-10-04, one-phone playtest #2 #4 #14 #17 #20 #22 #2
 - UI (fake DOM): U9 — 「我睇完」 held 8 s and 「確定出牌」 4 s from the hand-over, the same screen for Merlin / a Servant / the Assassin and for a
   good / an evil member, untouched on a phone of its own; #22 — no mini card on the leader's public pick and the vote reveal, back on the private
   ballot and for a seat picked by hand; #20 — the leader is named, never 「你係隊長」; #27 — one talk screen on every seat, no picker, one table
-  tap locked behind the table card; 繼續 on the table screen only while the leader is 💤.
+  tap locked behind the table card; 繼續 on the table screen of a whole-table phone (re-run F2), and elsewhere only while the leader is 💤.
+- Re-run F2: on one phone `voted` / `quest-result` call nobody, any present seat continues (a table tap too), nobody is `blocking`, the
+  hints say so; phones of their own still wait on the leader. Through the real play screen: after the vote walk and the quest walk the
+  result lies in the middle behind the table card and one table tap goes on. Re-run #5: `rolesInPlay` mirrors the deck in every view.
 - Through the real play screen (`js/ui/screens/play.js`, a Sim-driven whole-table phone): every reveal card is private and holds 「我睇完」 8 s;
   the pick is a public card with no identity card and the leader named; the leader's own ballot then gets its own private card (#2).
 
