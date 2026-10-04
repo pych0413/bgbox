@@ -1867,7 +1867,11 @@ test('§7.1 re-run #3: a tapped card leaves a ~400 ms tap shield; a bottom card 
 
 test('§7.1 re-run #4 (U10): a held clock looks frozen on every Timer and never beeps; api.clockNow / ctx.clockHeldAt', async () => {
   await withDom(async ({ dom }, clock) => withRaf(async () => {
-    const { Timer, setClockHold, clockHeldAt, timerBeep } = await import('../js/ui/components/Timer.js?v=1');
+    // the same module instance play.js uses (its ?v= stamp changes in a stamped build, and a second instance would
+    // keep its own hold state)
+    const playSrc = (await import('node:fs')).readFileSync(new URL('../js/ui/screens/play.js', import.meta.url), 'utf8');
+    const timerSpec = (playSrc.match(/from '(\.\.\/components\/Timer\.js\?v=[^']+)'/) || [])[1]?.replace('../', '../js/ui/') ?? '../js/ui/components/Timer.js?v=1';
+    const { Timer, setClockHold, clockHeldAt, timerBeep } = await import(timerSpec);
     const d = clock.t + 30_000;
     const props = { deadline: d, now: () => clock.t, label: '發言', warnAt: [10] };
     const t = Timer(props);
