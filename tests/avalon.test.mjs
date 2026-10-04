@@ -281,7 +281,8 @@ function checkLeaks(sim) {
     walkStrings(v, (str, path) => {
       if (!ROLE_IDS.includes(str)) return;
       const own = path === '$.mine.role' && pid !== null;
-      const deck = /^\$\.deck\[\d+\]\.role$/.test(path);
+      // the public deck, and the same deck again as the 💡 sheet's roles in play (re-run #5)
+      const deck = /^\$\.(deck\[\d+\]\.role|rolesInPlay\[\d+\]\.id)$/.test(path);
       const flip = flipped && /^\$\.assassinate\.flipped\[\d+\]\.role$/.test(path);
       assert.ok(own || deck || flip, `role "${str}" leaks at ${path} (${label})`);
     });
@@ -319,7 +320,10 @@ function checkLeaks(sim) {
     if (v.ladyStep?.mine) assert.equal(pid, v.ladyStep.holder, `Lady result leaks to ${label}`);
     walkKeys(v, (k, path) => { if (k === 'loyalty') assert.equal(path, '$.ladyStep.mine.loyalty', `loyalty leaks at ${path}`); });
     // the assassination screen has one shape for everybody
-    if (s.phase === 'assassinate') assert.deepEqual(Object.keys(v.assassinate).sort(), ['canShoot', 'candidates', 'flipped', 'tapped']);
+    if (s.phase === 'assassinate') {
+      assert.deepEqual(Object.keys(v.assassinate).sort(), ['canShoot', 'candidates', 'flipped', 'talk', 'tapped']);
+      assert.equal(v.assassinate.talk, !!s.talk, 'the one-phone talk is public and the same for everybody');
+    }
   }
 }
 
@@ -730,7 +734,7 @@ test('avalon: who knows whom — the observer/target table, with all four option
     assert.deepEqual(known('morgana'), sorted('assassin', 'mordred'));
     assert.deepEqual(known('mordred'), sorted('assassin', 'morgana'), 'Mordred sees evil and is seen by evil');
     assert.deepEqual(known('oberon'), [], 'Oberon sees nobody');
-    for (const p of sim.state.order) if (sim.state.role[p] === 'servant') assert.deepEqual(sim.view(p).mine.knows, { kind: 'none', pids: [] });
+    for (const p of sim.state.order) if (sim.state.role[p] === 'servant') assert.deepEqual(sim.view(p).mine.knows, { kind: 'none', pids: [], blind: { mordred: false, oberon: false } });
     assert.equal(sim.view(seat('oberon')).mine.knows.kind, 'alone');
     assert.equal(sim.view(seat('merlin')).mine.knows.kind, 'seesEvil');
     assert.equal(sim.view(seat('percival')).mine.knows.kind, 'seesMerlin');
@@ -751,7 +755,12 @@ test('avalon: Merlin\'s view is evil minus Mordred (Oberon unless hidden), never
           const hidden = evilAll.filter((p) => s.role[p] === 'mordred' || (s.role[p] === 'oberon' && !seenByMerlin));
           assert.equal(v.mine.knows.pids.length, evilAll.length - hidden.length, `n=${n} ${preset}`);
           for (const p of v.mine.knows.pids) assert.ok(evilAll.includes(p) && !hidden.includes(p));
-          assert.deepEqual(Object.keys(v.mine.knows).sort(), ['kind', 'pids']);
+          assert.deepEqual(Object.keys(v.mine.knows).sort(), ['blind', 'kind', 'pids']);
+          // #28: who he cannot see comes from the public deck and the Oberon setting, never from a seat
+          const deck = s.deck.map((d) => d.role);
+          const blind = { mordred: deck.includes('mordred'), oberon: deck.includes('oberon') && !seenByMerlin };
+          assert.deepEqual(v.mine.knows.blind, blind, `n=${n} ${preset} blind`);
+          for (const p of ids(n).filter((x) => x !== merlin)) assert.deepEqual(sim.view(p).mine.knows.blind, { mordred: false, oberon: false }, 'only Merlin has a note about it');
           checkLeaks(sim);
         }
       }
@@ -848,7 +857,7 @@ test('avalon: reveal — tap mode ends when everybody has looked, focus shrinks 
   const sim = mk(6, { seed: 2 });
   const order = st(sim).order;
   assert.equal(st(sim).deadline, null);
-  assert.deepEqual(sim.focus(), { pids: order });
+  assert.deepEqual(sim.focus(), { pids: order, label: '睇身份' });   // a private step: a shared phone gates every seat
   assert.equal(sim.view('p1').opts.reveal, 'tap');
   ok(sim, 'p3', { type: 'seen' });
   assert.deepEqual(sim.focus().pids, order.filter((p) => p !== 'p3'));
@@ -1617,7 +1626,7 @@ test('avalon: the shot screen ends by the Assassin tapping, the clock, or the ho
     const a = seatOf(sim, 'assassin');
     ok(sim, a, { type: 'assassinate', target: ids(5).find((p) => p !== a) });
     assert.equal(st(sim).deadline, sim.now + 8000);
-    assert.deepEqual(sim.focus(), { pids: [a] });
+    assert.deepEqual(sim.focus(), { pids: [a], open: true, step: 'shot', label: S.FOCUS.shot });
     const other = ids(5).find((p) => p !== a);
     no(sim, other, { type: 'continue' });
     if (how === 'tap') ok(sim, a, { type: 'continue' });
@@ -1822,7 +1831,7 @@ test('avalon: D4 — 💤 a quest member plays Success (the dead-phone rule); th
   assert.equal(phase(sim), 'quest-result');
   // the leader goes on the result screen: anybody at the table may go on
   const L = leader(sim);
-  assert.deepEqual(sim.focus(), { pids: [L] });
+  assert.deepEqual(sim.focus().pids, [L]);
   sim.host(AWAY(L));
   assert.equal(sim.focus(), null, 'focus never names a seat that is away (a shared phone would ask for them)');
   const other = ids(7).find((p) => p !== L && p !== lead);
@@ -1980,7 +1989,7 @@ test('avalon: during a fuzzed game every secret step starts with a tap for every
 
 test('avalon: views are built field by field and carry no private state', () => {
   const sim = mkTimed(8, 3);
-  const topCommon = ['absent', 'board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'subtitle', 'timerLabel', 'title', 'track'];
+  const topCommon = ['absent', 'board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'rolesInPlay', 'subtitle', 'tableContinue', 'timerLabel', 'title', 'track'];
   const seatV = Object.keys(sim.view('p2')).sort();
   assert.deepEqual(seatV, [...topCommon, 'mine'].sort());
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topCommon.slice().sort());
@@ -2374,20 +2383,25 @@ test('avalon: focus per phase — and the Assassin is called by role, not by nam
   const sim = mk(6, { seed: 9, lady: 'on' });
   assert.deepEqual(sim.focus().pids, ids(6));
   revealAll(sim);
-  assert.deepEqual(sim.focus(), { pids: [leader(sim)] });
+  // #4: the public one-person steps are `open` (a shared phone shows a light card, never 「其他人唔好望」); #2: every step
+  // carries its own key, so pick → the leader's own ballot and voted → their own quest card are gated again (#33: label)
+  assert.deepEqual(sim.focus(), { pids: [leader(sim)], open: true, step: 'pick:1~0', label: '揀隊員' });
   pickTeam(sim);
-  assert.deepEqual(sim.focus().pids, ids(6));
+  assert.deepEqual(sim.focus(), { pids: ids(6), step: 'vote:1~0', label: '任務 1 投票' });
   ok(sim, 'p2', { type: 'vote', vote: 'approve' });
   assert.deepEqual(sim.focus().pids, ids(6).filter((p) => p !== 'p2'));
   voteAll(sim, 'approve');
-  assert.deepEqual(sim.focus(), { pids: [leader(sim)] });
+  assert.deepEqual(sim.focus(), { pids: [leader(sim)], open: true, step: 'voted:1', label: '投票結果' });
   cont(sim);
   assert.deepEqual(sim.focus().pids, st(sim).team, 'quest: the team members who still owe a card');
+  assert.equal(sim.focus().open, undefined, 'a quest card is private');
+  assert.equal(sim.focus().step, 'quest:1~0');
+  assert.equal(sim.focus().label, '任務 1 出牌');
   const first = st(sim).team[0];
   ok(sim, first, { type: 'quest', card: 'success' });
   assert.deepEqual(sim.focus().pids, st(sim).team.filter((p) => p !== first));
   for (const p of st(sim).team) sim.act(p, { type: 'quest', card: 'success' });
-  assert.deepEqual(sim.focus(), { pids: [leader(sim)] });
+  assert.deepEqual(sim.focus(), { pids: [leader(sim)], open: true, step: 'result:1', label: '任務 1 結果' });
   assert.equal(sim.focus().anonymous, undefined, 'only the assassination is anonymous');
 });
 
@@ -3273,7 +3287,7 @@ test('avalon: in a real Room each phone only ever receives its own card, and a w
         walkStrings(m, (str, path) => {
           if (!ROLE_IDS.includes(str)) return;
           const own = path === `$.bySeat.${pid}.mine.role`;
-          const deck = /\.deck\[\d+\]\.role$/.test(path);
+          const deck = /\.(deck\[\d+\]\.role|rolesInPlay\[\d+\]\.id)$/.test(path);
           const flip = /\.assassinate\.flipped\[\d+\]\.role$/.test(path);
           assert.ok(own || deck || flip, `role "${str}" reached ${pid}'s phone at ${path}`);
         });
@@ -3468,5 +3482,572 @@ test('avalon: UI — D8 夠鐘 line on every phone (one shape), D4 💤 on the r
     } finally {
       globalThis.setTimeout = realSetTimeout;
     }
+  });
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest #2 #4 #14 #17 #20 #22 #27 #28, decision U9)
+// ============================================================
+
+/** A game as a whole-table room deals it: config.defaults with env.singleDevice (passPhone, both clocks zeroed). */
+const mkOne = (n, { seed = 1, ...patch } = {}) => new Sim(game, { n, seed, config: config.defaults(n, { ...REV, ...patch }, { singleDevice: true }) });
+
+test('avalon one phone: the public steps are `open`, every private step has its own key — the Lady\'s pick is public, her answer private; a re-run after 呢鋪唔計 is a new step', () => {
+  const sim = mkOne(7, { seed: 6, lady: 'on' });
+  assert.equal(st(sim).cfg.passPhone, true);
+  revealAll(sim);
+  // to the Lady: two quests
+  for (let i = 0; i < 2; i++) { forceQuest(sim, true); cont(sim); }
+  assert.equal(phase(sim), 'lady');
+  const holder = st(sim).lady.step.holder;
+  assert.deepEqual(sim.focus(), { pids: [holder], open: true, step: 'lady:0', label: '湖中女神' });
+  ok(sim, holder, sim.legal(holder)[0]);
+  assert.equal(phase(sim), 'lady-peek');
+  assert.deepEqual(sim.focus(), { pids: [holder], step: 'peek:0', label: '湖中女神' }, 'the answer is private: the same seat is gated again');
+  ok(sim, holder, { type: 'lady-done' });
+  // a vote voided by the host keeps the same voters but becomes a new step (the seat on screen is gated again)
+  pickTeam(sim);
+  const before = sim.focus().step;
+  ok(sim, ids(7)[0], { type: 'vote', vote: 'approve' });
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), true);
+  assert.notEqual(sim.focus().step, before);
+  assert.deepEqual(sim.focus().pids, ids(7));
+});
+
+test('avalon one phone (#27): evil talks face up first — nobody is called, nobody can shoot; one table tap (or the host\'s ⏭) calls the Assassin behind the eyes-closed card', () => {
+  const sim = mkOne(5, { seed: 3 });
+  toAssassinate(sim);
+  const a = seatOf(sim, 'assassin');
+  const other = ids(5).find((p) => p !== a);
+  assert.equal(st(sim).talk, true);
+  assert.equal(sim.focus(), null, 'nobody is called while evil talks: the phone lies in the middle');
+  for (const p of [...ids(5), null]) assert.equal(sim.view(p).assassinate.talk, true, 'public, the same in every view');
+  for (const p of ids(5)) {
+    assert.deepEqual(sim.legal(p), [{ type: 'talked' }]);
+    assert.equal(engine.blocking(sim.state, p), false, 'the table talks: nobody in particular is waited on');
+    assert.deepEqual(engine.autoAct(sim.state, p, sim.ctx()), { type: 'talked' });
+  }
+  assert.ok(st(sim).deadline != null, 'the soft clock already runs while they talk');
+  const cue = sim.cue();
+  assert.ok(cue.id.endsWith(':assassinate') && cue.text.includes('傾好喇'), cue.text);
+  no(sim, a, { type: 'assassinate', target: other }, 'no shot before the talk is over');
+  no(sim, other, { type: 'decoy' });
+  assert.equal(sim.view(null).hint, S.HINT.assassinateTalk);
+  ok(sim, other, { type: 'talked', seats: ids(5), table: true });
+  assert.equal(st(sim).talk, false);
+  assert.deepEqual(sim.focus(), { pids: [a], anonymous: '刺客請拎起部手機' });
+  const pick = sim.cue();
+  assert.ok(pick.id.endsWith(':assassinate:pick') && pick.text.includes('閉埋眼'), pick.text);
+  no(sim, other, { type: 'talked' }, 'once is enough');
+  ok(sim, a, { type: 'assassinate', target: other });
+  assert.equal(phase(sim), 'shot');
+  // the host's ⏭ ends the talk as well (the first press acknowledges the line, the second moves on)
+  const b = mkOne(5, { seed: 3 });
+  toAssassinate(b);
+  b.host({ type: ACT.NEXT });
+  b.host({ type: ACT.NEXT });
+  assert.equal(st(b).talk, false);
+  assert.equal(phase(b), 'assassinate', 'it never shoots for the Assassin');
+  // phones of their own: no talk step — the Assassin is called at once (unchanged)
+  const own = mk(5, { seed: 3 });
+  toAssassinate(own);
+  assert.equal(st(own).talk, false);
+  assert.equal(own.view(null).assassinate.talk, false);
+  assert.deepEqual(own.focus().anonymous, '刺客請拎起部手機');
+  assert.ok(!own.cue().id.endsWith(':pick'));
+  // a whole one-phone game still finishes with random legal play (the talk is one more table tap)
+  for (let seed = 1; seed <= 6; seed++) mkOne(5 + (seed % 6), { seed }).runRandom({ onStep: checkLeaks });
+});
+
+test('avalon one phone (#28): Merlin\'s note follows the public deck; one evil partner is 佢, never 佢哋', async () => {
+  assert.equal(S.merlinNote({ mordred: false, oberon: false }), '（全部邪惡你都見到）');
+  assert.equal(S.merlinNote({ mordred: true, oberon: false }), '（莫德雷德你睇唔到）');
+  assert.equal(S.merlinNote({ mordred: false, oberon: true }), '（奧伯倫你睇唔到）');
+  assert.equal(S.merlinNote({ mordred: true, oberon: true }), '（莫德雷德同奧伯倫你睇唔到）');
+  assert.equal(S.merlinNote(undefined), S.T.card.knowsEvilNote, 'a view without the flags keeps the old line');
+  await withFakeDom(async (ui, comps) => {
+    // 5 players, recommended deck (Percival + Morgana, no Mordred): Merlin sees every evil; the two evil see one partner
+    const sim = mk(5, { seed: 8 });
+    const seats = mountAll(ui, comps, sim, [], []);
+    pushViews(sim, seats);
+    const note = (pid) => findAll(seats[pid].root, (n) => hasCls(n, 'av-face-note'))[0].textContent;
+    assert.equal(note(seatOf(sim, 'merlin')), '（全部邪惡你都見到）');
+    for (const e of evils(sim)) assert.equal(note(e), S.T.card.knowsAllyNote);
+    // 9 players with Mordred: Merlin is told about the one he cannot see
+    const big = mk(9, { seed: 2 });
+    const bs = mountAll(ui, comps, big, [], []);
+    pushViews(big, bs);
+    assert.equal(findAll(bs[seatOf(big, 'merlin')].root, (n) => hasCls(n, 'av-face-note'))[0].textContent, '（莫德雷德你睇唔到）');
+    for (const e of evils(big).filter((p) => big.state.role[p] !== 'oberon')) {
+      assert.equal(findAll(bs[e].root, (n) => hasCls(n, 'av-face-note'))[0].textContent, S.T.card.knowsAlliesNote, 'two partners: 佢哋');
+    }
+    for (const seat of [...Object.values(seats), ...Object.values(bs)]) seat.handle.destroy();
+  });
+});
+
+test('avalon one phone (#19): the reveal line says the phone goes round, with the 8 s minimum; phones of their own keep 「自己部電話」', () => {
+  const one = mkOne(6, { seed: 2 });
+  assert.ok(one.cue().text.includes('逐個交') && one.cue().text.includes('8 秒') && !one.cue().text.includes('自己部電話'), one.cue().text);
+  assert.ok(mkTimed(6, 2).cue().text.includes('自己部電話'));
+  assert.ok(config.summary(one.config, 6).some((l) => l.includes('8 秒') && l.includes('4 秒')), 'the lobby line');
+  assert.ok(rules.sections.some((x) => x.body.includes('最少揸住 8 秒')), 'the rules no longer promise equal time without saying how');
+});
+
+// ---------- one phone: the UI (fake DOM, the real Cover / PlayerPicker / Timer) ----------
+
+/** One seat's UI as a shared phone's shell mounts it (DESIGN 15.8). `clock.t` is the host clock; `calls` records table taps. */
+function mountOne(ui, comps, sim, pid, { shared = true, clock = { t: sim.now }, sent = [], calls = [] } = {}) {
+  const root = new FEl('div');
+  const api = {
+    me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
+    shared, wholeTable: shared, atTable: shared && pid === null, mySeats: shared ? ids(sim.state.n) : [pid],
+    send: (a) => { const changed = pid ? sim.act(pid, a) : false; sent.push({ pid, a, changed }); return changed; },
+    tableSend: (a) => { calls.push({ tableSend: a }); return true; },
+    toTable: () => true, handTo: () => false, askWho: async () => null, sendAs: () => false,
+    ink() {}, now: () => clock.t, sfx() {}, toast() {}, confirm: () => true, components: comps,
+  };
+  const handle = ui.mount(root, api);
+  const paint = (extra = {}) => handle.update(sim.view(pid), {
+    focus: sim.focus(), paused: false, narrationMode: 'voice', shared, wholeTable: shared, atTable: shared && pid === null,
+    tableLocked: false, coWakers: [], views: {}, asked: null, clockHeld: false, ...extra,
+  });
+  return { root, api, handle, paint, sent, calls };
+}
+const actBtn = (root, a) => findAll(root, (n) => n.attrs['data-act'] === a)[0];
+
+test('avalon ui, one phone (U9): 「我睇完」 waits 8 s and 「確定出牌」 4 s from the hand-over card, the same for every role; phones of their own are untouched', async () => {
+  await withFakeDom(async (ui, comps) => {
+    const sim = mkOne(6, { seed: 4 });
+    const shapes = new Set();
+    for (const pid of [seatOf(sim, 'merlin'), seatOf(sim, 'servant'), seatOf(sim, 'assassin')]) {
+      const clock = { t: 5_000 };
+      const m = mountOne(ui, comps, sim, pid, { clock });                       // mounted = this seat's gate was tapped
+      m.paint();
+      const seen = actBtn(m.root, 'seen');
+      assert.equal(seen.disabled, true, `${sim.state.role[pid]}: held back at first`);
+      assert.ok(m.root.textContent.includes('仲有 8 秒先交得'), m.root.textContent);
+      assert.ok(m.root.textContent.includes(S.T.reveal.noteTapShared));
+      shapes.add(shape(findAll(m.root, (n) => hasCls(n, 'av-body'))[0]));
+      clock.t += 7_900;
+      m.paint();
+      assert.equal(seen.disabled, true);
+      assert.ok(m.root.textContent.includes('仲有 1 秒先交得'));
+      clock.t += 100;
+      m.paint();
+      assert.equal(seen.disabled, false, 'free after 8 s');
+      assert.equal(findAll(m.root, (n) => hasCls(n, 'av-hold'))[0].hidden, true);
+      click(seen);
+      assert.equal(sim.view(pid).mine.seen, true);
+      m.handle.destroy();
+    }
+    assert.equal(shapes.size, 1, 'Merlin, a servant and the Assassin wait in the same screen');
+    // a phone of its own (tap mode chosen by the table): no minimum, as before
+    const own = mk(6, { seed: 4 });
+    const m = mountOne(ui, comps, own, 'p1', { shared: false });
+    m.paint();
+    assert.equal(actBtn(m.root, 'seen').disabled, false);
+    assert.equal(findAll(m.root, (n) => hasCls(n, 'av-hold'))[0].hidden, true);
+    m.handle.destroy();
+
+    // the quest card: 4 s for a good and an evil member alike, picking a tile works at once
+    revealAll(sim);
+    const g = goods(sim)[0];
+    const e = evils(sim)[0];
+    pickTeam(sim, [g, e]);
+    voteAll(sim, 'approve');
+    cont(sim);
+    const qshapes = new Set();
+    for (const pid of [g, e]) {
+      const clock = { t: 9_000 };
+      const q = mountOne(ui, comps, sim, pid, { clock });
+      q.paint();
+      click(actBtn(q.root, 'tile-success'));
+      const play = actBtn(q.root, 'play');
+      assert.equal(play.disabled, true, 'held back for 4 s');
+      assert.ok(q.root.textContent.includes('仲有 4 秒先出得牌'));
+      qshapes.add(shape(findAll(q.root, (n) => hasCls(n, 'av-body'))[0]));
+      clock.t += 4_000;
+      q.paint();
+      assert.equal(play.disabled, false);
+      click(play);
+      assert.equal(q.sent.at(-1).a.card, 'success');
+      q.handle.destroy();
+    }
+    assert.equal(qshapes.size, 1, 'good and evil wait in the same screen');
+  });
+});
+
+test('avalon ui, one phone (#22 #4 #20): no identity card on the public screens, and the leader\'s pick names the leader; a private step or a seat picked by hand keeps the card', async () => {
+  await withFakeDom(async (ui, comps) => {
+    const sim = mkOne(6, { seed: 5 });
+    revealAll(sim);
+    const L = leader(sim);
+    const name = sim.players.find((p) => p.id === L).name;
+    const mini = (root) => findAll(root, (n) => hasCls(n, 'av-mini'))[0];
+    const lead = mountOne(ui, comps, sim, L);
+    lead.paint();
+    assert.equal(sim.focus().open, true);
+    assert.equal(mini(lead.root).hidden, true, 'the leader\'s public pick carries no identity card');
+    assert.ok(lead.root.textContent.includes(`${name} 係隊長`) && !lead.root.textContent.includes('你係隊長'), lead.root.textContent);
+    const other = ids(6).find((p) => p !== L);
+    const hand = mountOne(ui, comps, sim, other);                              // picked by hand (換人): not the focus
+    hand.paint();
+    assert.equal(mini(hand.root).hidden, false, 'a seat picked by hand behind its own gate keeps it');
+    pickTeam(sim);
+    lead.paint();
+    assert.equal(mini(lead.root).hidden, false, 'the leader\'s own ballot is private: the card is back');
+    voteAll(sim, 'approve');
+    // re-run F2: the vote reveal is nobody's step on one phone — it lies in the middle, on the table screen
+    assert.equal(sim.focus(), null);
+    const tbl = mountOne(ui, comps, sim, null);
+    tbl.paint();
+    assert.ok(!mini(tbl.root) || mini(tbl.root).hidden, 'no identity card on the table screen');
+    assert.ok(visible(actBtn(tbl.root, 'continue')), 'the table goes on');
+    const note = (root) => findAll(root, (n) => hasCls(n, 'av-show-note'))[0];
+    assert.ok(!note(tbl.root) || !visible(note(tbl.root)));
+    lead.paint();
+    assert.ok(visible(note(lead.root)) && note(lead.root).textContent === S.T.voted.tableNote, 'a leader who picked their own name is reminded to show the table');
+    hand.paint();
+    assert.ok(visible(note(hand.root)) && visible(actBtn(hand.root, 'continue')), 'on one phone anybody may go on, so any seat picked by hand gets it too');
+    tbl.handle.destroy();
+    // a phone of its own: unchanged
+    const own = mk(6, { seed: 5 });
+    revealAll(own);
+    const o = mountOne(ui, comps, own, leader(own), { shared: false });
+    o.paint();
+    assert.equal(mini(o.root).hidden, false);
+    assert.ok(o.root.textContent.includes('你係隊長'));
+    pickTeam(own);
+    voteAll(own, 'approve');
+    o.paint();
+    assert.ok(!visible(findAll(o.root, (n) => hasCls(n, 'av-show-note'))[0]), 'a phone of its own: no reminder');
+    for (const x of [lead, hand, o]) x.handle.destroy();
+  });
+});
+
+test('avalon ui, one phone (#27): the talk screen is the same on every screen, with no picker and one table tap — locked while the table card is up', async () => {
+  await withFakeDom(async (ui, comps) => {
+    const sim = mkOne(5, { seed: 3 });
+    toAssassinate(sim);
+    const table = mountOne(ui, comps, sim, null);
+    table.paint({ tableLocked: true });
+    const talked = () => actBtn(table.root, 'talked');
+    assert.ok(visible(talked()) && talked().disabled, 'locked behind the table card (U5)');
+    assert.ok(table.root.textContent.includes(S.T.assassinate.talkTitle));
+    table.paint();
+    assert.equal(talked().disabled, false);
+    click(talked());
+    assert.deepEqual(table.calls, [{ tableSend: { type: 'talked' } }], 'one whole-table tap');
+    // every seat's screen during the talk: one shape, the same button, no picker
+    const shapes = new Set();
+    const ms = ids(5).map((pid) => mountOne(ui, comps, sim, pid));
+    for (const m of ms) {
+      m.paint();
+      shapes.add(shape(findAll(m.root, (n) => hasCls(n, 'av-body'))[0]));
+      assert.equal(findAll(m.root, (n) => hasCls(n, 'c-playerpicker') && visible(n)).length, 0, 'no picker while evil talks');
+    }
+    assert.equal(shapes.size, 1);
+    // the table taps: the Assassin is called, the screens turn into the picker
+    ok(sim, 'p1', { type: 'talked', seats: ids(5), table: true });
+    const a = ms.find((m) => m.api.me === seatOf(sim, 'assassin'));
+    a.paint();
+    assert.ok(!visible(actBtn(a.root, 'talked')), 'the talk button is gone after the talk');
+    assert.ok(findAll(a.root, (n) => hasCls(n, 'c-playerpicker') && visible(n)).length > 0);
+    for (const m of [table, ...ms]) m.handle.destroy();
+  });
+});
+
+test('avalon ui, one phone: the table screen goes on with one tap when the leader is 💤; otherwise 繼續 is the leader\'s', async () => {
+  await withFakeDom(async (ui, comps) => {
+    // a shared phone in a room of several phones (no passPhone): 繼續 is the leader's until they are 💤
+    const sim = new Sim(game, { n: 7, seed: 9, config: config.defaults(7, { ...REV }) });
+    assert.equal(st(sim).cfg.passPhone, false);
+    revealAll(sim);
+    pickTeam(sim);
+    voteAll(sim, 'approve');
+    const table = mountOne(ui, comps, sim, null);
+    table.paint();
+    assert.equal(actBtn(table.root, 'continue'), undefined, 'the leader goes on, not the table');
+    sim.host(AWAY(leader(sim)));
+    assert.equal(sim.focus(), null);
+    table.paint({ tableLocked: true });
+    const btn = actBtn(table.root, 'continue');
+    assert.ok(visible(btn) && btn.disabled, 'there now, locked behind the table card');
+    table.paint();
+    click(btn);
+    assert.deepEqual(table.calls, [{ tableSend: { type: 'continue' } }]);
+    ok(sim, ids(7).find((p) => p !== leader(sim)), { type: 'continue', seats: ids(7), table: true });
+    table.handle.destroy();
+  });
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and the real avalon UI ----------
+// (the same harness as tests/werewolf.test.mjs) A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim. This checks that the engine's focus, the shell's gates and this UI fit together.
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false;
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. */
+async function onePhoneShell(dom, sim) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const { mount } = await import('../js/games/avalon/ui.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: 'avalon', players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: { next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true, holdClock: () => true },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  return {
+    st, acts, render,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => { shTap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]); await shSettle(); await render(); },
+    game: () => shFind(screen.el, (n) => n.cls.has('play-game'))[0],
+    tapIn: async (pred) => { shTap(shFind(screen.el, (n) => n.tag === 'button' && shShown(n) && pred(n))[0]); await shSettle(); await render(); },
+    destroy: () => screen.destroy(),
+  };
+}
+
+
+test('avalon, one phone through the real play screen: 我睇完 waits 8 s from the hand-over card (U9); the leader\'s pick is a public card with no identity card (#4 #22); the leader\'s own ballot is gated again (#2)', async () => {
+  await withShell(async (dom) => {
+    const sim = mkOne(5, { seed: 7 });
+    const ph = await onePhoneShell(dom, sim);
+    const seen = () => shFind(ph.game(), (n) => n.attrs['data-act'] === 'seen')[0];
+    // the reveal walks round the table, one private card per seat, each held back for 8 s
+    for (let g = 0; g < 10 && phase(sim) === 'reveal'; g++) {
+      assert.equal(ph.gate(), 'private');
+      assert.ok(ph.gateText().includes('其他人唔好望 · 睇身份'), ph.gateText());
+      await ph.tapGate();
+      assert.ok(ph.st.activeSeat);
+      assert.equal(seen().disabled, true, 'held back at the hand-over (U9)');
+      sim.tick(7_000);
+      await ph.render();
+      assert.equal(seen().disabled, true);
+      sim.tick(1_000);
+      await ph.render();
+      assert.equal(seen().disabled, false, 'free 8 s after the card');
+      await ph.tapIn((n) => n.attrs['data-act'] === 'seen');
+    }
+    assert.equal(phase(sim), 'pick');
+    const L = leader(sim);
+    const name = sim.players.find((p) => p.id === L).name;
+    assert.equal(ph.gate(), 'public', 'the pick is a public step');
+    assert.ok(ph.gateText().includes(`輪到 ${name} · 揀隊員`) && !ph.gateText().includes('其他人唔好望'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, L);
+    assert.equal(shFind(ph.game(), (n) => n.cls.has('av-mini'))[0].hidden, true, 'no identity card on the public pick');
+    assert.ok(ph.game().textContent.includes(`${name} 係隊長`) && !ph.game().textContent.includes('（你）'));
+    for (let i = 0; i < 2; i++) await ph.tapIn((n) => n.cls.has('c-playerpicker-chip') && !n.cls.has('on'));
+    await ph.tapIn((n) => n.cls.has('btn-primary') && n.parentNode?.cls.has('c-playerpicker'));
+    assert.equal(phase(sim), 'vote');
+    // #2: the leader was on screen — their own ballot still gets its own private card
+    assert.equal(ph.gate(), 'private');
+    assert.ok(ph.gateText().includes(`交俾 ${name}`) && ph.gateText().includes('任務 1 投票'), ph.gateText());
+    assert.equal(ph.st.activeSeat, null, 'behind the card lies the table view, never the ballot');
+    ph.destroy();
+  });
+});
+
+test('avalon one phone: re-run F2 — the vote and quest results are nobody\'s step: the table taps 繼續 (any seat, a table tap), nobody is waited on; phones of their own still wait on the leader', () => {
+  const sim = mkOne(6, { seed: 21 });
+  revealAll(sim);
+  const L = leader(sim);
+  const other = ids(6).find((p) => p !== L);
+  pickTeam(sim);
+  voteAll(sim, 'approve');
+  assert.equal(phase(sim), 'voted');
+  assert.equal(sim.focus(), null, 'the result goes to the middle');
+  assert.equal(sim.view(null).tableContinue, true);
+  assert.deepEqual(ids(6).filter((p) => engine.blocking(sim.state, p)), [], 'the table\'s pace, nobody in particular');
+  assert.equal(sim.view(null).hint, S.HINT.votedTable);
+  assert.ok(sim.legal(other).some((a) => a.type === 'continue'));
+  ok(sim, other, { type: 'continue', seats: ids(6), table: true });
+  assert.equal(phase(sim), 'quest');
+  playCards(sim);
+  assert.equal(phase(sim), 'quest-result');
+  assert.equal(sim.focus(), null);
+  assert.equal(sim.view(null).hint, S.HINT.resultTable);
+  ok(sim, ids(6).find((p) => p !== L && p !== other), { type: 'continue' });
+  assert.equal(phase(sim), 'pick');
+  assert.deepEqual(sim.focus().pids, [leader(sim)], 'the next pick is the new leader\'s public step');
+  // phones of their own: unchanged
+  const own = mk(6, { seed: 21 });
+  revealAll(own);
+  pickTeam(own);
+  voteAll(own, 'approve');
+  assert.deepEqual(own.focus(), { pids: [leader(own)], open: true, step: 'voted:1', label: '投票結果' });
+  assert.equal(own.view(null).tableContinue, false);
+  assert.equal(own.act(ids(6).find((p) => p !== leader(own)), { type: 'continue' }), false, 'only the leader goes on');
+});
+
+test('avalon: re-run #5 — every view names the public deck as the roles in play, so the 💡 sheet lists this game\'s roles (never a seat\'s own cover on the table)', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const sim = mkOne(7, { seed: 22 });
+  const deck = st(sim).deck.map((d) => ({ id: d.role, count: d.count }));
+  for (const pid of [null, ...ids(7)]) assert.deepEqual(sim.view(pid).rolesInPlay, deck);
+  const list = hintRoles(sim.view(null), rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => r.id), deck.map((d) => d.id));
+  assert.ok(list.roles.length < rules.roles.length, 'only this deck, not every role of the game');
+});
+
+test('avalon, one phone through the real play screen: re-run F2 — after the vote walk and the quest walk the result goes to the middle and one table tap goes on', async () => {
+  await withShell(async (dom) => {
+    const sim = mkOne(5, { seed: 7 });
+    revealAll(sim);
+    const ph = await onePhoneShell(dom, sim);
+    // the pick (public card to the leader), then the private vote walk
+    while (phase(sim) === 'pick' || phase(sim) === 'vote') {
+      if (ph.gate()) await ph.tapGate();
+      if (phase(sim) === 'pick') pickTeam(sim);
+      else ok(sim, ph.st.activeSeat, { type: 'vote', vote: 'approve' });
+      await ph.render();
+    }
+    assert.equal(phase(sim), 'voted');
+    assert.equal(ph.gate(), 'table', `the vote reveal goes to the middle: ${ph.gateText()}`);
+    const cont = () => shFind(ph.game(), (n) => n.attrs['data-act'] === 'continue')[0];
+    assert.equal(cont().disabled, true, 'locked behind the table card (U5)');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(cont().disabled, false);
+    await ph.tapIn((n) => n.attrs['data-act'] === 'continue');
+    assert.equal(ph.acts.at(-1).action.table, true, 'a whole-table tap');
+    assert.equal(phase(sim), 'quest');
+    // the quest walk: private cards to the team, then the result in the middle
+    while (phase(sim) === 'quest') {
+      assert.equal(ph.gate(), 'private', ph.gateText());
+      await ph.tapGate();
+      ok(sim, ph.st.activeSeat, { type: 'quest', card: 'success' });
+      await ph.render();
+    }
+    assert.equal(phase(sim), 'quest-result');
+    assert.equal(ph.gate(), 'table', ph.gateText());
+    await ph.tapGate();
+    await ph.tapIn((n) => n.attrs['data-act'] === 'continue');
+    assert.equal(phase(sim), 'pick');
+    assert.equal(ph.gate(), 'public', 'the next leader\'s pick');
+    ph.destroy();
   });
 });

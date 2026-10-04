@@ -87,6 +87,7 @@ const DEFAULTS = Object.freeze({
   preset: 'auto', custom: Object.freeze({}), customMasons: false, loneWolf: true, pace: 'standard',
   discussSec: 0, ringVote: true, antiStreak: false,
   paceAuto: false,   // hidden: the slow pace came from the one-phone default (not shown in the form)
+  passPhone: false,  // hidden: one phone in the middle (env.singleDevice) — the hand-over pad, the ring fallback, the cues
 });
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -102,7 +103,7 @@ function keyOk(key, v) {
   switch (key) {
     case 'preset': return PRESETS.includes(v);
     case 'pace': return Object.prototype.hasOwnProperty.call(PACES, v);
-    case 'customMasons': case 'loneWolf': case 'ringVote': case 'antiStreak': case 'paceAuto': return typeof v === 'boolean';
+    case 'customMasons': case 'loneWolf': case 'ringVote': case 'antiStreak': case 'paceAuto': case 'passPhone': return typeof v === 'boolean';
     case 'discussSec': { const x = asInt(v); return x === 0 || (x >= 30 && x <= 1800); }
     case 'custom':
       return isObj(v) && CUSTOM_IDS.every((id) => {
@@ -195,6 +196,9 @@ export const config = {
       if (out.pace === 'slow') out.pace = 'standard';
       out.paceAuto = false;
     }
+    // one phone in the middle (U6, U8, #24): the hand-over pad on every role step, the ring vote's fallback ballot and
+    // the one-phone cues — it follows the room like the pace above
+    if (env) out.passPhone = !!env.singleDevice;
     return out;
   },
 
@@ -292,7 +296,7 @@ export const config = {
     return S.summaryLines({
       n: nn, preset, roles: rolePairs(res.counts), reasonShort: S.presetReasonShort(nn, preset, { villagers: res.counts.villager }),
       pace: m.pace, discussSec: m.discussSec || discussFor(nn), loneWolf: m.loneWolf, ringVote: m.ringVote,
-      antiStreak: m.antiStreak,
+      antiStreak: m.antiStreak, passPhone: m.passPhone, padSec: PASS_PAD_MS / 1000,
     });
   },
 };
@@ -306,7 +310,9 @@ export const meta = {
   accent: '#8b7bff',
   players: [MIN_N, MAX_N],
   minutes: [10, 20],
-  narration: 'recommended',   // every step is fixed-length and runs on timers, so silent mode works too
+  narration: 'recommended',   // every step is fixed-length and runs on timers, so silent mode works with one phone each
+  eyesClosed: true,           // U1: the night needs eyes closed -> a whole-table phone offers no 靜音
+  nightAmbient: true,         // U8: a whole-table phone plays a neutral noise bed all night, so reaching for it is masked
   paperMode: false,
   singleDevice: 'partial',    // phone in the middle; see docs/games/onuw.md §4 for what leaks
   banks: [],
@@ -333,6 +339,11 @@ const PRESENT = ACT.PRESENT ?? '@present';
 const isAbsent = (s, pid) => !!s.absent?.[pid];
 /** Every seat the table still waits for has done it (absent seats are not waited for). */
 const allPresent = (s, done) => s.order.every((p) => done(p) || isAbsent(s, p));
+/**
+ * Every seat one tap counts for (DESIGN §7.1): the sender, plus `action.seats` — a shared phone's whole-table tap
+ * (api.tableSend) or its co-wakers' combined night screen. The room keeps only the sending device's own playing seats.
+ */
+const seatsOf = (s, pid, a) => [...new Set([pid, ...(Array.isArray(a?.seats) ? a.seats : [])])].filter((p) => isStr(p) && s.order.includes(p));
 /** A progress count over the seats the table waits for. */
 const presentProg = (s, done) => {
   const present = s.order.filter((p) => !isAbsent(s, p));
@@ -342,12 +353,26 @@ const stepOf = (s) => s.steps[s.ix] ?? null;
 const cueIdOf = (s) => `on${s.gid}:night:${s.ix}:${stepOf(s).k}`;
 const dealCueId = (s) => `on${s.gid}:deal`;
 const voteCueId = (s) => `on${s.gid}:vote`;
+const dawnCueId = (s) => `on${s.gid}:dawn`;
 const revealCueId = (s) => `on${s.gid}:reveal`;
 const discussMs = (s) => (s.cfg.discussSec || discussFor(s.n)) * 1000;
 const cueMinMs = (text) => Math.max(2500, Math.min(9000, text.length * 150));
 
 const MAX_EXTENDS = 6;          // host's +60 s presses per day
 const REVEAL_MS = 180_000;      // the reveal waits for the host, but never forever
+
+/**
+ * One phone in the middle (cfg.passPhone, U6): every role step also has to cover reaching for the phone with eyes
+ * closed, tapping the gate and putting it back. The same pad on every role step, the role awake or in the centre.
+ */
+export const PASS_PAD_MS = 8000;
+
+/**
+ * One phone, dawn (re-run R3): the last role's holder needs time to put the phone back before anybody opens their eyes.
+ * The dawn step stays eyes-closed (`view.night`) and is this much longer — a fixed gap, the same whoever acted last —
+ * and 「天光喇，大家睜開眼」 is the day's first line, spoken once it is over.
+ */
+export const PASS_DAWN_PAD_MS = 3000;
 
 /** Fixed per step kind (and pace) — never depends on who is awake or what they did. */
 const BASE_MS = {
@@ -357,7 +382,8 @@ const BASE_MS = {
 };
 export function windowMs(cfg, k) {
   const base = k === 'werewolf' && !cfg.loneWolf ? 10000 : BASE_MS[k];
-  return Math.round(base * PACES[cfg.pace]);
+  const pad = !cfg.passPhone || k === 'begin' ? 0 : k === 'dawn' ? PASS_DAWN_PAD_MS : PASS_PAD_MS;
+  return Math.round(base * PACES[cfg.pace]) + pad;
 }
 
 const expand = (counts) => ROLE_ORDER.flatMap((r) => Array.from({ length: counts[r] ?? 0 }, () => r));
@@ -495,11 +521,12 @@ function setup({ players, config: cfg, rng, now, hostPid, carry }) {
     dop: dp ? { pid: dp, target: null, copied: null, acted: false } : null,   // PRIVATE
     steps: buildSteps(counts), ix: 0, stage: 'cue',
     acked: [], did: {},
+    passed: [],                                         // this window: seats that tapped the big button with an ability unused
     notes: Object.fromEntries(order.map((p) => [p, []])),   // PRIVATE per seat
     log: [], moves: [],                                 // PRIVATE until reveal
     ready: {}, dealCue: true,
-    dayReady: {}, extends: 0,
-    votes: {}, ringAgree: {}, voteCue: true,
+    dayReady: {}, extends: 0, dawnCue: false,
+    votes: {}, ringAgree: {}, voteCue: true, voteEarly: false,
     revealDone: {}, revealCue: true,
     absent: {},                                         // public: seats the host marked 💤 (D4)
     final: null, report: null, outcome: null, voided: false,
@@ -521,6 +548,7 @@ function startNight(s) {
   s.ix = 0;
   s.stage = 'cue';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.deadline = null;
   s.timerLabel = null;
@@ -533,6 +561,7 @@ function enterWindow(s, ctx) {
   const st = stepOf(s);
   s.stage = 'window';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.deadline = nowOf(ctx) + windowMs(s.cfg, st.k);
   s.timerLabel = null;
@@ -647,7 +676,12 @@ function nightAct(s, pid, a, ctx) {
   const st = stepOf(s);
   if (!st) return s;
   if (a.type === 'ack') {
-    if (!s.acked.includes(pid)) s.acked.push(pid);
+    // `seats`: a shared phone's combined screen acks for every co-waker on it at once (U2)
+    for (const p of seatsOf(s, pid, a)) {
+      if (!s.acked.includes(p)) s.acked.push(p);
+      // re-run R6: a tap on the big button while an ability is still unused (not the ack a copy or an action implies)
+      if (s.stage === 'window' && abilityOf(s, p) && !(s.passed ??= []).includes(p)) s.passed.push(p);
+    }
     return s;
   }
   if (s.stage !== 'window') return s;
@@ -695,7 +729,11 @@ function resolveWindow(s, ctx) {
     if (ab.mandatory) {
       doDrunk(s, p, rint(rng, 3), ab, true);
     } else {
-      record(s, p, ab.ab === 'loneWolf' ? 'werewolf' : ab.ab, ab.via, { k: 'idle', ability: ab.ab });
+      // One phone (re-run R6): the big button there means "done, the phone goes back", so a seat that tapped it without
+      // acting chose not to, and one that never tapped ran out of time. On phones of their own every seat taps the big
+      // button as a decoy, so the engine cannot tell — the note stays honest about both.
+      const why = s.cfg.passPhone ? ((s.passed ?? []).includes(p) ? 'declined' : 'time') : undefined;
+      record(s, p, ab.ab === 'loneWolf' ? 'werewolf' : ab.ab, ab.via, why ? { k: 'idle', ability: ab.ab, why } : { k: 'idle', ability: ab.ab });
     }
   }
 }
@@ -707,6 +745,7 @@ function finishWindow(s, ctx) {
   s.stage = 'cue';
   s.deadline = null;
   s.acked = [];
+  s.passed = [];
   s.did = {};
   return s;
 }
@@ -717,14 +756,19 @@ function startDay(s, ctx) {
   s.phase = 'day';
   s.stage = 'day';
   s.acked = [];
+  s.passed = [];
   s.did = {};
   s.dayReady = {};
+  // one phone (re-run R3): the dawn step only closed the last role's eyes; 「天光喇，大家睜開眼」 opens the day
+  s.dawnCue = !!s.cfg.passPhone;
   s.deadline = nowOf(ctx) + discussMs(s);
   s.timerLabel = S.T.dayTimer;
   return s;
 }
 
 function startVote(s, ctx = {}) {
+  // one phone (re-run R2): a vote the table started before the clock ran out is not called 「時間到」
+  s.voteEarly = !!s.cfg.passPhone && s.phase === 'day' && s.deadline != null && nowOf(ctx) < s.deadline;
   s.phase = 'vote';
   s.deadline = null;
   s.timerLabel = null;
@@ -736,14 +780,30 @@ function startVote(s, ctx = {}) {
   return s;
 }
 
+/**
+ * 夠鐘投票 and the host's +60 s. `seats` (a shared phone's whole-table tap, §7.1 #5) counts for every listed seat: on a
+ * phone holding the whole table one tap from the middle is the table's decision, and it may add the minute when the
+ * host's seat is among them. 「⭕ 全枱同意圈票」 from the middle of such a phone (#24): every present seat agrees at once,
+ * so the circle forms — nobody dies — without walking the ballots.
+ */
 function dayAct(s, pid, a, ctx) {
   if (a.type === 'ready-vote') {
-    s.dayReady[pid] = a.on !== false;
+    const on = a.on !== false;
+    for (const p of seatsOf(s, pid, a)) s.dayReady[p] = on;
     if (allPresent(s, (p) => s.dayReady[p])) return startVote(s, ctx);
     return s;
   }
+  if (a.type === 'ring') {
+    if (!s.cfg.ringVote || a.table !== true || a.on === false) return s;
+    const seats = seatsOf(s, pid, a);
+    if (!s.order.some((p) => !isAbsent(s, p)) || !allPresent(s, (p) => seats.includes(p))) return s;
+    startVote(s, ctx);
+    if (s.phase !== 'vote') return s;
+    for (const p of s.order) if (!isAbsent(s, p)) s.ringAgree[p] = true;
+    return voteDone(s, ctx);
+  }
   if (a.type === 'extend') {
-    if (s.host && pid !== s.host) return s;
+    if (s.host && !seatsOf(s, pid, a).includes(s.host)) return s;
     if (s.deadline == null || s.extends >= MAX_EXTENDS) return s;
     s.deadline += 60_000;
     s.extends += 1;
@@ -756,7 +816,9 @@ function voteAct(s, pid, a, ctx) {
   if (a.type === 'vote') {
     if (!validPlayer(s, pid, a.target)) return s;
     s.votes[pid] = a.target;
-    delete s.ringAgree[pid];                       // choosing a person is leaving the circle
+    // choosing a person is leaving the circle — except on one phone passed round (#24): there agreeing and a
+    // fallback ballot go in the same turn, so nobody needs the phone twice; the ballot counts only if the circle fails
+    if (!s.cfg.passPhone) delete s.ringAgree[pid];
     return voteDone(s, ctx);
   }
   if (a.type === 'ring' && s.cfg.ringVote) {
@@ -788,6 +850,7 @@ function voteDone(s, ctx) {
 
 /** Every present seat has voted or agreed, but not everybody agreed: those who only agreed must pick somebody. */
 function ringStuck(s) {
+  if (s.cfg.passPhone) return false;               // one phone: every agreer also left a fallback ballot (#24)
   return allPresent(s, (p) => s.votes[p] !== undefined || s.ringAgree[p])
     && s.order.some((p) => !isAbsent(s, p) && s.ringAgree[p] && s.votes[p] === undefined);
 }
@@ -898,10 +961,16 @@ function toReveal(s, ctx) {
   return s;
 }
 
+/**
+ * 睇完整個結果. The host's tap (or everybody's) goes on to the results. `seats` (a shared phone's whole-table tap, #5)
+ * counts for every listed seat — so the phone holding the host's seat can finish it from the middle.
+ */
 function revealAct(s, pid, a) {
-  if (a.type !== 'done' || s.revealDone[pid]) return s;
-  s.revealDone[pid] = true;
-  if (pid === s.host || allPresent(s, (p) => s.revealDone[p])) return toOver(s);
+  if (a.type !== 'done') return s;
+  const seats = seatsOf(s, pid, a).filter((p) => !s.revealDone[p]);
+  if (!seats.length) return s;
+  for (const p of seats) s.revealDone[p] = true;
+  if (seats.includes(s.host) || allPresent(s, (p) => s.revealDone[p])) return toOver(s);
   return s;
 }
 
@@ -963,6 +1032,7 @@ function hostAct(s, a, ctx) {
     case ACT.CUE_DONE:
       if (s.phase === 'deal' && a.id === dealCueId(s)) s.dealCue = false;
       else if (s.phase === 'night' && s.stage === 'cue' && a.id === cueIdOf(s)) return enterWindow(s, ctx);
+      else if (s.phase === 'day' && a.id === dawnCueId(s)) s.dawnCue = false;
       else if (s.phase === 'vote' && a.id === voteCueId(s)) s.voteCue = false;
       else if (s.phase === 'reveal' && a.id === revealCueId(s)) s.revealCue = false;
       return s;
@@ -973,7 +1043,9 @@ function hostAct(s, a, ctx) {
           for (const p of s.order) s.ready[p] = true;
           return startNight(s, ctx);
         case 'night': return s.stage === 'cue' ? enterWindow(s, ctx) : finishWindow(s, ctx);
-        case 'day': return startVote(s, ctx);
+        case 'day':
+          if (s.dawnCue) { s.dawnCue = false; return s; }
+          return startVote(s, ctx);
         case 'reveal':
           if (s.revealCue) { s.revealCue = false; return s; }
           return toOver(s);
@@ -1024,12 +1096,17 @@ function cue(s) {
       if (s.stage !== 'cue') return null;
       const st = stepOf(s);
       const prev = s.ix > 0 ? s.steps[s.ix - 1].k : null;
-      const text = S.cueNight(st.k, prev, { loneWolf: s.cfg.loneWolf, discussSec: s.cfg.discussSec || discussFor(s.n) });
+      const text = S.cueNight(st.k, prev, { loneWolf: s.cfg.loneWolf, discussSec: s.cfg.discussSec || discussFor(s.n), passPhone: !!s.cfg.passPhone });
       return { id: cueIdOf(s), text, minMs: cueMinMs(text) };
+    }
+    case 'day': {
+      if (!s.dawnCue) return null;
+      const text = S.cueDayOpen({ discussSec: s.cfg.discussSec || discussFor(s.n) });
+      return { id: dawnCueId(s), text, minMs: cueMinMs(text) };
     }
     case 'vote': {
       if (!s.voteCue) return null;
-      const text = S.cueVote();
+      const text = S.cueVote({ passPhone: !!s.cfg.passPhone, early: !!s.voteEarly });
       return { id: voteCueId(s), text, minMs: cueMinMs(text) };
     }
     case 'reveal': {
@@ -1044,8 +1121,9 @@ function cue(s) {
 function focus(s) {
   switch (s.phase) {
     case 'deal': {
+      // `label`: the public step name a shared phone's pass gate shows (#33)
       const pids = s.order.filter((p) => !s.ready[p] && !isAbsent(s, p));
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, label: S.FOCUS_LABEL.deal } : null;
     }
     case 'night': {
       const k = stepOf(s).k;
@@ -1054,11 +1132,14 @@ function focus(s) {
       return { pids: awakeFor(s, k), anonymous: S.anonymousPrompt(k) };
     }
     case 'vote': {
-      // seats that have neither voted nor agreed to the circle; once only agreers are left, they have to choose
+      // seats that have neither voted nor agreed to the circle; once only agreers are left, they have to choose.
+      // One phone (#24): every seat votes once (agreeing comes with a fallback ballot), so the walk is simply who has
+      // not voted — nobody gets the phone a second time
       const open = s.order.filter((p) => s.votes[p] === undefined && !isAbsent(s, p));
-      const undecided = open.filter((p) => !s.ringAgree[p]);
+      const undecided = s.cfg.passPhone ? open : open.filter((p) => !s.ringAgree[p]);
       const pids = undecided.length ? undecided : open;
-      return pids.length ? { pids } : null;
+      // one phone (re-run R5): the gate also asks for quiet until the last ballot is in
+      return pids.length ? { pids, label: s.cfg.passPhone ? S.FOCUS_LABEL.votePass : S.FOCUS_LABEL.vote } : null;
     }
     default: return null;
   }
@@ -1215,8 +1296,10 @@ function buildView(s, pid) {
       break;
     case 'night': {
       const st = stepOf(s);
-      v.night = st.k !== 'dawn';
-      v.step = { ix: s.ix, total: s.steps.length, k: st.k, stage: s.stage };
+      // one phone (re-run R3): the dawn step keeps everybody's eyes closed while the last holder puts the phone back
+      v.night = st.k !== 'dawn' || !!s.cfg.passPhone;
+      // windowMs: this step kind's fixed length (public: the same whoever is awake) — the bar is drawn from it (#7)
+      v.step = { ix: s.ix, total: s.steps.length, k: st.k, stage: s.stage, windowMs: windowMs(s.cfg, st.k) };
       // no night counter in any view (playtest #18): an action counts as an ack, so 「n / m」 would tell a seatless
       // table screen how many seats are awake (0 / 5 at the werewolf step = no player holds a werewolf)
       if (seat) v.my = { dealt: s.orig[seat], acked: s.acked.includes(seat), night: nightFor(s, seat) };
@@ -1230,7 +1313,8 @@ function buildView(s, pid) {
     case 'vote':
       // a ballot cast before its seat left still counts, so that seat stays in the total
       v.progress = prog(Object.keys(s.votes).length, s.order.filter((p) => !isAbsent(s, p) || s.votes[p] !== undefined).length);
-      v.ring = { on: s.cfg.ringVote, ...presentProg(s, (p) => s.ringAgree[p]), mine: seat ? !!s.ringAgree[seat] : false, stuck: ringStuck(s) };
+      // fallback: one phone — agreeing to the circle and a ballot go in the same turn (#24)
+      v.ring = { on: s.cfg.ringVote, ...presentProg(s, (p) => s.ringAgree[p]), mine: seat ? !!s.ringAgree[seat] : false, stuck: ringStuck(s), fallback: !!s.cfg.passPhone };
       if (seat) {
         v.candidates = s.order.filter((p) => p !== seat);
         if (s.votes[seat] !== undefined) v.myVote = s.votes[seat];
@@ -1269,7 +1353,7 @@ function hintFor(s, seat, v) {
     case 'night': {
       const k = stepOf(s).k;
       if (k === 'begin') return H.night.begin;
-      if (k === 'dawn') return H.night.dawn;
+      if (k === 'dawn') return s.cfg.passPhone ? H.night.dawnHold : H.night.dawn;
       if (s.stage !== 'window') return H.night.cue;
       const nf = v.my.night;
       if (!nf.awake) return H.night.sleep;

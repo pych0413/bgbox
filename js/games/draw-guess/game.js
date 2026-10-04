@@ -25,6 +25,8 @@ const CHOOSE_MS = 20000;        // research says 12 s; on a shared phone the han
 const GRACE_MS = 3000;          // after the first accept: the drawer may add co-winners or undo
 const BUZZER_MS = 2000;         // shout mode: a late tap right after the buzzer still counts (r = 0)
 const REVEAL_MS = 7000;
+const REVEAL_PASS_MS = 10000;   // one phone (re-run N4): the reveal is the table's only big look at the answer and picture,
+                                // and the 「擺返中間」 card sits in front of it first
 const STANDINGS_MS = 5000;      // the leaderboard between cycles
 const LATE_MS = 5000;           // foul flags and typed late-accepts stay open this long into the reveal
 const EXTEND_MS = 30000;
@@ -130,8 +132,9 @@ export const rules = {
       + '可以：箭咀、動態線、將一個詞拆開逐隻字畫、諧音（畫「蘋果」代表「平安」）、畫相關嘅嘢。\n'
       + '開始前大家講好數字、箭咀同諧音算唔算。' },
     { title: '用一部手機玩', body:
-      '一部手機輪流：揀講出口。輪到邊個畫，先交俾佢揀詞，然後放喺枱中間；畫家喺手機上畫（或者喺紙上畫），'
-      + '其他人睇住字數同提示，有人估啱，畫家就㩒佢個名。個詞預設收埋，㩒一下先睇到。'
+      '一部手機輪流：用講出口（一部手機冇得打字估）。輪到邊個畫，先交俾佢揀詞，揀好就將部手機平放喺枱中間，'
+      + '畫家㩒一下開始先計時；畫家喺手機上畫（或者喺紙上畫），其他人睇住字數同提示，有人估啱，畫家就㩒佢個名。\n'
+      + '個詞收埋：要拎起部機，㩒住先睇到，放手即刻冚返。部手機未交到畫家手上，揀詞同畫畫嘅時間都唔會行。\n'
       + '見到犯規就當面講，主持可以作廢今輪。' },
     { title: '小貼士', body:
       '・畫家：先畫最特別嘅特徵，唔好急住畫細節。\n'
@@ -163,13 +166,15 @@ const ENUMS = {
   strictness: ['strict', 'standard', 'loose'],
 };
 const RANGES = { teams: [2, 4], teamRounds: [0, 8], cycles: [0, 5] };
-const BOOLS = ['hints', 'starsAsPoints'];
+const BOOLS = ['hints', 'starsAsPoints', 'passPhone'];
 const SECONDS = [30, 180];
 
 const DEFAULTS = Object.freeze({
   drawMode: 'canvas', guessMode: 'shout', teamMode: 'ffa', teams: 2, teamAssign: 'alternate', teamRounds: 0, cycles: 0,
   roundSeconds: 0, hints: true, strictness: 'standard', starsAsPoints: false,
   topics: Object.freeze({ cats: Object.freeze([]), levels: Object.freeze([]) }),
+  // hidden (no field): one phone holds every seat — set by config.defaults from env.singleDevice, read by the cues (#3, #16)
+  passPhone: false,
 });
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -256,12 +261,12 @@ export function topicMatch(topics, e) {
   return (!cats.length || cats.includes(e.cat)) && (!levels.length || levels.includes(e.level));
 }
 
-const ONE_PHONE_TYPED = '一部手機唔啱打字估：其他人冇得打字。請揀「講出口」。';
+const ONE_PHONE_TYPED = '一部手機冇得打字估：其他人冇得打字，請揀「講出口」。';
 
 const LABEL = {
   drawMode: '畫喺邊', guessMode: '點樣估', teamMode: '玩法', teams: '幾多隊', teamAssign: '點分隊', teamRounds: '每隊畫幾次',
   cycles: '每人畫幾次', roundSeconds: '每輪時間', hints: '提示', strictness: '打字估嘅嚴格度', starsAsPoints: '難詞多分',
-  topics: '詞庫類別',
+  topics: '詞庫類別', passPhone: '一部手機',
 };
 
 export const config = {
@@ -273,10 +278,12 @@ export const config = {
       else out.teams = Math.max(2, Math.min(out.teams, Math.floor(n / 2), 4));
     }
     if (env && env.singleDevice && out.guessMode === 'typed') out.guessMode = 'shout';   // one phone cannot type for everybody
+    out.passPhone = !!(env && env.singleDevice);   // hidden: the cues say 「部手機擺喺中間」 on one phone (#16)
     return out;
   },
 
-  /** `env` is optional ({ singleDevice }); without it a typed game gets the generic one-phone-each warning. */
+  /** `env` is optional ({ singleDevice }): typed guessing on one phone is an error (#21, nobody else can type); without
+   *  env a typed game gets the generic one-phone-each warning. */
   validate(cfg, n, env) {
     const warnings = [];
     if (!Number.isInteger(n) || n < meta.players[0] || n > meta.players[1]) {
@@ -293,7 +300,8 @@ export const config = {
       if (n < 4) return { ok: false, message: '分隊最少要 4 個人。', warnings };
       if (t * 2 > n) return { ok: false, message: `${t} 隊每隊最少 2 人，要 ${t * 2} 個人或以上。`, warnings };
     }
-    if (m.guessMode === 'typed') warnings.push(env && env.singleDevice ? ONE_PHONE_TYPED : '打字估要每人用自己部手機；一部手機輪流玩請用講出口。');
+    if (m.guessMode === 'typed' && env && env.singleDevice) return { ok: false, message: ONE_PHONE_TYPED, warnings };
+    if (m.guessMode === 'typed') warnings.push('打字估要每人用自己部手機；一部手機輪流玩請用講出口。');
     if (m.guessMode === 'typed' && m.drawMode === 'paper') warnings.push('打字估＋紙筆：大家望住張紙，用自己部手機打答案。');
     if (m.totalTurns > 16) warnings.push(`一共 ${m.totalTurns} 輪，大約 ${minutesFor(m)} 分鐘。`);
     if (m.teamMode === 'teams') {
@@ -310,7 +318,7 @@ export const config = {
     const teamsOn = m.teamMode === 'teams';
     const out = [
       { key: 'drawMode', label: '畫喺邊', type: 'select',
-        help: m.drawMode === 'canvas' ? '每部手機即時睇到畫家畫緊乜。' : '畫家用真紙真筆畫，手機負責派詞、計時、計分。',
+        help: m.drawMode === 'canvas' ? '畫家喺手機上畫，大家睇住同一幅畫（各自部機，或者擺喺中間嗰部）。' : '畫家用真紙真筆畫，手機負責派詞、計時、計分。',
         options: [{ value: 'canvas', label: '📱 手機畫板' }, { value: 'paper', label: '📝 實體紙筆' }] },
       { key: 'guessMode', label: '點樣估', type: 'select',
         help: m.guessMode === 'shout'
@@ -790,7 +798,7 @@ function finishTurn(s, ctx, outcome) {
   t.grace = null;
   t.ruling = null;
   if (outcome === 'voided') voidBookkeeping(s, ctx);
-  s.revealMs = REVEAL_MS;
+  s.revealMs = s.cfg.passPhone ? REVEAL_PASS_MS : REVEAL_MS;
   s.phase = 'reveal';
   s.deadline = ctx.now + s.revealMs;
   s.timerLabel = '';
@@ -853,7 +861,8 @@ function rawCue(s) {
       if (t.sub === 'buzzer') return null;
       if (t.stage === 0) {
         return { id: `t${t.n}:play`, minMs: 2500,
-          text: S.cuePlay({ secs: Math.round(t.T / 1000), boxes: t.boxes, typed: s.cfg.guessMode === 'typed' }) };
+          text: S.cuePlay({ secs: Math.round(t.T / 1000), boxes: t.boxes, typed: s.cfg.guessMode === 'typed', pass: !!s.cfg.passPhone,
+            drawer: nm(t.drawer) }) };
       }
       const kind = t.log[t.stage - 1];
       if (kind === 'cat') return { id: `t${t.n}:s${t.stage}`, minMs: 1500, text: S.cueCat({ cat: t.word.cat }) };
@@ -1242,6 +1251,12 @@ function view(state, pid) {
     scoring: s.teams ? (s.cfg.starsAsPoints ? 'stars' : 'flat') : 'time',
     turn: { n: t.n, total: s.queue.length, drawer: t.drawer, team: t.team, again: t.again },
     upNext: over ? [] : s.queue.slice(s.qi + 1, s.qi + 4).map((q) => q.drawer),   // the queue preview (public)
+    // the 💡 sheet's 「呢局有咩角色」 (DESIGN §7.1 re-run #5): this turn's parts, all public
+    rolesInPlay: [
+      { id: 'drawer', count: 1 },
+      { id: 'guesser', count: t.eligible.length },
+      ...(teamsOn ? [{ id: 'rival', count: Math.max(0, s.order.length - 1 - t.eligible.length) }] : []),
+    ].filter((r) => r.count > 0),
     scores: { ...s.scores },
     teams: teamsOn ? s.teams.map((tm, i) => ({ i, members: tm.members.slice(), score: s.teamScores[i] })) : null,
     myTeam: teamsOn && seat !== null ? s.teamOf[seat] : null,
@@ -1307,9 +1322,16 @@ function cue(state) {
   return pendingCue(state);
 }
 
-/** Who must hold their phone privately: the drawer while choosing and drawing (a shared phone gates them). */
+/**
+ * Who must hold their phone now: the drawer while choosing (private: the offers) and drawing. Drawing is a public
+ * one-person step (§7.1 #4): on a shared phone the drawer gets the public card and lays the phone in the middle for
+ * the table (#16). `hold` (U10, #23): on a whole-table phone neither clock runs while its card is still unanswered.
+ */
 function focus(state) {
-  if (state.phase === 'choose' || state.phase === 'play') return { pids: [state.turn.drawer] };
+  if (state.phase === 'choose') return { pids: [state.turn.drawer], label: '揀詞', hold: true };
+  if (state.phase === 'play') {
+    return { pids: [state.turn.drawer], open: true, label: state.cfg.passPhone ? '擺喺枱中間畫' : '畫畫', hold: true };
+  }
   return null;
 }
 
@@ -1426,7 +1448,7 @@ function statsOf(s) {
       st[x.pid].solved += 1;
       if (e.level === 3) st[x.pid].lvl3 += 1;
       const ms = Math.max(0, x.T - x.rem);
-      if (!fastest || ms < fastest.ms) fastest = { pid: x.pid, ms, w: e.w };
+      if (!fastest || ms < fastest.ms) fastest = { pid: x.pid, ms, w: e.w, T: x.T };
     }
   }
   return { st, fastest };
@@ -1484,7 +1506,8 @@ function result(state) {
     const ids = s.order.filter((id) => avg(id) === bestAvg);
     if (standsOut(ids)) high.push(`🎨 最勁畫家：${S.joinNames(ids.map(nm))}（平均每次畫得 ${bestAvg.toFixed(1)} 分）`);
   }
-  if (fastest) high.push(`⚡ 最快反應：${nm(fastest.pid)}（${(fastest.ms / 1000).toFixed(1)} 秒估中「${fastest.w}」）`);
+  // only a real quick one: a solve in the first half of its turn (D10 — 「最快」 at 73 s of 80 reads as a joke)
+  if (fastest && fastest.ms * 2 <= fastest.T) high.push(`⚡ 最快反應：${nm(fastest.pid)}（${(fastest.ms / 1000).toFixed(1)} 秒估中「${fastest.w}」）`);
   const most3 = Math.max(...s.order.map((id) => st[id].lvl3));
   const hardest = s.order.filter((id) => st[id].lvl3 === most3);
   if (most3 > 0 && standsOut(hardest)) {

@@ -37,10 +37,11 @@ export function stepTitle(step) {
  * Read-aloud mode shows exactly these lines, so they are short enough to read
  * in one breath.
  */
-export function narrate(step, n) {
+export function narrate(step, n, { passPhone = false } = {}) {
   switch (step.k) {
     case 'begin':
-      return '天黑喇，請大家閉眼。手機放喺面前唔好鎖，唔好偷望。';
+      // one phone in the middle (cfg.passPhone): nobody has a phone in front of them
+      return passPhone ? '天黑喇，請大家閉眼。部手機擺喺枱中間，唔好偷望。' : '天黑喇，請大家閉眼。手機放喺面前唔好鎖，唔好偷望。';
     case 'open':
       return n === 4
         ? `而家${CLOCK[step.h]}點鐘。醒鐘係${CLOCK[step.h]}點嘅老鼠，請睜開眼。`
@@ -69,6 +70,8 @@ export function narrate(step, n) {
 }
 
 export const VOTE_CALL = '夠鐘投票！邊個係芝士大盜？喺手機揀一個人，投晒先一齊公開。';
+/** The same call for one phone in the middle: it goes round, one ballot each. */
+export const VOTE_CALL_PASS = '夠鐘投票！邊個係芝士大盜？部手機逐個交，揀一個人，投晒先一齊公開。';
 
 /** The prompt a shared phone shows (without naming anyone) while seats are awake. */
 export function anonymousPrompt(step, n) {

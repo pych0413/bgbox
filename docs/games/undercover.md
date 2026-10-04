@@ -139,12 +139,13 @@ the shell shows it only when the player taps 💡.
 |---|---|
 | Every player phone | 「你嘅詞語」, 「睇清楚你個詞，記住就㩒「記住喇」。」 + the hold-to-peek word card (RoleCard, 🃏 + the word in the same place and size for everybody; the white card's card says 「白板」; the card's own hint 「㩒住先睇到，放手即刻冚返」 is the only peek instruction) + 「🔓 鎖定詞語卡」 + button 「記住喇 ✓」. Under it 「已有 3 / 6 人記住咗 · 等緊：阿明、阿強」 |
 | After 記住喇 | the card **locks itself** (sound `lock`, same for every role); text 「✓ 你已經記住咗」; 「想再睇一次？㩒 🔓 解鎖，睇完記得再鎖返。」 |
-| Table / spectator | 「大家逐個睇緊自己嘅詞語，你係旁觀者。」 + the same progress line |
+| Table / spectator | 「大家逐個睇緊自己嘅詞語，你係旁觀者。」 (a shared phone in the middle, §4: heading 「睇詞語」 instead of 「你嘅詞語」, and 「部手機逐個傳：輪到嘅人睇自己個詞。」) + the same progress line |
 | Header (all) | 「今局：平民 5 · 臥底 1 · 白板 1」 (counts are announced) and the seat strip |
 
 Hint: 「㩒住張卡睇你個詞，記住咗就㩒「記住喇」。」 → after 記住喇 「等其他人睇完。唔記得個詞，可以㩒 🔓 再睇。」
 
-Narration (cue `deal`): 「準備開始。今局有 5 個平民、1 個臥底。大家用自己部手機睇詞語，睇完記住就㩒「記住喇」。」
+Narration (cue `deal`): 「準備開始。今局有 5 個平民、1 個臥底。逐個睇自己個詞，記住就㩒「記住喇」。」 (device-neutral: it fits a
+phone each and one phone passed round alike — one-phone playtest C4)
 
 Transition: when the last seat taps 記住喇 → round 1. No timer. A seat that never confirms blocks the game:
 the shell's stall prompt (`focus` lists the unconfirmed seats) offers 「代佢做」 → `autoAct` = ready. Host
@@ -314,19 +315,45 @@ Every threshold ends the game at T = 2, so a vote never happens with 2 players l
 
 ## 4. Single-device play (`singleDevice: 'full'`)
 
-One phone passed around (or the table's phone with several seats). Everything runs through the shell's pass gate:
+One phone passed around (or the table's phone with several seats). It follows the shared-phone contract (DESIGN §7.1;
+one-phone playtest 2026-10-04, `docs/playtest/single/undercover.md`): the phone either **lies in the middle** — the
+shell mounts this UI with `api.me = null` and the public table view (`engine.view(state, null)`) — or is **held** by
+one seat behind a pass gate.
 
-- **deal**: `focus` = the unconfirmed seats → 「交俾 阿明 / 其他人唔好望」 → peek → 記住喇 (locks) → the gate moves to the next seat.
-- **speak / discuss**: public. The phone sits in the middle; the screen says whose turn it is and the button reads
-  「阿強 講完喇 ▸」 — anybody presses it. "Your turn" highlights are not shown (the seat on screen is just whoever
-  held the phone last). 「開始投票」 sends `seats: [the other seats on this phone]`, so one tap counts for every alive seat
-  the phone holds (a phone holding the whole table opens the vote with one tap, as before).
-- **elim**: 「睇完」 also sends the phone's other seats — the result is read once for all of them.
-- **vote**: `focus` = seats yet to vote → sequential private ballots, each behind a gate. After the last ballot the
-  result is public on the same screen.
-- **white card guess**: `focus` = that seat → hand the phone to the white card to type.
-- **look at my word again**: top-bar seat button → pick your own seat → hand-over card → 「睇返我個詞（淨係 阿詩 本人好㩒）」.
-  On a shared phone the card is locked by default and **re-locks after every peek**.
+- **deal**: `focus` = the unconfirmed seats, `label: '睇詞語'` → 「交俾 阿明 · 其他人唔好望 · 睇詞語」 → peek → 記住喇
+  (locks) → the gate moves on round the table.
+- **speak / discuss / elim** (focus `null`): the phone goes to the middle behind the shell's public card 「📱 部手機擺返
+  中間」. The **table screen** carries the public controls as whole-table taps (`api.tableSend`, `{ …, seats, table: true }`),
+  locked while that card is up (U5):
+  - speak: 「阿強 講緊…」 and 「阿強 講完喇 ▸」 — anybody presses it for the speaker who finished. The tap carries
+    the step it was made on (`at`); a whole-table `done` without `at` is ignored. After each advance the button for
+    the next speaker (same spot) stays disabled for 1.5 s while the new name pulses (`.uc-who.is-new`), so a double
+    tap or two people tapping together end one turn, not two (re-run #2 N1). Also on a shared phone's seat screen;
+    never on a phone of your own.
+  - discuss: 「開始投票 🗳️」. On a phone that holds the **whole table** it is the table's decision, so it takes a
+    **second tap** (U5): `api.tableSend(…, { confirm: '開始投票？全枱傾夠未？', node })` → 「再㩒一次：開始投票？全枱傾夠未？」
+    (re-run #2 N3: the armed label still says what the second tap does); the 「想開始投票 n / need」 line is not
+    shown there. A shared phone that holds only some seats taps once for its own seats and keeps the count.
+  - elim: 「大家睇完 ✓（一下就得）」 (whole table) / 「睇完 ✓（呢部機嘅人）」, after the usual short lock, with no
+    「等緊：…」 list on a whole-table phone. One tap reads the result for every seat the phone holds (#5).
+  - 「🃏 睇返我個詞」 (speak / discuss / elim): `api.askWho({ key: 'word', title: '邊個睇返個詞？' })` → the tapper
+    picks their own name → the private hand-over card → that seat's screen with `ctx.asked.key === 'word'`: the card
+    is ready to peek (it re-locks after every peek) and 「📱 睇完 · 擺返中間」 calls `api.toTable()` (#22). The table
+    screen never shows a word.
+- **vote**: `focus` = seats yet to vote, `step: 'vote:{round}:{kind}:{n}'`, `label: '第 N 輪投票'` / `'第 N 輪 PK 投票'`.
+  The first ballot is gated too, even for the seat that was on screen (#2); then sequential private ballots, each
+  behind a gate (「其他人唔好望 · 第 1 輪投票 · 搞掂 2/5」). The table screen meanwhile says
+  「大家輪流投緊票：部手機會逐個交，全部投完先公佈。」
+- **white card guess**: `focus` = that seat with `step: 'guess:{seq}'` and `label: '白板估詞'` — a new step, so the
+  white card who cast the last ballot is gated again before typing (#2).
+- A seat's own screen on a shared phone never says 「你」 to the table: no 「輪到你講！」, no is-me highlight (#20);
+  `api.components.VotePanel` drops 「（你）」. A seat screen's own 開始投票 still counts the phone's other seats
+  (`seats`) and, on a whole-table phone, also takes the second tap.
+- **Engine convention for whole-table taps:** `start-vote` and `continue` with `table: true` count every listed seat
+  (dead / absent ones are skipped as usual), even when the seat that carried the tap is dead or already tapped.
+  Without `table`, a dead seat still has no say (D2) and a seat that already tapped cannot tap again.
+- **Multi-phone play is unchanged**: a single-seat phone never sees the table screen, table taps or the extra focus
+  fields' effects.
 
 ## 5. Engine
 
@@ -356,10 +383,10 @@ One phone passed around (or the table's phone with several seats). Everything ru
 |---|---|---|---|
 | `{type:'ready'}` | any seat | `deal`, not yet ready | mark ready; all ready → round 1 |
 | `{type:'done', at?}` | any seat | `speak`; `at` (the view's `speak.id`) equals the current step when given | next speaker / `discuss` / PK vote |
-| `{type:'start-vote', seats?}` | an alive, present seat | `discuss`, not yet tapped | count it (and `seats`: the other alive seats of a passed-round phone); a majority of the alive, present seats → open the vote |
+| `{type:'start-vote', seats?, table?}` | an alive, present seat (`table: true`: any present seat carrying a whole-table tap) | `discuss`, not yet tapped (`table`: some listed seat not yet tapped) | count it (and `seats`: the other alive seats of a passed-round phone); a majority of the alive, present seats → open the vote |
 | `{type:'vote', target}` | a voter | `vote`; target ∈ candidates, ≠ self; `null` only with `abstain` | set (overwrite) the ballot; last ballot resolves |
 | `{type:'guess', word}` | the eliminated white card | `elim` with a pending guess; `word` is a string | judge; settle |
-| `{type:'continue', seats?}` | a present seat | `elim`, no pending guess, not yet tapped | 睇完: count it (and `seats`); every present seat → next step |
+| `{type:'continue', seats?, table?}` | a present seat | `elim`, no pending guess, not yet tapped (`table: true`: the carrier may have tapped already) | 睇完: count it (and `seats`); every present seat → next step |
 | host `@cue-done {id}` | host | id = the current cue | remember the cue as done |
 | host `@next` | host | always | first press completes the current cue; a second press skips the step (speaker / discussion / vote / guess / result / deal) |
 | host `@auto {pid}` | host | | `autoAct` for that seat |
@@ -368,7 +395,10 @@ One phone passed around (or the table's phone with several seats). Everything ru
 
 Anything else (wrong phase, unknown seat, an absent seat, malformed payload, `__proto__` types…) returns the state
 unchanged; nothing throws. "Any seat" for 講完喇 is deliberate: a shared phone acts as whichever seat is on screen.
-The UI decides who is shown the button; `done` carries `at` against double taps.
+The UI decides who is shown the button; `done` carries `at` (round, kind, turn) against double taps: a tap on a step
+that has moved on is dropped, and a whole-table tap (`table: true`) without `at` is ignored. On a shared phone the UI
+also locks the next speaker's button for 1.5 s after an advance (§4), because the rebuilt button would otherwise
+carry the new step.
 
 ### 5.3 advance / deadlines
 
@@ -378,9 +408,11 @@ that step. Views carry `deadline` + `timerLabel` (『發言』『討論』『投
 
 ### 5.4 focus / autoAct / legalActions / cue
 
-- `focus`: `deal` → unconfirmed present seats; `vote` → voters yet to vote; `elim` with a pending guess → the white
-  card; otherwise `null` (speaking and discussion are public — gating a shared phone for them would be silly). No
-  `anonymous`. Never an absent seat.
+- `focus`: `deal` → unconfirmed present seats (`label: '睇詞語'`); `vote` → voters yet to vote (`step`
+  `vote:{round}:{kind}:{history length}`, `label` 「第 N 輪投票」 / 「第 N 輪 PK 投票」); `elim` with a pending guess → the
+  white card (`step: 'guess:{seq}'`, `label: '白板估詞'`); otherwise `null` (speaking, discussion and the result are
+  public: a shared phone lies in the middle for them, §4). `step` / `label` are one-phone hints (DESIGN §7.1) that
+  only a shared phone reads. No `anonymous`, never `open`. Never an absent seat.
 - `blocking` (stall detection): the unconfirmed seat, the speaker, a missing ballot, the guessing white card, and a
   present seat that has not tapped 睇完 — **never the discussion**, where the table talks at its own pace and a
   majority decides. Never an absent seat.
@@ -396,7 +428,8 @@ that step. Views carry `deadline` + `timerLabel` (『發言』『討論』『投
 
 Public part, identical for every seat (**tested: `view(A)` minus `me` and `hint` deep-equals the table view**): `phase`,
 `title`, `subtitle`, `round`, `counts`, `flags` (`revealRole`, `abstain`, `blankGuess`, `guessWinner`, `tie`, `pkVoters`,
-`majority`, `win`), `seats`, `absent` (D4: the seats marked absent, shown as 💤), `outs`, `history` (with ballots and
+`majority`, `win`), `seats`, `rolesInPlay` (`[{ id, count }]` for the roles dealt this game, the public counts, for
+the shell's 💡 list: no 白板 line when none was dealt), `absent` (D4: the seats marked absent, shown as 💤), `outs`, `history` (with ballots and
 `reason`), `deadline`/`timerLabel`, and `deal` (`total` = present seats) / `speak` / `discuss` (`{ want, need, total }`, D2)
 / `vote` / `elim` (with `seen: { who, total }`, D3) / `over` for the phase. `me` (own seat only): `id`, `alive`, `word` (`null` for
 the white card), `ready`, and — only for the white card — `blank: true`; in a vote `canVote`, `targets`, `myVote`;
@@ -419,7 +452,9 @@ card. `summary`: 「平民贏！平民詞「泳池」，臥底詞「沙灘」」
    「白板 阿強 出局之後估中平民嘅詞語「泳池」，臥底方即刻贏。」 (or 「…，白板自己贏。」)
 2. 「詞語：平民「泳池」，臥底「沙灘」（地方）」
 3. 「平民：…」, 「臥底：…（佢一開始都唔知自己係臥底）」 (two or more: 「佢哋」), 「白板：…」
-4. the mis-votes that decided it: 「平民投走咗 2 個自己人：阿明、阿強。」 or 「平民一個自己人都冇投錯！」
+4. the mis-votes that decided it: 「平民投走咗 2 個自己人：阿明、阿強。」; when civilians won without losing one of
+   their own, 「平民一個自己人都冇投錯！」 only if no civilian ever voted for a civilian (any ballot in the history),
+   else 「平民一個自己人都冇投走！」 (one-phone playtest #32)
 5. with `revealRole` off: 「今局出局嗰陣冇公開身份，下面係真身份。」
 6. one line per vote: 「第 1 輪：阿龍 出局（臥底，5 票）」, 「第 2 輪：阿華、阿明 同票，要 PK」, 「第 2 輪 PK：阿明 出局（平民，4 票）」,
    「第 3 輪：冇人過半數，冇人出局」, 「第 4 輪：阿詩 出局（白板，5 票）；白板估「x」，估錯」, 「…（平民，連續冇人出局所以隨機抽）」
@@ -460,7 +495,7 @@ last `result().carry` per game id in host memory (`js/core/room.js` `carries`) a
 | deal gate, idempotent ready | nobody speaks until every seat has confirmed |
 | garbage actions, foreign seats | foreign seats, garbage … ; garbage thrown at every phase |
 | speaking order, wrap, dead skipped, rotation from first speaker | speaking starts …; later rounds start … |
-| double tap on 講完喇 | a stale or double tap … |
+| double tap on 講完喇 | a stale or double tap …; re-run #2 N1 — 「X 講完喇」 cannot double-advance … |
 | speak/discuss/vote timers, no-timer default | speaking timer …; discussion ends …; a vote timer … |
 | ballot validation, dead seats, abstain, overwrite, auto-resolve | ballots are validated …; a dead seat …; abstaining …; the vote resolves … |
 | nobody votes | nobody voting means nobody leaves |
@@ -484,6 +519,10 @@ last `result().carry` per game id in host memory (`js/core/room.js` `carries`) a
 | D3: the result waits for every present seat's 睇完, no clock; host forces; shared phone | D3: the result stays until … |
 | D4: absent — deal, clue turn skipped (also mid-turn), majority shrinks, no vote (ballot kept if cast), still a candidate, @present re-joins the vote; absent white card forfeits; refusals; fuzz | D4: an absent seat skips …; D4: an absent white card …; D4: fuzz … |
 | UI: 開始投票 n / need, 睇完 n / m after the lock, `secretChoice`, 💤, `seats` on a shared phone | undercover ui D2/D3/D6 … |
+| one phone (§4): whole-table taps in the engine; focus labels / steps (the white card re-gated to guess); device-neutral cue and rules; 冇投錯 only when true | undercover one phone: whole-table taps …; the gate names every private step …; the deal cue and the rules …; #10 — result lines … |
+| one phone UI: the table screen's 講完喇 / 開始投票 (two taps on a whole-table phone through `tableSend`'s confirm, one otherwise) / 大家睇完, locked behind the table card; 睇返我個詞 by name; no 「你」 | undercover ui one phone: … (3 tests) |
+| 💡 roles: `view.rolesInPlay` lists only the roles dealt (no 白板 without a white card) | re-run #2 N2 — the 💡 role list … |
+| one phone through the real play screen: deal walk, table card, two-tap vote, gated first ballot, one-tap result, 睇返我個詞 → switch gate → 擺返中間 | undercover, one phone through the real play screen … |
 
 ## 7. 貼心 touches
 

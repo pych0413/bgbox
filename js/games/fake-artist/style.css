@@ -207,3 +207,21 @@
 .fk-final-row { display: flex; justify-content: space-between; padding: .625rem .875rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: .75rem; font-size: 1rem; }
 .fk-final-row.lead { border-color: var(--cheese, var(--accent)); background: var(--surface-2); font-weight: 800; }
 .fk-final-n { font-variant-numeric: tabular-nums; }
+
+/* ---------- one phone in the middle (DESIGN §7.1) ---------- */
+/* 一齊指 (U7): the 3-2-1 count, then one row per voter: who they point at */
+.fk-count { font-size: 4.5rem; font-weight: 800; line-height: 1; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums; }
+.fk-point { display: flex; flex-direction: column; gap: .5rem; }
+.fk-point-row { display: flex; flex-direction: column; gap: .375rem; padding: .5rem .625rem; border-radius: .75rem; background: var(--surface-2, rgba(255,255,255,.04)); }
+.fk-point-who { display: flex; align-items: center; gap: .375rem; font-size: .9375rem; }
+.fk-point-chips { display: flex; flex-wrap: wrap; gap: .375rem; }
+.fk-point-chip {
+  display: inline-flex; align-items: center; gap: .3rem; min-height: 2.5rem; padding: .25rem .625rem;
+  border-radius: 999px; border: 1px solid var(--line, #3d3524); background: transparent; color: inherit; font: inherit; font-size: .875rem;
+}
+.fk-point-chip.on { border-color: var(--seat, var(--accent)); background: var(--surface-2, rgba(255,255,255,.06)); box-shadow: 0 0 0 1px var(--seat, var(--accent)) inset; font-weight: 700; }
+.fk-point-chip:active { transform: scale(.96); }
+.fk-point-ok.armed { box-shadow: 0 0 0 2px var(--accent) inset; }
+.fk-point-again { align-self: center; }
+/* a drawer re-reading their card (private hand-over), then handing it back to the table */
+.fk-peekask { align-self: center; }

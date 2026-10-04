@@ -7,7 +7,10 @@
 //                same hold-to-peek Cover as a role card (release = hidden), so a
 //                glance from the next seat sees nothing. Games that keep the
 //                role secret even from its holder (誰是臥底) expose no own-role
-//                field; the sheet then lists every role of the game instead. A game where
+//                field; the sheet then lists the roles instead — only those in THIS game when the view says
+//                which (`view.rolesInPlay`, logic.hintRoles), else every role of the game. On a shared phone
+//                lying in the middle, or on a public (`focus.open`) step, the play screen opens the sheet with
+//                `hideOwn`: no cover at all (anyone at the table could hold it), the list instead. A game where
 //                cards change hands may name the heading itself with `view.hintRoleLabel`
 //                (e.g. 「你派到嘅角色」), so the sheet never claims to know the card you hold now.
 //                `view.hintRoleText` (「做乜：… 點贏：…」 or { what, win }) replaces the generic rules
@@ -18,10 +21,10 @@
 // and closes whenever the phone changes hands (seat switch, pass gate).
 // ============================================================
 
-import { el, sig } from './dom.js?v=20261004005209';
-import { roleFor, roleParts, teamStyle } from './logic.js?v=20261004005209';
-import { Cover } from './components/Cover.js?v=20261004005209';
-import { openSheet } from './sheet.js?v=20261004005209';
+import { el, sig } from './dom.js?v=1';
+import { roleFor, roleParts, teamStyle, hintRoles } from './logic.js?v=1';
+import { Cover } from './components/Cover.js?v=1';
+import { openSheet } from './sheet.js?v=1';
 
 /** view.hint may be a string or { text }; anything else is no hint. */
 function hintText(view) {
@@ -43,23 +46,24 @@ function roleFront(role) {
     win ? el('p', {}, el('span', { class: 'hint-k', text: '點贏' }), win) : null);
 }
 
-function allRoles(rules) {
-  const roles = (rules?.roles ?? []).filter((r) => r && r.name);
-  if (!roles.length) return null;
-  return el('div', { class: 'hint-roles' }, roles.map((r) => {
+function roleList(list) {
+  if (!list) return null;
+  const rows = el('div', { class: 'hint-roles' }, list.roles.map((r) => {
     const { what, win } = roleParts(r.text);
     return el('div', { class: 'hint-roles-row', style: { '--team': teamStyle(r).color ?? 'var(--line)' } },
       el('span', { class: 'hint-role-emoji', text: r.emoji ?? '❔' }),
       el('div', {},
-        el('b', { text: r.name }),
+        el('b', { text: r.count > 1 ? `${r.name} × ${r.count}` : r.name }),
         what ? el('p', { text: what }) : null,
         win ? el('p', { class: 'hint-win', text: `點贏：${win}` }) : null));
   }));
+  return { heading: list.inPlay ? '🎭 呢局有咩角色' : '🎭 呢個遊戲有咩角色', rows };
 }
 
 /**
- * HintSheet(sh, { onRules }) → { open(game, view), update(game, view), close(), isOpen() }
- * `game` is the loaded game module ({ meta, rules }); `view` the seat's current view.
+ * HintSheet(sh, { onRules }) → { open(game, view, opts?), update(game, view, opts?), close(), isOpen() }
+ * `game` is the loaded game module ({ meta, rules }); `view` the seat's current view. `opts.hideOwn`: never the
+ * seat's own role cover (a shared phone in the middle, a public step) — the role list instead.
  */
 export function HintSheet(sh, { onRules } = {}) {
   let sheet = null;
@@ -68,15 +72,16 @@ export function HintSheet(sh, { onRules } = {}) {
   let hintEl = null;
   let roleHost = null;
 
-  function paint(game, view) {
+  function paint(game, view, { hideOwn = false } = {}) {
     if (!sheet) return;
     const text = hintText(view);
     hintEl.textContent = text || '跟住畫面上面嘅提示做就得。唔肯定可以問主持。';
     hintEl.classList.toggle('is-empty', !text);
 
-    const role = roleFor(view, game?.rules);
+    const role = hideOwn ? null : roleFor(view, game?.rules);
     const label = typeof view?.hintRoleLabel === 'string' && view.hintRoleLabel.trim() ? view.hintRoleLabel.trim().slice(0, 20) : '你嘅角色';
-    const key = sig([game?.meta?.id, role, label]);
+    const roles = role ? null : hintRoles(view, game?.rules);
+    const key = sig([game?.meta?.id, role, label, roles]);
     if (key === roleKey) return;
     roleKey = key;
     cover?.destroy();
@@ -91,12 +96,12 @@ export function HintSheet(sh, { onRules } = {}) {
         cover.el,
         el('p', { class: 'hint', text: '㩒住先見到，放手即刻冚返 — 唔好俾隔離望到。' }));
     } else {
-      const list = allRoles(game?.rules);
-      roleHost.replaceChildren(...(list ? [el('div', { class: 'hint-h', text: '🎭 呢局有咩角色' }), list] : []));
+      const list = roleList(roles);
+      roleHost.replaceChildren(...(list ? [el('div', { class: 'hint-h', text: list.heading }), list.rows] : []));
     }
   }
 
-  function open(game, view) {
+  function open(game, view, opts = {}) {
     close();
     hintEl = el('p', { class: 'hint-now' });
     roleHost = el('div', { class: 'hint-rolebox' });
@@ -115,7 +120,7 @@ export function HintSheet(sh, { onRules } = {}) {
       render: () => [body],
       onClose: () => { cover?.destroy(); cover = null; sheet = null; },
     });
-    paint(game, view);
+    paint(game, view, opts);
   }
 
   function close() {
@@ -131,6 +136,6 @@ export function HintSheet(sh, { onRules } = {}) {
     open,
     close,
     isOpen: () => !!sheet,
-    update(game, view) { if (sheet) paint(game, view); },
+    update(game, view, opts = {}) { if (sheet) paint(game, view, opts); },
   };
 }

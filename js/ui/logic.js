@@ -3,6 +3,8 @@
 // they run (and are tested) under Node.
 // ============================================================
 
+import { needsEyesClosed } from '../core/engine-kit.js?v=1';
+
 /**
  * Does a game fit the table right now? { ok, reason }.
  * `reason` is shown on the greyed-out picker card. `n` counts seated players
@@ -146,6 +148,9 @@ export function skipNeedsConfirm({ waiting = false, focus = null, night = false,
 export const NIGHT_WORDS = Object.freeze({
   closed: Object.freeze({ title: '閉 眼', hint: '🌙 可以將螢幕調暗啲' }),     // 語音 / 讀稿: eyes shut between your steps
   silent: Object.freeze({ title: '夜 晚', hint: '🌙 可以將螢幕調暗啲' }),     // 靜音: eyes stay open, every phone alike
+  // a shared phone's opaque cover (§7.1): whoever holds it when it comes on puts it back in the middle
+  middle: Object.freeze({ title: '📱 擺返中間', hint: '部手機放返枱中間，閉埋眼' }),
+  middleOpen: Object.freeze({ title: '📱 擺返中間', hint: '部手機放返枱中間' }),   // the same in 靜音 (eyes open)
 });
 
 /**
@@ -159,13 +164,99 @@ export const NIGHT_WORDS = Object.freeze({
  *  - `words` (title + hint) depend on the mode only, never on the seat.
  * No seat (a spectator, the table view) or no night → off.
  */
-export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false } = {}) {
+export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false, table = false } = {}) {
   const silent = mode === 'silent';
   const words = silent ? NIGHT_WORDS.silent : NIGHT_WORDS.closed;
-  if (!seat || !night) return { on: false, level: null, words };
-  if (silent) return { on: true, level: shared && !inFocus ? 'opaque' : 'soft', words };
+  const middle = silent ? NIGHT_WORDS.middleOpen : NIGHT_WORDS.middle;
+  if (!night) return { on: false, level: null, words };
+  // §7.1: a shared phone lying in the middle (no seat on screen) at night is covered, whatever the mode
+  if (shared && (table || !seat)) return { on: true, level: 'opaque', words: middle };
+  if (!seat) return { on: false, level: null, words };
+  if (silent) return shared && !inFocus ? { on: true, level: 'opaque', words: middle } : { on: true, level: 'soft', words };
   if (inFocus) return { on: false, level: null, words };
-  return { on: true, level: shared ? 'opaque' : 'dark', words };
+  return shared ? { on: true, level: 'opaque', words: middle } : { on: true, level: 'dark', words };
+}
+
+// ---------- one phone in the middle (DESIGN §7.1) ----------
+
+/**
+ * What makes a focus "another step" on a shared phone: this phone's called seats (sorted), `anonymous`, `step`
+ * and `open` — never `together`, which follows other phones' progress. '' = no focus.
+ */
+export function focusSig(focus) {
+  if (!focus || typeof focus !== 'object') return '';
+  const pids = Array.isArray(focus.pids) ? focus.pids.filter((x) => typeof x === 'string').sort() : [];
+  return JSON.stringify([pids, focus.anonymous ? String(focus.anonymous) : '', typeof focus.step === 'string' ? focus.step : '', focus.open === true]);
+}
+
+/**
+ * #17: the order a shared phone goes round for one named step. `called` = this phone's called seats (engine
+ * order), `seatOrder` = every seat id round the table, `from` = the holder (else the last holder): clockwise from
+ * there, `from` itself first while it is still called. `ordered` keeps the engine's order. `deferred` seats (#18
+ * 「⏭ 跳過佢」) go to the end.
+ */
+export function walkOrder(called, seatOrder, { from = null, ordered = false, deferred = [] } = {}) {
+  const list = (Array.isArray(called) ? called : []).filter((x, i, a) => typeof x === 'string' && a.indexOf(x) === i);
+  const order = Array.isArray(seatOrder) ? seatOrder : [];
+  let out = list.slice();
+  if (!ordered && list.length > 1) {
+    const i0 = from ? order.indexOf(from) : -1;
+    const n = order.length;
+    const rank = (id) => {
+      const j = order.indexOf(id);
+      if (j < 0) return n + list.indexOf(id);          // not round the table (cannot happen): last, engine order
+      return i0 < 0 ? j : (j - i0 + n) % n;
+    };
+    out.sort((a, b) => rank(a) - rank(b));
+  }
+  const later = new Set(Array.isArray(deferred) ? deferred : []);
+  return [...out.filter((x) => !later.has(x)), ...out.filter((x) => later.has(x))];
+}
+
+/** #33: the private gate's subtitle: 「其他人唔好望 · 第 1 輪投票 · 搞掂 2/5」 (label / progress when known). */
+export function gateSubtitle({ label = '', done = 0, total = 0 } = {}) {
+  const parts = ['其他人唔好望'];
+  if (typeof label === 'string' && label.trim()) parts.push(label.trim());
+  if (total > 1) parts.push(`搞掂 ${Math.max(0, Math.min(done, total))}/${total}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Re-run #6: the seat chip during a public one-person step (`focus.open`) on a shared phone — the phone lies face up
+ * in the middle, so it never says who "holds" it: 「📱 枱中間 — 阿明 畫緊」. The verb comes from the step's public
+ * `label` (畫 → 畫緊, 講 / 發言 / 遺言 / 解釋 → 講緊, 揀 → 揀緊, 估 → 估緊), else 「輪到 X」.
+ */
+export function openStepChip(name, label = '') {
+  const l = typeof label === 'string' ? label : '';
+  const who = String(name ?? '?');
+  const verb = /畫/.test(l) ? '畫緊' : /講|發言|遺言|解釋|描述/.test(l) ? '講緊' : /揀/.test(l) ? '揀緊' : /估/.test(l) ? '估緊' : '';
+  return verb ? `📱 枱中間 — ${who} ${verb}` : `📱 枱中間 — 輪到 ${who}`;
+}
+
+export const TABLE_CONFIRM = '全枱傾夠未？';
+
+/**
+ * Re-run #2: `api.tableSend(action, { confirm })` — the question the armed button asks. A leading 「再㩒一次：」 is
+ * dropped (the arm adds it), so `'開始投票？'` and `'再㩒一次：開始投票？'` both read 「再㩒一次：開始投票？」. `true` asks
+ * 「全枱傾夠未？」. '' = no confirm.
+ */
+export function tableConfirmText(text) {
+  if (text === true) return TABLE_CONFIRM;
+  if (typeof text !== 'string') return '';
+  return text.trim().replace(/^再㩒一次[:：]\s*/, '').trim();
+}
+
+export const ONE_PHONE_NARRATION = '一部手機：大家要閉眼，所以冇靜音 · 📜 讀稿要搵個唔玩嘅人讀';
+
+/**
+ * U1: the narration modes a host may pick for `meta` → `{ modes, note }`. On a whole-table phone a game whose night
+ * needs eyes closed (`engine-kit.needsEyesClosed`) has no 靜音, and `note` says why in one line.
+ */
+export function narrationChoices(meta, { singleDevice = false } = {}) {
+  const barred = !!singleDevice && !!meta && needsEyesClosed(meta);
+  return barred
+    ? { modes: ['voice', 'read'], note: ONE_PHONE_NARRATION }
+    : { modes: ['voice', 'read', 'silent'], note: '' };
 }
 
 // ---------- public "recent events" folds (#10) ----------
@@ -444,6 +535,39 @@ export function hintRoleText(view) {
     return `${what ? `做乜：${what}` : ''}${what && win ? ' ' : ''}${win ? `點贏：${win}` : ''}`.slice(0, 400);
   }
   return '';
+}
+
+/**
+ * The 💡 sheet's role list → `{ roles: [{ ...role, count }], inPlay }` | null (no roles at all).
+ * `view.rolesInPlay` names the roles in THIS game, in the order to list them: ids (`'seer'`; an id given twice
+ * counts twice) or `{ id | role, count | n }` objects (an object with its own `name` / `emoji` / `text` / `team` is a
+ * role the rules do not list, e.g. a custom deck). Onuw's existing `view.roleList` (`{ role, count }`) is read the
+ * same way. Then only those roles are listed (`inPlay: true`, heading 「呢局有咩角色」); ids the rules do not know
+ * are skipped. Without it every role of the game (`inPlay: false`, heading 「呢個遊戲有咩角色」). `count` is a
+ * number when the view gave one (or an id repeated), else null.
+ */
+export function hintRoles(view, rules) {
+  const all = (Array.isArray(rules?.roles) ? rules.roles : []).filter((r) => r && typeof r === 'object' && r.name);
+  const src = Array.isArray(view?.rolesInPlay) ? view.rolesInPlay : Array.isArray(view?.roleList) ? view.roleList : null;
+  if (src) {
+    const out = new Map();
+    for (const x of src.slice(0, 60)) {
+      const obj = x && typeof x === 'object' ? x : null;
+      const id = typeof x === 'string' ? x : typeof obj?.id === 'string' ? obj.id : typeof obj?.role === 'string' ? obj.role : null;
+      if (!id) continue;
+      const given = Number(obj?.count ?? obj?.n);
+      const n = Number.isFinite(given) && given > 0 ? Math.floor(given) : null;
+      const had = out.get(id);
+      if (had) { had.count = (had.count ?? 1) + (n ?? 1); continue; }
+      const known = all.find((r) => r.id === id);
+      const role = known ?? (obj && (obj.name || obj.emoji)
+        ? { id, name: String(obj.name ?? ''), emoji: obj.emoji ?? '❔', team: obj.team, text: String(obj.text ?? obj.desc ?? '') }
+        : null);
+      if (role) out.set(id, { ...role, count: n });
+    }
+    if (out.size) return { roles: [...out.values()], inPlay: true };
+  }
+  return all.length ? { roles: all.map((r) => ({ ...r, count: null })), inPlay: false } : null;
 }
 
 /**

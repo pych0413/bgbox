@@ -6,7 +6,8 @@
 //     → { el, update(props), destroy() }
 //
 // Optional extras: `min` (fewest picks that enable the confirm button,
-// default = count) and `hint` (line under the grid).
+// default = count), `hint` (line under the grid) and `youTag` (default true: 「（你）」 after `me`; the play
+// screen turns it off on a shared phone, which the whole table reads — DESIGN §7.1 #20).
 //
 // Works controlled or not. The internal selection follows `selected` only
 // when that prop's CONTENT changes, so a game UI may either keep its own
@@ -60,7 +61,7 @@ export function PlayerPicker(props = {}) {
       style: { '--seat': player.color ?? 'var(--cheese)' },
     },
     el('span', { class: 'c-playerpicker-dot' }),
-    el('span', { class: 'c-playerpicker-name', text: player.name + (player.id === p.me ? '（你）' : '') }),
+    el('span', { class: 'c-playerpicker-name', text: player.name + (player.id === p.me && p.youTag !== false ? '（你）' : '') }),
     on && need() > 1 ? el('span', { class: 'c-playerpicker-order', text: String(idx + 1) }) : null,
     excluded ? el('span', { class: 'c-playerpicker-ban', text: '🚫' }) : null);
     chip.addEventListener('click', () => tap(player.id, chip));

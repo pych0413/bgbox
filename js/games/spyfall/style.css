@@ -192,3 +192,8 @@ body.has-netbar .sf-actions { scroll-margin-top: calc(var(--netbar-h, 2.25rem) +
 }
 .sf-guessbar-in { max-width: 30rem; margin: 0 auto; }
 .sf-guessbar .btn { margin: 0; }
+
+/* ---------- one phone in the middle (DESIGN §7.1): one 🛑 for the whole table (U3) ---------- */
+.sf-stopbox { display: flex; flex-direction: column; gap: .5rem; }
+.sf-stop { width: 100%; font-size: 1.125rem; }
+.sf-stop-cancel { width: 100%; }

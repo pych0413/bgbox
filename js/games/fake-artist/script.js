@@ -18,11 +18,11 @@ const names = (list, nm) => list.map(nm).join('、');
 const REDO = '上一鋪唔計，重新嚟過。';
 
 export function cueQm(n, qm, redo = false) {
-  return `${redo ? REDO : ''}第 ${n} 輪，${qm}做出題者。${qm}，請喺手機打一個主題同一個題目，打完㩒出題。`;
+  return `${redo ? REDO : ''}第 ${n} 局，${qm}做出題者。${qm}，請喺手機打一個主題同一個題目，打完㩒出題。`;
 }
 
 export function cueDeal({ n, theme, qm, redo = false }) {
-  return `${redo ? REDO : ''}第 ${n} 輪。${qm ? `${qm}出題。` : ''}主題係「${theme}」。有一個人係假畫家，佢唔知題目。`
+  return `${redo ? REDO : ''}第 ${n} 局。${qm ? `${qm}出題。` : ''}主題係「${theme}」。有一個人係假畫家，佢唔知題目。`
     + '每個人㩒住張卡睇自己嘅，睇完㩒睇完喇。';
 }
 
@@ -44,12 +44,33 @@ export function cueLap({ lap, laps, first }) {
   return `第 ${lap}/${laps} 圈，由${first}開始。`;
 }
 
-export function cueVote() {
-  return '畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！';
+/** `pass`: one phone goes round (secret ballots one by one), so no 「三、二、一」 — and nobody talks until the last ballot. */
+export function cueVote({ pass = false } = {}) {
+  return pass
+    ? '輪流投票，投完交俾下一個。全部投完先好講。'
+    : '畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！';
 }
 
-export function cueRevote() {
-  return '平票！冇被指嘅人再投一次，只可以喺平票嘅人入面揀。';
+export function cueRevote({ pass = false } = {}) {
+  return pass
+    ? '平票！冇被指嘅人輪流再投一次，只可以喺平票嘅人入面揀，全部投完先好講。'
+    : '平票！冇被指嘅人再投一次，只可以喺平票嘅人入面揀。';
+}
+
+/** One phone, secret ballots: the finished picture lies in the middle first. */
+export function cueLook() {
+  return '畫完喇！部手機擺喺中間，大家睇清楚幅畫，可以傾，但唔好講題目。傾完就開始投票。';
+}
+
+/** 一齊指 (U7): look, talk, then the 3-2-1. */
+export function cuePoint({ second = false } = {}) {
+  return second
+    ? '平票！冇被指嘅人再一齊指一次，只可以指平票嘅人。準備好就數三、二、一。'
+    : '畫完喇！大家睇清楚幅畫，可以傾，但唔好講題目。傾完就數三、二、一，一齊指住你覺得係假畫家嘅人。';
+}
+
+export function cuePointGo() {
+  return '三、二、一，指！指住唔好郁。';
 }
 
 export function cueTally({ top, caught, fake, revote }, nm) {
@@ -62,9 +83,11 @@ export function cueTally({ top, caught, fake, revote }, nm) {
   return parts.join('');
 }
 
-export function cueGuess({ fake, mode }, nm) {
-  return mode === 'typed'
-    ? `${nm(fake)}被揪出嚟喇！${nm(fake)}有一次機會，喺手機打出你估嘅題目。`
+/** `judge` (one phone, re-run N1): who rules on a spoken guess is named, so the table knows who gets the phone next. */
+export function cueGuess({ fake, mode, judge = null }, nm) {
+  if (mode === 'typed') return `${nm(fake)}被揪出嚟喇！${nm(fake)}有一次機會，喺手機打出你估嘅題目。`;
+  return judge
+    ? `${nm(fake)}被揪出嚟喇！${nm(fake)}有一次機會，望住幅畫大聲講出你估嘅題目，講完交俾${nm(judge)}判斷。`
     : `${nm(fake)}被揪出嚟喇！${nm(fake)}有一次機會，大聲講出你估嘅題目。`;
 }
 
@@ -119,10 +142,13 @@ export function hintFor(c) {
       if (c.role === 'qm') return '你唔使畫，睇住大家畫；假畫家贏，你都贏。';
       return `睇住${c.drawerName}畫；留意邊個畫得唔似。`;
     case 'vote':
+      if (c.look) return '大家睇清楚幅畫，可以傾，唔好講題目；傾完㩒「開始投票」，輪流投。';
+      if (c.point) return c.role === 'qm' ? '你唔使指，等大家一齊指。' : '傾完就數三、二、一，一齊指住你覺得係假畫家嘅人；一個人㩒邊個指邊個。';
       if (c.role === 'qm') return '你唔使投票，等大家投完。';
       if (c.role === 'table') return '大家揀緊邊個係假畫家。';
       return c.voted ? '投咗喇，等其他人投完。' : '揀你覺得係假畫家嘅人再確定；唔可以投自己。';
     case 'revote':
+      if (c.point) return '平票：冇被指嘅人再一齊指一次，只可以指平票嘅人。';
       return c.canVote ? '平票：喺平票嘅人入面再揀一個。' : '平票：等冇被指嘅人再投一次。';
     case 'tally':
       return '睇吓邊個投邊個，幾秒後自動繼續。';
@@ -130,13 +156,15 @@ export function hintFor(c) {
     case 'judge':
       if (c.canGuess) return '你被揪出：打出你估嘅題目，只有一次機會。';
       if (c.canJudge) return '聽佢估咗乜，啱就㩒「啱」，唔啱㩒「錯」。';
+      // one phone (re-run N1): the fake's screen lies face up in the middle — names, never 「你」
+      if (c.isFake && c.handOver) return `${c.fakeName}：望住幅畫大聲講出估嘅題目（得一次機會），講完交俾${c.judgeName}判斷。`;
       if (c.isFake) return '你被揪出：大聲講出你估嘅題目，只有一次機會。';
       return '假畫家有一次機會估題目：估中佢贏，估錯真畫家贏。';
     case 'result':
-      if (c.seen) return c.last ? '等其他人睇完，齊人就睇總結。' : '等其他人睇完，齊人就開下一輪。';
+      if (c.seen) return c.last ? '等其他人睇完，齊人就睇總結。' : '等其他人睇完，齊人就開下一局。';
       return '睇吓題目、假畫家同邊個贏，睇完㩒「睇完」。';
     default:
-      return '玩完喇！睇吓邊個贏同每輪發生咩事。';
+      return '玩完喇！睇吓邊個贏同每局發生咩事。';
   }
 }
 
@@ -189,8 +217,8 @@ export function revealLines(rv, nm) {
 
   if (rv.scoring === 'none') {
     out.push(rv.fakeSide
-      ? `唔計分：呢輪 ${names(rv.winners, nm)} 贏。`
-      : `唔計分：呢輪真畫家贏（${names(rv.winners, nm)}）。`);
+      ? `唔計分：呢局 ${names(rv.winners, nm)} 贏。`
+      : `唔計分：呢局真畫家贏（${names(rv.winners, nm)}）。`);
   } else if (rv.fakeSide) {
     out.push(rv.qm
       ? `假畫家 ${nm(rv.fake)} 同出題者 ${nm(rv.qm)} 各 +2。`
@@ -234,7 +262,7 @@ function whyShort(h, nm) {
 
 /** Two lines per finished round for result.lines (what was hidden during play, and why it ended so). */
 export function roundBlock(h, nm, total) {
-  const n = `第 ${h.n}${total ? `/${total}` : ''} 輪`;
+  const n = `第 ${h.n}${total ? `/${total}` : ''} 局`;
   if (h.voided) {
     const what = h.word ? `「${h.word}」（${h.theme}）· 假畫家：${nm(h.fake)}` : '未出題';
     const why = h.why === 'absent' && h.absent ? `（${nm(h.absent)} 唔喺度）` : '';
@@ -252,12 +280,12 @@ export function roundBlock(h, nm, total) {
 export function summaryLine(winners, top, nm, scoring = 'points') {
   if (!winners.length) return '冇人贏';
   if (scoring === 'none') {
-    return winners.length === 1 ? `${nm(winners[0])} 贏得最多輪（${top} 輪）` : `${names(winners, nm)} 一樣咁多，各贏 ${top} 輪`;
+    return winners.length === 1 ? `${nm(winners[0])} 贏得最多局（${top} 局）` : `${names(winners, nm)} 一樣咁多，各贏 ${top} 局`;
   }
   if (winners.length === 1) return `${nm(winners[0])} 贏咗，共 ${top} 分`;
   return `${names(winners, nm)} 同分奪冠，各 ${top} 分`;
 }
 
 export function overHint() {
-  return '玩完喇！睇吓邊個贏同每輪發生咩事。';
+  return '玩完喇！睇吓邊個贏同每局發生咩事。';
 }

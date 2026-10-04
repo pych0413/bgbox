@@ -43,12 +43,19 @@
 //
 // Absent seats (D4): markAbsent / markPresent send `@absent` / `@present` (§4) as the host; the session keeps the
 // seats the engine accepted it for, the public room view lists them (`absent`), and stall detection skips them.
+//
+// One phone in the middle (DESIGN §7.1): filterFocus passes a named focus's `open` / `step` / `label` / `ordered` /
+// `hold` to the devices it names (never on an anonymous step); act() keeps `table` a boolean beside the filtered
+// `seats` (a whole-table tap); holdClock() holds the game clock at a one-phone gate (room view `clockHeld`, and
+// `clockHeldAt` = the host time the held clock stands at); an
+// eyes-closed night has no 靜音 on a whole-table phone (U1: silentBarred / onePhoneNarration, applied by createApp);
+// and nobody there is listed as idle (#18).
 // ============================================================
 
-import { HOST, ACT, clone, cryptoRng } from './engine-kit.js?v=20261004005209';
-import { Session } from './session.js?v=20261004005209';
-import { PROTOCOL } from './transport.js?v=20261004005209';
-import { uid } from './util.js?v=20261004005209';
+import { HOST, ACT, clone, cryptoRng, needsEyesClosed } from './engine-kit.js?v=1';
+import { Session } from './session.js?v=1';
+import { PROTOCOL } from './transport.js?v=1';
+import { uid } from './util.js?v=1';
 
 export const PALETTE = ['#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6',
   '#2dd4bf', '#facc15', '#a3e635', '#fb923c', '#60a5fa', '#e879f9', '#94a3b8', '#fda4af', '#86efac', '#fde68a'];
@@ -90,11 +97,20 @@ export function filterFocus(focus, seatIds) {
   const anonymous = focus.anonymous ? String(focus.anonymous) : '';
   if (!mine.length && !(anonymous && seatIds.length)) return null;
   const out = { pids: mine };
-  if (anonymous) out.anonymous = anonymous;
+  if (anonymous) { out.anonymous = anonymous; return out; }   // a secret step carries nothing else (§7.1)
   // #14: a NAMED step that calls more than one seat (a deal, a vote) is everybody's at once, not this seat's
   // turn — the header shows no 輪到你 for it. Never on an anonymous step: there it would say "you are not
   // the only one awake".
-  else if (new Set(focus.pids).size > 1) out.together = true;
+  if (new Set(focus.pids).size > 1) out.together = true;
+  // §7.1 one-phone hints, only to the devices a named step calls: a public one-person step (`open`), a step key
+  // (`step`: a new key for the same seat gates again), the step's public name for the gate (`label`), hand the
+  // phone over in pids order (`ordered`), hold the clock while the gate is unanswered (`hold`)
+  if (focus.open === true) out.open = true;
+  if (typeof focus.step === 'string' && focus.step) out.step = focus.step.slice(0, 40);
+  // (by code point, so an emoji at the cut is never split into half a surrogate pair)
+  if (typeof focus.label === 'string' && focus.label.trim()) out.label = Array.from(focus.label.trim()).slice(0, 24).join('');
+  if (focus.ordered === true) out.ordered = true;
+  if (focus.hold === true) out.hold = true;
   return out;
 }
 
@@ -350,6 +366,10 @@ export class Room {
       timer: this.#timerView(),
       // D4: seats the host marked absent this game (public: views may show 💤 next to the name)
       absent: this.session && this.phase === 'playing' ? this.session.absent.slice() : [],
+      // U10 (§7.1): the game clock is held while a one-phone gate is unanswered
+      clockHeld: !!(this.session && this.phase === 'playing' && this.session.held),
+      // …and the host time it stands at: while held, a countdown shows `deadline - clockHeldAt` (frozen, §7.1 U10)
+      clockHeldAt: this.session && this.phase === 'playing' && this.session.held ? this.session.heldSince() : null,
     };
   }
 
@@ -1049,6 +1069,8 @@ export class Room {
       const own = action.seats.filter((id) => { const q = typeof id === 'string' ? this.#byId(id) : null; return !!q && !q.spectator && q.deviceId === deviceId; });
       action = { ...action, seats: [...new Set(own)] };
     }
+    // §7.1 a whole-table tap (api.tableSend) says `table: true`; anything else there is not a claim at all
+    if ('table' in action) action = { ...action, table: action.table === true };
     return this.#batch(() => this.session.dispatch(pid, action));
   }
 
@@ -1277,6 +1299,43 @@ export class Room {
     return this.#batch(() => this.session.dispatch(HOST, { type: '@auto', pid }));
   }
 
+  /** One device holds every seated player (§5) — the env games get as `singleDevice`. */
+  get singleDevice() { return this.#singleDevice(); }
+
+  /**
+   * U1 (§7.1): a game whose night needs eyes closed has no 靜音 on a whole-table phone — with every eye shut and no
+   * voice nobody hears their call. True when `mode` cannot be used for the selected game here. The rule is the
+   * app's to apply (createApp refuses 靜音 and calls onePhoneNarration at selectGame / start / again); a Room
+   * driven directly (headless tests) keeps whatever mode it is given.
+   */
+  silentBarred(mode = this.narration.mode) {
+    return mode === 'silent' && !!this.game && this.#singleDevice() && needsEyesClosed(this.game.meta);
+  }
+
+  /** U1: a barred 靜音 becomes 語音 (the host's own preference is left alone). True iff it changed. */
+  onePhoneNarration() {
+    if (!this.silentBarred()) return false;
+    return this.#batch(() => {
+      this.narration.mode = 'voice';
+      this.session?.setNarrationMode('voice');
+      this.#mark();
+      return true;
+    });
+  }
+
+  /**
+   * U10 (§7.1): hold (on) or release the game clock while a one-phone gate is unanswered. Whole-table rooms only;
+   * true iff it changed. The room view's `clockHeld` follows.
+   */
+  holdClock(on) {
+    if (this.phase !== 'playing' || !this.session || (on && !this.#singleDevice())) return false;
+    return this.#batch(() => {
+      const ok = this.session.holdClock(!!on);
+      if (ok) this.#mark(true, true);
+      return ok;
+    });
+  }
+
   setNarrationMode(mode) {
     if (!NARRATION_MODES.includes(mode)) return false;
     return this.#batch(() => {
@@ -1496,7 +1555,9 @@ export class Room {
       const present = this.#seated().filter((p) => !s.isAbsent(p.id));
       const blocked = new Set(present.filter((p) => s.blocking(p.id)).map((p) => p.id));
       const secret = !!s.focus()?.anonymous;
-      const othersWait = !secret && present.some((p) => !blocked.has(p.id)) && s.deadline() === null;
+      // §7.1 #18: on a whole-table phone every pending seat sits on the one phone, so "the rest wait for it" only
+      // means "queued behind the gate" — never flag that; the gate itself offers 唔喺度？
+      const othersWait = !secret && !this.#singleDevice() && present.some((p) => !blocked.has(p.id)) && s.deadline() === null;
       for (const p of present) {
         if (!blocked.has(p.id) || (p.connected && !othersWait)) continue;
         if (!s.legal(p.id).length) continue;

@@ -8,6 +8,9 @@
 //   cue   { id, text } | null      mode   'voice' | 'read' | 'silent'
 //
 // Optional extras: `paused` + `onPause` (a ⏸ button), `hidden`, and `confirmNext` (see #13 below).
+// One phone (DESIGN §7.1): `modes` = the mode buttons offered (default all three; U1 drops 'silent' for an
+// eyes-closed night on a whole-table phone); `hideSkip` = no ghost 「⏭ 跳過呢步」 — on a whole-table phone it is in
+// reach of whoever holds the phone, so the skip lives in ⋯ only (#35). The 讀稿 narrator's 下一步 always stays.
 //
 // Watchdog (BACKLOG #1): `stalled: true` (+ `line`, `reason`) means the phone was asked
 // to speak and nothing came out (no start within 1.5 s, the length timeout hit,
@@ -111,7 +114,7 @@ export function NarratorBar(props = {}) {
     const reading = (mode === 'read' && !!line) || stalled;
     const compact = !!p.compact && !unfolded;
     const big = reading && !compact;                    // a skip with no line to read stays small, even in 讀稿
-    nextBtn.hidden = !p.onNext;
+    nextBtn.hidden = !p.onNext || (!!p.hideSkip && !reading);
     nextBtn.disabled = !line && mode !== 'read';
     nextBtn.classList.toggle('btn-primary', reading);
     nextBtn.classList.toggle('btn-ghost', !reading);
@@ -146,7 +149,11 @@ export function NarratorBar(props = {}) {
       pauseBtn.hidden = !p.onPause || stalled;
       pauseBtn.textContent = p.paused ? '▶ 繼續' : '⏸ 暫停';
 
-      for (const b of modeRow.children) b.classList.toggle('on', b.dataset.mode === mode);
+      const offered = Array.isArray(p.modes) && p.modes.length ? p.modes : null;
+      for (const b of modeRow.children) {
+        b.classList.toggle('on', b.dataset.mode === mode);
+        b.hidden = !!offered && !offered.includes(b.getAttribute('data-mode'));
+      }
       modeRow.hidden = !p.onMode;
 
       // compact while this phone draws: one line, 下一步 only (unless the host unfolded it this turn)

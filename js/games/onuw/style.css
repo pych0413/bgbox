@@ -186,3 +186,19 @@
 .on-table-title { margin: .5rem 0 0; text-align: center; font-size: 1.5rem; }
 .on-table .on-lead { font-size: 1rem; }
 .on-timer { display: block; }
+
+/* ---------- one phone in the middle (DESIGN §7.1) ---------- */
+
+/* the night countdown with the seconds left in words (#7); the same on every phone */
+.on-barwrap { display: flex; align-items: center; gap: .625rem; }
+.on-barwrap .on-bar { flex: 1; }
+.on-bar-text { flex: none; min-width: 4.5rem; text-align: right; font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.on-bar-text:empty { display: none; }
+
+/* two werewolves / Masons of one shared phone: one screen (U2), one 📓 per seat */
+.on-co-booktitle { margin: .25rem 0 0; font-size: .75rem; color: var(--text-dim); text-align: center; }
+.on-co-books { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; }
+.on-co-book .c-cover { aspect-ratio: 3 / 2; }
+
+/* the phone in the middle by day: the table's own taps (#5, #24) */
+.on-table-ready, .on-table-ring { align-self: stretch; }

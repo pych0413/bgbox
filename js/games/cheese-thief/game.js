@@ -19,8 +19,8 @@
 // leaves this file through view(), which is built field by field.
 // ============================================================
 
-import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=20261004005209';
-import { narrate, stepTitle, anonymousPrompt, cueMinMs, headCountNote, VOTE_CALL, CLOCK, HINT } from './script.js?v=20261004005209';
+import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=1';
+import { narrate, stepTitle, anonymousPrompt, cueMinMs, headCountNote, VOTE_CALL, VOTE_CALL_PASS, CLOCK, HINT } from './script.js?v=1';
 
 // ---------- meta / rules ----------
 
@@ -31,7 +31,10 @@ export const meta = {
   accent: '#f5c518',
   players: [4, 8],
   minutes: [10, 15],
-  narration: 'required',     // the night is read out; still works in 讀稿 and 靜音 modes
+  narration: 'required',     // the night is read out; 讀稿 and 靜音 work with one phone each
+  eyesClosed: true,          // U1: a whole-table phone offers no 靜音 (everybody's eyes are shut, nobody would hear the hour)
+  nightAmbient: true,        // U8 (re-run N3): a whole-table phone plays a neutral noise bed all night, so an occupied hour
+                             // (the phone picked up, the gate tapped, the phone put down) sounds like an empty one
   paperMode: false,
   singleDevice: 'full',      // phone in the middle, picked up by whoever is called
   banks: [],
@@ -44,7 +47,7 @@ export const rules = {
     '1 個芝士大盜，其餘係貪瞓鼠；每人暗擲一粒骰（4 人局兩粒）。',
     '天黑後手機由一點報到六點：擲到幾點，就喺嗰個點鐘睜眼。',
     '大盜喺自己個鐘偷走芝士 — 同佢一齊醒嘅人會見到係邊個。',
-    '貪瞓鼠淨係得自己醒，可以喺自己部機偷睇一粒骰（4 人局唔得）。',
+    '貪瞓鼠淨係得自己醒，可以喺手機偷睇一粒骰（4 人局唔得）。',
     '5–8 人：大盜會拉人做共犯，共犯幫大盜。',
     '天光討論完一齊投票：大盜喺最高票 → 貪瞓鼠贏，否則大盜隊贏。',
   ],
@@ -56,7 +59,7 @@ export const rules = {
     },
     {
       id: 'sleepyhead', name: '貪瞓鼠', emoji: '🐭', team: 'sleepyhead',
-      text: '做乜：喺你嗰個點鐘睜眼；淨係得你醒，可以喺自己部機揀一個人偷睇佢粒骰（4 人局唔得）。點贏：大盜喺最高票（平票都算）。',
+      text: '做乜：喺你嗰個點鐘睜眼；淨係得你醒，可以喺手機揀一個人偷睇佢粒骰（4 人局唔得）。點贏：大盜喺最高票（平票都算）。',
     },
     {
       id: 'follower', name: '共犯', emoji: '🤝', team: 'thief',
@@ -74,7 +77,7 @@ export const rules = {
     },
     {
       title: '夜晚',
-      body: '手機由一點報到六點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長（官方每個鐘 10 秒）。擲到嗰個點嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜醒嗰陣一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰：喺自己部手機㩒佢個名再㩒大掣，結果喺你部機度出（唔使掂人哋部機 — 夜晚其他人部機係黑嘅），睇完要冚返，之後唔可以再睇（4 人局唔得）。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
+      body: '手機由一點報到六點，每個點鐘都會報，就算冇人擲到都照報，而且時間一樣長（官方每個鐘 10 秒）。擲到嗰個點嘅人睜眼：你會見到同你一齊醒嘅人，同埋芝士仲喺唔喺枱上。大盜醒嗰陣一定要偷走芝士，同佢一齊醒嘅人一定見到係邊個偷。貪瞓鼠如果淨係得自己醒，可以偷睇一個人粒骰：喺手機㩒佢個名再㩒大掣（一人一部機就喺自己部機度出，唔使掂人哋部機），睇完要冚返，之後唔可以再睇（4 人局唔得）。兩個或以上貪瞓鼠一齊醒就淨係識到對方，唔可以偷睇。',
     },
     {
       title: '共犯點產生',
@@ -98,20 +101,30 @@ export const rules = {
     },
     {
       title: '旁白三個模式',
-      body: '語音：主持部機讀出嚟，全部人真係閉眼。\n讀稿：要搵一個唔玩嘅朋友睇住主持部機讀，再㩒「下一步」— 主持自己有玩就唔好用，因為佢要開眼睇稿。\n靜音：唔使閉眼，大家望住自己部機，到你個鐘部機會亮；唔好抬頭望人，亦唔使摸手。',
+      body: '語音：主持部機讀出嚟，全部人真係閉眼。\n讀稿：要搵一個唔玩嘅朋友睇住主持部機讀，再㩒「下一步」— 主持自己有玩就唔好用，因為佢要開眼睇稿。\n靜音（一人一部機先得）：唔使閉眼，大家望住自己部機，到你個鐘部機會亮；唔好抬頭望人，亦唔使摸手。\n一部手機玩冇靜音：大家閉埋眼，冇人讀就聽唔到報時。',
     },
     {
       title: '手機做啲乜，你做啲乜',
-      body: '手機負責：派牌、擲骰、逐點報時、記住芝士喺邊、顯示誰同你一齊醒、偷睇結果、投票計票。你負責：夜晚真係閉眼（或者用靜音模式睇住自己部機）、討論、扮嘢。每一步都喺手機下半部㩒一下大掣，咁就冇人聽得出邊個醒。',
+      body: '手機負責：派牌、擲骰、逐點報時、記住芝士喺邊、顯示誰同你一齊醒、偷睇結果、投票計票。你負責：夜晚真係閉眼（或者一人一部機用靜音模式）、討論、扮嘢。一人一部機嘅話，每一步都喺手機下半部㩒一下大掣，咁就冇人聽得出邊個醒。',
+    },
+    {
+      title: '一部手機玩',
+      body: '部手機擺喺枱中間，用🔊語音（或者搵個唔玩嘅人📜讀稿）。搖骰同投票：手機會叫名，逐個拎起嚟做，做完交俾下一位。\n夜晚全部人閉眼：聽到報你個點鐘先拎起部手機，㩒交接卡，睇完㩒大掣，部手機擺返中間再閉眼。每個鐘自動加 10 秒交機時間，冇人醒嘅鐘都一樣長。\n同一個鐘有幾個人醒：一齊望同一個畫面；自己嘅嘢（例如粒骰）㩒自己個名先睇，其他人望開。貪瞓鼠淨係得自己醒：㩒一個名就即刻偷睇（4 人局唔得）。\n天光部手機擺返中間：計時同「大家夠鐘投票」喺枱面；夠鐘投票要㩒兩下先算，免得有人手快。想再睇自己張牌、粒骰或者 📓，㩒上面揀名，睇完擺返中間。',
     },
   ],
 };
 
 // ---------- config ----------
 
-const DEFAULTS = { fallMouse: false, peek4: false, pick5: false, reroll: false, hourSec: 10, discussSec: 300, recap: true };
-/** One phone passed around needs longer hours: pick it up, tap the gate, read, act, hand it on. */
-const SHARED_HOUR_SEC = 15;
+const DEFAULTS = { fallMouse: false, peek4: false, pick5: false, reroll: false, hourSec: 10, discussSec: 300, recap: true, passPhone: false };
+/**
+ * One phone in the middle (U6): every awake window gets a fixed hand-over pad on top of `hourSec` — reach for the phone
+ * with eyes closed, tap the gate, put it back. The same at every hour, empty or not, so it tells nothing; the official
+ * 10 s hour becomes 20 s. Switched on by the hidden `passPhone` (config.defaults, from env.singleDevice).
+ */
+export const PASS_PAD_SEC = 10;
+/** The one-phone hour before the pad existed (until 2026-10-04): a saved config still carrying it is read as the default. */
+const OLD_SHARED_HOUR_SEC = 15;
 
 function normalise(cfg, n) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
@@ -120,6 +133,7 @@ function normalise(cfg, n) {
   c.pick5 = !!c.pick5 && n === 5;     // 家規: 5p thief picks one follower at night end (6p style)
   c.reroll = !!c.reroll;
   c.recap = c.recap !== false;
+  c.passPhone = !!c.passPhone;
   c.hourSec = clampInt(c.hourSec, 5, 30, DEFAULTS.hourSec);
   c.discussSec = clampInt(c.discussSec, 0, 1800, DEFAULTS.discussSec);
   return c;
@@ -132,14 +146,20 @@ function clampInt(v, lo, hi, dflt) {
 }
 
 export const config = {
+  /**
+   * `env.singleDevice` (one phone holds every seat) switches on the hidden `passPhone`: every awake window gets the
+   * PASS_PAD_SEC hand-over pad, and the cues say "the phone in the middle". It follows the room: a second phone joining
+   * turns it off again (the room re-runs defaults until the host edits the config).
+   */
   defaults(n, prev, env) {
     const d = { ...DEFAULTS };
-    // one shared phone: the hour also has to cover picking the phone up and handing it on
-    if (env?.singleDevice) d.hourSec = SHARED_HOUR_SEC;
     if (prev) {
-      for (const k of ['hourSec', 'discussSec', 'recap', 'reroll', 'peek4', 'pick5']) if (prev[k] !== undefined) d[k] = prev[k];
+      for (const k of ['hourSec', 'discussSec', 'recap', 'reroll', 'peek4', 'pick5', 'passPhone']) if (prev[k] !== undefined) d[k] = prev[k];
       if (n >= 6 && n <= 8 && prev.fallMouse) d.fallMouse = true;
+      // a config saved before the pad: its 15 s hour was the old one-phone default, which the pad now replaces
+      if (env?.singleDevice && prev.passPhone === undefined && prev.hourSec === OLD_SHARED_HOUR_SEC) d.hourSec = DEFAULTS.hourSec;
     }
+    if (env) d.passPhone = !!env.singleDevice;
     return normalise(d, n);
   },
 
@@ -186,7 +206,7 @@ export const config = {
     if (n === 5) {
       f.push({ key: 'pick5', label: '家規：5 人都喺夜晚尾由大盜揀 1 個共犯', type: 'bool', help: '官方 5 人局：偷芝士嗰陣有貪瞓鼠一齊醒先有共犯，大盜一個醒就冇。開咗就好似 6 人局：六點之後大盜揀 1 位，兩個互相認得。' });
     }
-    f.push({ key: 'hourSec', label: '每個點鐘幾長', type: 'seconds', min: 5, max: 30, help: '官方係 10 秒。每個點鐘一樣長，冇人擲到都照行。一部手機輪流玩建議 15 秒（要交嚟交去）。' });
+    f.push({ key: 'hourSec', label: '每個點鐘幾長', type: 'seconds', min: 5, max: 30, help: `官方係 10 秒。每個點鐘一樣長，冇人擲到都照行。一部手機玩會自動每個鐘加 ${PASS_PAD_SEC} 秒交機時間。` });
     f.push({ key: 'discussSec', label: '討論時間', type: 'seconds', min: 0, max: 1800, help: '0 = 唔計時，全部人㩒「夠鐘投票」就投。' });
     f.push({ key: 'reroll', label: '家規：擲骰可以重擲', type: 'bool', help: '官方規則：擲一次就定案。開咗就可以搖到㩒「鎖定」為止。' });
     f.push({ key: 'recap', label: '日頭顯示夜晚記錄', type: 'bool', help: '只有你自己睇到你夜晚見過嘅嘢，等你唔使靠記性。' });
@@ -205,7 +225,8 @@ export const config = {
       : '🎲 每人 1 粒骰 · 夜尾大盜揀 2 位共犯（三人互認）');
     const note = headCountNote(n, { pick5: c.pick5 });
     if (note) lines.push(`💬 ${note}`);
-    lines.push(`⏱ 每個點鐘 ${c.hourSec} 秒 · 討論 ${c.discussSec ? Math.round(c.discussSec / 60 * 10) / 10 + ' 分鐘' : '唔計時'}`);
+    const hour = c.passPhone ? `${c.hourSec + PASS_PAD_SEC} 秒（含交機 ${PASS_PAD_SEC} 秒）` : `${c.hourSec} 秒`;
+    lines.push(`⏱ 每個點鐘 ${hour} · 討論 ${c.discussSec ? Math.round(c.discussSec / 60 * 10) / 10 + ' 分鐘' : '唔計時'}`);
     if (n === 4 && c.peek4) lines.push('👁 家規：4 人局都可以偷睇骰');
     if (n === 5 && c.pick5) lines.push('🤝 家規：5 人局夜晚尾由大盜揀 1 個共犯（官方係靠撞）');
     if (c.reroll) lines.push('🔓 家規：擲骰可重擲，鎖定先定案');
@@ -238,8 +259,13 @@ const othersOf = (s, pid) => s.order.filter((p) => p !== pid);
 const hasDice = (s, pid) => Array.isArray(s.dice[pid]);
 const nm = (s, pid) => s.names[pid] ?? '?';
 const isStr = (x) => typeof x === 'string';
-/** Seats that finished their awake turn in this window (a shared phone walks on to the next one). */
+/** Seats that finished their awake turn in this window (legacy `done`: a shared phone now shows co-wakers ONE screen, U2). */
 const doneOf = (s) => s.done ?? [];
+/**
+ * Every seat one tap counts for (DESIGN §7.1): the sender, plus `action.seats` — a shared phone's whole-table tap
+ * (api.tableSend) or its co-wakers' combined night screen. The room keeps only the sending device's own playing seats.
+ */
+const seatsOf = (s, pid, a) => [...new Set([pid, ...(Array.isArray(a?.seats) ? a.seats : [])])].filter((p) => isStr(p) && s.order.includes(p));
 
 /** 5p official: a witness of the theft becomes the follower at the thief's hour. */
 const witnessRule = (s) => s.n === 5 && !s.cfg.pick5;
@@ -262,14 +288,18 @@ function buildSteps(n, cfg) {
   return steps;
 }
 
-/** Fixed per step kind — never depends on who is awake or what they did. */
+/**
+ * Fixed per step kind — never depends on who is awake or what they did. One phone in the middle (`passPhone`, U6) adds
+ * the same hand-over pad to every step somebody may be called in, so an empty hour still lasts as long as a full one.
+ */
 function windowMs(s, step) {
   const hourMs = s.cfg.hourSec * 1000;
+  const pad = s.cfg.passPhone ? PASS_PAD_SEC * 1000 : 0;
   switch (step.k) {
     case 'begin': return BEGIN_MS;
-    case 'open': return hourMs;
-    case 'rec-pick': return hourMs;
-    case 'rec-meet': return Math.max(5000, Math.round(hourMs / 2));
+    case 'open': return hourMs + pad;
+    case 'rec-pick': return hourMs + pad;
+    case 'rec-meet': return Math.max(5000, Math.round(hourMs / 2)) + pad;
     case 'dawn': return DAWN_MS;
     default: return CLOSE_MS;
   }
@@ -387,11 +417,12 @@ export const engine = {
 
   cue(s) {
     if (s.phase === 'night' && s.stage === 'cue') {
-      const text = narrate(stepOf(s), scriptN(s));
+      const text = narrate(stepOf(s), scriptN(s), { passPhone: !!s.cfg.passPhone });
       return text ? { id: cueIdOf(s), text, minMs: cueMinMs(text) } : null;
     }
     if (s.phase === 'vote' && s.voteCue) {
-      return { id: `ct${s.gid}:vote:call`, text: VOTE_CALL, minMs: cueMinMs(VOTE_CALL) };
+      const text = s.cfg.passPhone ? VOTE_CALL_PASS : VOTE_CALL;
+      return { id: `ct${s.gid}:vote:call`, text, minMs: cueMinMs(text) };
     }
     return null;
   },
@@ -399,23 +430,25 @@ export const engine = {
   focus(s) {
     switch (s.phase) {
       case 'roll': {
+        // `label`: the public step name a shared phone's pass gate shows (#33)
         const pids = s.order.filter((p) => !s.ready[p] && !isAbsent(s, p));
-        return pids.length ? { pids } : null;
+        return pids.length ? { pids, label: '睇牌・擲骰' } : null;
       }
       case 'night': {
         if (s.stage !== 'window') return null;
         const st = stepOf(s);
         if (!['open', 'rec-pick', 'rec-meet'].includes(st.k)) return null;
         // An empty hour still returns the prompt (pids: []) so a shared phone
-        // looks the same whether or not anyone is awake. A seat that tapped
-        // 「交畀下一位」 (`done`) leaves focus, so a shared phone walks on to the
-        // next awake seat on it instead of staying with the first one all hour.
+        // looks the same whether or not anyone is awake. Every awake seat stays
+        // in focus for the whole window: on a shared phone the shell shows the
+        // seats awake together ONE combined screen (U2). (A seat that sent the
+        // legacy `done` still leaves focus.)
         const done = doneOf(s);
         return { pids: awakeNow(s).filter((p) => !done.includes(p)), anonymous: anonymousPrompt(st, scriptN(s)) };
       }
       case 'vote': {
         const pids = s.order.filter((p) => s.votes[p] === undefined && !isAbsent(s, p));
-        return pids.length ? { pids } : null;
+        return pids.length ? { pids, label: '投票' } : null;
       }
       default: return null;
     }
@@ -756,7 +789,8 @@ function nightAct(s, pid, a, ctx) {
   if (!st) return s;
   switch (a.type) {
     case 'ack':
-      markAck(s, pid);
+      // `seats`: a shared phone's combined screen acks for every co-waker on it at once (U2)
+      for (const p of seatsOf(s, pid, a)) markAck(s, p);
       return s;
     case 'peek': {
       if (!canPeek(s, pid) || !isStr(a.target) || a.target === pid || !s.order.includes(a.target)) return s;
@@ -782,7 +816,8 @@ function nightAct(s, pid, a, ctx) {
       return s;
     }
     case 'done':
-      // 「交畀下一位」 on a shared phone: this seat has seen what it needs; focus moves on.
+      // Legacy 「交畀下一位」: this seat has seen what it needs and leaves focus. The UI no longer sends it — a shared
+      // phone shows the seats awake together one combined screen (U2) — but an engine never drops a valid old action.
       // Never touches the deadline (anti-tell: a step lasts its full time whatever anyone does).
       if (!canFinish(s, pid)) return s;
       (s.done ||= []).push(pid);
@@ -805,9 +840,14 @@ function startDay(s, ctx) {
   return s;
 }
 
+/**
+ * 我哋夠鐘投票. With `seats` (a shared phone's whole-table tap, §7.1 #5) it counts for every listed seat at once — on a
+ * phone holding the whole table that is everybody, so one tap from the table screen is the table's decision.
+ */
 function dayAct(s, pid, a, ctx) {
   if (a.type !== 'day-ready') return s;
-  s.dayReady[pid] = a.on !== false;
+  const on = a.on !== false;
+  for (const p of seatsOf(s, pid, a)) s.dayReady[p] = on;
   if (allPresent(s, (p) => s.dayReady[p])) return startVote(s, ctx);
   return s;
 }
@@ -978,6 +1018,12 @@ function buildView(s, pid) {
     : TITLES[s.phase];
   v.title = title;
   v.subtitle = subtitle;
+  // the 💡 sheet lists only the roles of THIS game (re-run #5, DESIGN 15.2) — public: the deal, the head-count's
+  // followers and the 背鍋鼠 option are all known to the table
+  const fm = s.cfg.fallMouse ? 1 : 0;
+  v.rolesInPlay = [{ id: 'thief', count: 1 }, { id: 'sleepyhead', count: s.n - 1 - fm }];
+  if (s.n >= 5) v.rolesInPlay.push('follower');
+  if (fm) v.rolesInPlay.push({ id: FMOUSE, count: 1 });
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
 
   // public: the seats the host marked 💤 (the counts below are of the seats the table still waits for)
@@ -988,8 +1034,11 @@ function buildView(s, pid) {
     case 'night': {
       const st = stepOf(s);
       v.night = true;
-      v.step = { ix: s.ix, total: s.steps.length, k: st.k, h: st.h ?? null, stage: s.stage };
-      v.acks = progress(s.acked.length, s.n);
+      // windowMs: this step kind's fixed length (public, the same every hour) — the bar is drawn from it, so a screen
+      // mounted half-way through a window shows the time already gone (#7)
+      v.step = { ix: s.ix, total: s.steps.length, k: st.k, h: st.h ?? null, stage: s.stage, windowMs: windowMs(s, st) };
+      // the tap counter is for seats only: on the table view of a shared phone it would count who is awake (§7.1)
+      if (seat) v.acks = progress(s.acked.length, s.n);
       break;
     }
     case 'day': v.dayReady = progress(present.filter((p) => s.dayReady[p]).length, present.length); break;

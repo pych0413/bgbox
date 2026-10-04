@@ -37,7 +37,12 @@ All keys optional; `defaults(n, prev, env)` fills them and keeps what the host c
 `env.singleDevice` (one phone holds every seat) the pace becomes `slow`: the phone is picked up from the middle of the
 table at every step, and ×1.5 on **every** window still tells nothing. The room also counts a hosted lobby with only the
 host's phone as one device, so a hidden `paceAuto` marker remembers that the slow pace was automatic: when other phones
-join, it goes back to `standard` (a pace the host picked by hand stays).
+join, it goes back to `standard` (a pace the host picked by hand stays). A second hidden marker, `passPhone`, follows
+`env.singleDevice` on every re-run of `defaults` (one-phone playtest, decisions U6 / U8 / #24): **+8 s** (`PASS_PAD_MS`) on
+every role step for reaching for the phone with eyes closed (never on `begin`; the same whether the role is awake or
+in the centre), **+3 s** on `dawn` (`PASS_DAWN_PAD_MS`, re-run R3: the last holder puts the phone back before anybody opens
+their eyes), the ring vote's fallback ballot (§3.5), and the one-phone night, dawn and vote lines (§3.3). The lobby summary then adds
+「📱 每步加 8 秒交機」. Neither marker is a form field.
 
 | key | UI label | type | default | meaning |
 |---|---|---|---|---|
@@ -190,7 +195,7 @@ round; Troublemaker: a third pick drops the oldest. A Doppelgänger acting as he
 **The 📓 cover (playtest #11).** Every seat has the same hold-to-peek cover in its info card at every night step, in the cue
 and the window, from `begin` to `dawn`: back 「📓 㩒住睇你今晚見過乜」, fixed size (a 2:1 box, the same on every phone, about
 seven lines at 360 px), never hidden. Behind it is everything this seat has learned tonight so far (`my.night.seen`, the seat's own
-notes, **newest first** — a lapsed optional ability shows as 「…：今晚你冇用能力。」): a cover held open by a finger cannot scroll, so
+notes, **newest first** — a lapsed optional ability shows as 「…：今晚你冇確定（時間到或者唔想用）。」 — honest whether the window ran out mid-pick or the seat chose not to, one-phone #7): a cover held open by a finger cannot scroll, so
 on a long night (a Doppelgänger who became a lone wolf: copy, wolves, the centre card) it is the oldest note that runs off the
 bottom, never what the seat just learned; the newest line is a shade brighter. For a Doppelgänger in her own step what her copy
 means sits right under the copy note (short, e.g. 「即刻用新角色嘅能力：睇一個人張牌，或者中間兩張（二揀一）。唔想用就唔使理。」 — the copy
@@ -200,7 +205,7 @@ in the next step), and the cover itself says nothing about who woke. After actin
 「✓ 搞掂。㩒住下面 📓 睇返；天光之後都仲睇到。」 (the cover is below it).
 
 **Night screens of the shell.** `view.night = true` for every seat from `begin` until the `dawn` step (the screen then
-lights up for 「天光喇」). The shell dims and mutes every seat that is not in `focus`; `focus.pids` = the awake seats during
+lights up for 「天光喇」); with `passPhone` until the `dawn` step **ends** (re-run R3: the dawn step keeps every eye closed). The shell dims and mutes every seat that is not in `focus`; `focus.pids` = the awake seats during
 the window, so only they are lit and audible. Nothing in the UI makes a sound.
 
 ### 3.3 Narration (host phone, own wording)
@@ -211,7 +216,7 @@ config only, so a role sitting in the centre sounds exactly like one that is awa
 
 | step | line |
 |---|---|
-| begin | 天黑請閉眼。大家將部手機放低，閉埋眼，夜晚唔准出聲，唔好偷望。 |
+| begin | 天黑請閉眼。大家將部手機放低，閉埋眼，夜晚唔准出聲，唔好偷望。 — one phone (`passPhone`): 天黑請閉眼。部手機放喺枱中間，大家一隻手放喺枱上，閉埋眼，夜晚唔准出聲，唔好偷望。 |
 | doppelganger | 化身幽靈，請睜開眼。揀一個人，睇佢張牌，你就變成佢嘅角色；如果佢有夜晚行動，你即刻做。 |
 | doppelganger-minion | 如果化身幽靈複製咗爪牙，請睜開眼，睇邊個係狼人。其他人繼續閉眼。 |
 | werewolf | 化身幽靈，請閉眼。狼人，請睜開眼，睇下有冇其他狼人。如果淨係得你一隻，你可以睇中間一張牌。 |
@@ -224,11 +229,24 @@ config only, so a role sitting in the centre sounds exactly like one that is awa
 | insomniac | 酒鬼，請閉眼。失眠者，請睜開眼，睇返自己而家張牌有冇變。 |
 | doppelganger-insomniac | 失眠者，請閉眼。如果化身幽靈複製咗失眠者，請睜開眼，睇返自己而家張牌。 |
 | dawn | 化身幽靈，請閉眼。天光喇，大家睜開眼！由而家開始自由討論，限時 5 分鐘。夜晚完咗，唔准再睇自己張牌。 |
-| vote | 時間到！打開手機，揀你覺得係狼人嘅人。三、二、一，投票！ |
+| vote | 時間到！揀你覺得係狼人嘅人。三、二、一，投票！ — one phone: 時間到！部手機逐個交，揀你覺得係狼人嘅人，全部投完先一齊公開。 |
 | reveal | 全部人投晒票喇。{最高票嘅係阿明，佢死咗 / 平票，阿明、阿B 一齊死 / 冇人拎到兩票或以上，冇人死。}{獵人阿C開槍，帶走阿D。}{好人隊贏。} |
 
 (The Doppelgänger's `…-minion` sub-step has no 請閉眼 in front: it is her own role continuing. The `dawn` cue shows the
 discussion length of this game.) Cue ids: `on{gid}:night:{ix}:{step}`; `minMs` = clamp(length × 150 ms, 2.5 s, 9 s).
+
+**One phone in the middle (`passPhone`, re-run R3–R5).**
+- **Every role line calls the role last** (R4): the anonymous gate opens only when the cue is over, so a role told to open its
+  eyes at the start of its line reached for the phone and found 「📱 擺返中間 · 閉埋眼」 on it. The one-phone line says what
+  the role may do first and ends 「…預言家，請睜開眼，拎起部手機。」 — e.g. seer: 「守夜人，請閉眼。預言家：你可以睇一個人嘅牌，
+  或者睇中間兩張牌。預言家，請睜開眼，拎起部手機。」; the Doppelgänger's sub-steps end 「係嘅話，化身幽靈請睜開眼，拎起部手機。」.
+  Still the same text whether the role is dealt or in the centre.
+- **Dawn** (R3): the dawn cue only closes the last role's eyes — 「搗蛋鬼，請閉眼。大家繼續閉住眼，部手機擺返枱中間。」 — and the
+  dawn step stays `night` for its fixed window (+3 s), so the last holder puts the phone back before anybody looks. The
+  day's first line is then 「天光喇，大家睜開眼！由而家開始自由討論，限時 5 分鐘。夜晚完咗，唔准再睇自己張牌。」 (cue id
+  `on{gid}:dawn`; 下一步 during it skips the line first). The day clock starts with the day, as before.
+- **Vote** (R2, R5): 「時間到！部手機逐個交，揀你覺得係狼人嘅人。全部投完先好講，最後一齊公開。」, opening with 「夠鐘投票！」 when the
+  table (or the host) started the vote before the clock ran out.
 
 ### 3.4 `day`
 
@@ -238,6 +256,7 @@ discussion length of this game.) Cue ids: `on{gid}:night:{ix}:{step}`; `minMs` =
 | each seat | 「📓 你嘅夜晚記錄」 behind a cover: 「派牌：你本來係 🗡️ 強盜。」 + every note of the night (「強盜：你同 阿B 換咗牌，換到 🐺 狼人。」), and the warning 「⚠️ 呢度只係「派牌時係咩」同「夜晚見過咩」。你最後張牌可能已經被換咗，唔好當佢係你而家嘅角色。」 There is **no** "my current role" anywhere (research: never offer it) |
 | host | `＋60 秒` on the timer (max 6 presses; only the host seat is accepted). Pause and 「下一步」 (= start the vote now) are in the shell's ⋯ menu, and the day screen reminds the host: 「房主：想即刻投票？㩒右上角 ⋯ →「下一步」。」 |
 | everyone | 「🗳️ 我哋夠鐘投票」 — when **all** seats tap it, or the timer ends, or the host presses 下一步, the vote starts |
+| one phone in the middle | the table screen carries the timer (and the host's ＋60 秒), 「🗳️ 大家夠鐘投票」 and 「⭕ 全枱同意圈票（冇人死）」 — whole-table taps (`api.tableSend`, `seats` = every seat on the phone), locked while the 「擺返中間」 card is up (U5). Both end the talk for everybody, so both take two taps on a whole-table phone: 夠鐘投票 through `tableSend(…, { confirm })`, whose first tap arms 「再㩒一次：全枱都夠鐘？仲有 2:11」 (the time still on the clock, re-run R2), the circle through `api.confirm`. A seat picked by hand sees its 📓 and 「📱 想投票：擺返中間，喺枱面㩒「夠鐘投票」」, no per-seat button |
 
 ### 3.5 `vote`
 
@@ -250,6 +269,15 @@ When the last seat has voted the phase becomes `reveal` and all votes are public
 one vote on the next seat clockwise (everybody ends on exactly 1 vote → nobody dies). Agreeing never costs a ballot: if the
 circle falls through, everybody's own vote counts. Choosing a person leaves the circle. If everyone has decided but not all
 agreed, the agreers see 「圈票未成立：其他人已經揀咗人。你要自己揀一個人」 and the shared-phone focus asks them again.
+
+**One phone (`passPhone`, one-phone playtest #24).** Passing the phone round, a second hand-over for every agreer would cost a
+minute and still not be decided "together". So there: agreeing and a **fallback ballot** go in the same turn — 「⭕ 我同意圈票」,
+then pick a person as usual (「✓ 我同意圈票 — 都要揀一個做後備」; the ballot does not undo the agreement); `focus` is simply the
+seats that have not voted, so every seat has the phone once; if every present seat agreed the circle forms, otherwise the
+fallback ballots count (`ring.stuck` is never set; `ring.fallback: true` in the view). The table can also agree before the
+walk: 「⭕ 全枱同意圈票（冇人死）」 on the day's table screen of a whole-table phone (`{ type: 'ring', on: true, seats, table: true }`
+covering every present seat) goes straight to the circle. The 💡 line for an agreer says what "nobody dies" means
+(「冇人死：有狼喺玩家入面＝狼人隊贏；狼人全部喺中間先係好人贏」, #40), and the rules section says it in full.
 
 **💤 A seat that stops responding (decision D4).** The host marks it absent from the shell (`{ type: '@absent', pid }`; `@present`
 brings it back). For the rest of this game nothing waits for it: the deal starts the night once every *present* seat tapped 記住喇;
@@ -275,7 +303,9 @@ Everyone — seats and the table screen — sees the same screen, built to be re
 6. 夜晚記錄（邊個做咗乜）: collapsed — who looked at what, who swapped what.
 
 The host phone narrates the tally, deaths, Hunter shots and the winning side (§3.3). 「睇完整個結果」: a tap by the host (or
-by every seat, or 3 minutes) opens the results screen.
+by every seat, or 3 minutes) opens the results screen. On a shared phone nobody is 「你」 (#20): the banner reads 「🐺 開牌」 and
+no row says 「（你）」; the phone in the middle has 「大家睇完 ✓（一下就得）」 (two taps; `api.tableSend({ type: 'done' })`, whose
+`seats` include the host's seat when this is the host's phone, #5).
 
 ### 3.7 `over` and the results screen
 
@@ -385,21 +415,39 @@ and so no label. `rules.quick`: six short lines.
 
 ## 4. Single-device play (and paper mode)
 
-`meta.singleDevice = 'partial'`, no paper mode. With the whole game on one phone (`app.local`), the shell behaves like this:
+`meta.singleDevice = 'partial'`, no paper mode. With the whole game on one phone the shell's one-phone contract (DESIGN §7.1)
+does the hand-overs; this game adds:
 
-0. **defaults**: `config.defaults(n, prev, { singleDevice: true })` picks the slow pace (×1.5 on every window).
-1. **deal**: `focus.pids` shrinks as seats tap 記住喇, so the phone walks seat to seat behind a PassGate
-   (「交俾 阿B ・ 其他人唔好望」); the same for **vote**.
-2. **night**: the phone sits in the middle, everybody keeps their eyes closed. When a window opens with someone awake the
-   shell shows a gate 「預言家請拎起部手機」 (role, not name); that seat taps it, acts, and puts the phone back. Two awake
-   seats (the werewolves, the masons) look one after the other: the first uses 換人 ⇄ to hand over.
-3. **day / reveal**: the phone lies on the table. Everybody tapping 「夠鐘投票」 would mean passing the phone round, so on one phone the host starts the vote with ⋯ → 「下一步」 (or the timer runs out); the same menu entry opens the results after the reveal.
+0. **defaults**: `config.defaults(n, prev, { singleDevice: true })` picks the slow pace (×1.5 on every window) and sets
+   `passPhone` (+8 s on every role step, §2). **Narration (U1)**: `meta.eyesClosed: true`, so a whole-table phone offers 🔊 語音
+   and 📜 讀稿 only (讀稿 needs a reader who is not playing; the lobby says so). **Noise bed (U8)**: `meta.nightAmbient: true`,
+   so that phone plays a neutral noise under every night window (not in 靜音), the same at every step.
+1. **deal**: `focus = { pids: seats not ready, label: '睇牌' }`, so the phone walks seat to seat behind
+   「交俾 阿B ・ 其他人唔好望 ・ 睇牌」; the 「夜晚點玩？」 tip says how the one-phone night goes.
+2. **night**: the begin line asks for the phone in the middle and a hand on the table. Every step gets the anonymous gate
+   「預言家請拎起部手機」 (role, never a name) — also when the role is in the centre (a decoy nobody takes). The seat that takes it
+   acts, taps 「做完就㩒，部手機放返枱中間」 and puts the phone back. `view.step.windowMs` (fixed per step kind, pad included)
+   draws the bar from the window's real length even though the screen mounts after the gate, with 「仲有 N 秒」 beside it and
+   「⏰ 時間到 — 部手機擺返中間，閉眼」 when it runs out (#7). A lapsed ability's note says which (re-run R6): the big button
+   there means "done", so a seat that tapped it without acting chose not to (「強盜：你揀咗唔換牌。」, log 「…揀咗唔用能力」) and
+   one that never tapped ran out of time (「強盜：時間到，你今晚冇換到牌。」, log 「…時間到，冇用能力」). On phones of their own every
+   seat taps the big button as a decoy, so there the note stays 「今晚你冇確定（時間到或者唔想用）」. Every role line calls the role
+   last (§3.3), so its eyes open as the gate comes up.
+   **Two werewolves or two Masons** (a Doppelgänger who copied one with them) share ONE gate and ONE screen (U2): the team
+   once (「🐺 你哋係狼人 · 一齊醒：A、B」), one 📓 cover per seat with only its own notes (a Doppelgänger's copy stays behind
+   hers; the others look away), and one big button that acks for all of them (`seats`). None of them has a choice (a lone wolf
+   is alone by definition), and nobody leaves `focus` until the window ends.
+3. **dawn**: the dawn step keeps every eye closed for a fixed gap (+3 s) while the last holder puts the phone back; then the
+   shell puts the phone in the middle behind 「☀️ 天光喇」 — the same whoever woke last — and the day's first line opens eyes.
+4. **day / reveal**: the table screen is `view(state, null)` (`buildTable`: timer, role list, counts); on a shared phone it has
+   the whole-table taps of §3.4 / §3.6. **vote**: `focus = { pids: seats that have not voted, label: '投票 · 投完先好講' }`; the
+   shell gates every voter, also the one on screen; the ballot screen and the table screen ask for quiet until the last ballot
+   (「全部投完先好講」, re-run R5); on one phone agreeing to the circle comes with a fallback ballot (§3.5).
 
-What leaks, honestly: a step whose role is in the centre has nobody awake, so **no gate appears** (see framework request 1);
-and reaching for the phone is audible. Both only matter to people with open eyes, hence "everybody keeps their eyes closed",
-and why one phone each is recommended. The research's alternative for one phone (pass-around slots, resolve later) is not
-built: this engine runs the classic sequential night. Nothing else is device-specific: acting for a seat and the decoy tap
-are the same actions.
+What leaks, honestly: every gate looks the same and every step lasts the same, and the noise bed masks the reach; what is left
+is a hand that is not on the table. The research's alternative for one phone (pass-around slots, resolve later) is not built:
+this engine runs the classic sequential night (decision U8). Nothing else is device-specific: acting for a seat and the decoy
+tap are the same actions.
 
 ## 5. Engine
 
@@ -431,7 +479,7 @@ Doppelgänger card what it copied (a card that copied nothing is a Villager).
 | action | pid | when | rule |
 |---|---|---|---|
 | `{type:'ready'}` | seat | `deal` | once; all ready → `night` |
-| `{type:'ack'}` | seat | `night`, both stages | the decoy tap: marks the seat in `acked` (engine-internal, never counted in a view), changes nothing else |
+| `{type:'ack', seats?}` | seat | `night`, both stages | the decoy tap: marks the seat in `acked` (engine-internal, never counted in a view), changes nothing else; `seats` (a shared phone's combined screen, U2) marks every listed seat |
 | `{type:'copy', target}` | Doppelgänger | `doppelganger` window | another player; once |
 | `{type:'look-player', target}` | Seer, or Doppelgänger-Seer | window | another player; one look per step |
 | `{type:'look-centre', cards:[i,j]}` | Seer / Doppelgänger-Seer | window | two distinct of 0–2 |
@@ -439,11 +487,12 @@ Doppelgänger card what it copied (a card that copied nothing is a Villager).
 | `{type:'rob', target}` | Robber / Doppelgänger-Robber | window | another player |
 | `{type:'swap', a, b}` | Troublemaker / Doppelgänger-Troublemaker | window | two different players, neither is the actor |
 | `{type:'drunk-swap', card}` | Drunk / Doppelgänger-Drunk | window | 0–2 |
-| `{type:'ready-vote', on}` | seat | `day` | all seats on → `vote` |
-| `{type:'extend'}` | host seat | `day` | +60 s, at most 6 times; accepted from anyone only if no host is known |
-| `{type:'vote', target}` | seat | `vote` | another player; replaces the previous vote; leaves the ring; last vote → `reveal` |
+| `{type:'ready-vote', on, seats?}` | seat | `day` | `seats` (a whole-table tap, §7.1) sets every listed seat; all present seats on → `vote` |
+| `{type:'extend', seats?}` | host seat | `day` | +60 s, at most 6 times; from the host's seat or a tap whose `seats` include it; accepted from anyone only if no host is known |
+| `{type:'ring', on: true, seats, table: true}` | seat | `day`, `ringVote` | 「全枱同意圈票」: `seats` must cover every present seat → straight to the circle → `reveal` |
+| `{type:'vote', target}` | seat | `vote` | another player; replaces the previous vote; leaves the ring (not with `passPhone`: there it is the fallback ballot); last vote → `reveal` |
 | `{type:'ring', on}` | seat | `vote`, `ringVote` | all seats on → ring votes → `reveal` |
-| `{type:'done'}` | seat | `reveal` | the host seat (or every seat) → `over` |
+| `{type:'done', seats?}` | seat | `reveal` | marks the seat (and every listed seat); the host's seat among them (or every seat) → `over` |
 | `@cue-done {id}` | host | `deal`/`night` cue/`vote`/`reveal` | acknowledges the cue if the id matches; in a night cue it opens the window |
 | `@next` | host | any | acknowledges a pending cue first; then: deal → force night, cue → open window, window → settle and move on, day → vote, reveal → over |
 | `@void-round` | host | `deal` / `night` / `day` / `vote` | 呢局唔計 (§3.7a): straight to `over`, unscored; a seat sending it changes nothing |
@@ -456,14 +505,17 @@ The Doppelgänger uses the same action types for the copied role (`via: 'doppel'
 `enterWindow`: `acked` and `did` reset, `deadline = now + windowMs(cfg, step)` (see §3.2), the awake seats' information notes are
 written (werewolves, Minion, Masons, Insomniac, the two sub-steps). `advance` at the deadline (or `@next` in a window) runs
 `resolveWindow`: a Doppelgänger who never copied copies a random other player; a mandatory swap nobody made (Drunk,
-Doppelgänger-Drunk) is made at random (`auto: true`); every other unused ability becomes an `idle` note. Then the next step's
+Doppelgänger-Drunk) is made at random (`auto: true`); every other unused ability becomes an `idle` note (with `passPhone`
+also `why: 'declined'` when the seat tapped the big button while the ability was unused — `state.passed`, not the ack a copy
+implies — else `why: 'time'`). Then the next step's
 cue stage, or the day. `day`: `deadline = now + discussSec` (default by head-count). `reveal`: 3 minutes.
 
 ### `focus` and `autoAct`
 
-`focus`: `deal` → seats not ready · night window of a calling step → `{ pids: awake seats, anonymous: '預言家請拎起部手機' }` —
-**also with `pids: []`** when the role sits in the centre · cue stage, `begin`, `dawn` → null · `vote` → seats with no vote and no
-ring agreement (once only agreers are left, those) · everything else null.
+`focus`: `deal` → `{ pids: seats not ready, label: '睇牌' }` · night window of a calling step → `{ pids: awake seats, anonymous:
+'預言家請拎起部手機' }` — **also with `pids: []`** when the role sits in the centre — for the whole window · cue stage, `begin`,
+`dawn` → null · `vote` → `{ pids, label: '投票' }` (`'投票 · 投完先好講'` with `passPhone`): seats with no vote and no ring agreement (once only agreers are left,
+those; with `passPhone` simply the seats with no vote) · everything else null.
 
 `autoAct`: `deal` → ready · night: copy (random other), drunk (random centre), seer (random centre pair), everything else the
 harmless `ack` · `day` → ready-vote · `vote` → random other · `reveal` → done.
@@ -491,8 +543,9 @@ decoy assertion. The Troublemaker's list is all pairs of the others; the Seer's 
 Common: `seat, phase, n, title, subtitle, night, roleList [{role,count}], opts {loneWolf, ringVote, pace}, hint, deadline?, timerLabel?, absent [pids]`
 (the 💤 seats — every count below is of the seats the table still waits for; `my.absent` on that seat's own view);
 for a seat that has `my`: `hintRoleLabel` (the constant 「你派到嘅角色」 — the 💡 sheet's role heading).
-Per phase: `deal` `ready {done,total}`; `night` `step {ix,total,k,stage}` (no tap counter, §3.8); `day` `dayReady {done,total,mine}`,
-`canExtend`; `vote` `progress`, `ring {on,done,total,mine,stuck}`; `reveal`/`over` `reveal {…}` and `revealDone` — or, for a
+Per phase: `deal` `ready {done,total}`; `night` `step {ix,total,k,stage,windowMs}` (`windowMs` = the step kind's fixed length,
+pad included, the same in every view; no tap counter, §3.8); `day` `dayReady {done,total,mine}`,
+`canExtend`; `vote` `progress`, `ring {on,done,total,mine,stuck,fallback}`; `reveal`/`over` `reveal {…}` and `revealDone` — or, for a
 voided game, only `voided: true`.
 
 `my` (seats only): `dealt` (the viewer's own dealt role), `ready`/`acked`; `night: { awake, seen, info, ab, copied }` — `seen` =
@@ -597,10 +650,7 @@ win(village) = villageWins
 
 ## 8. Framework requests
 
-1. **Shared phone, empty step.** `room.filterFocus` returns `null` when none of a device's seats is in `focus.pids`, so on a
-   one-phone game a step whose role sits in the centre shows **no** 「請拎起部手機」 gate while a step with a live role does —
-   a tell for anyone with open eyes. Please keep `{ pids: [], anonymous }` for a device that holds at least one seat, and let
-   the play screen show the same gate for an empty `pids` (any seat on the device may tap it).
+1. ~~**Shared phone, empty step.**~~ Done: `filterFocus` keeps `{ pids: [], anonymous }` and the shell shows the same (decoy) gate.
 2. ~~Stall detection in timed phases~~ — done with `engine.blocking` (§5). Without it the session fell back to `focus` /
    `legalActions` and flagged a dropped phone mid-discussion (and, in a night window longer than the stall limit, exactly
    the awake seat).
@@ -613,3 +663,38 @@ win(village) = villageWins
    header lines. Support for `{ h: 'title' }` entries (or `result.sections`) would render them as headings.
 5. **Cover has `openSound: 'none'`** (used for every night cover so peeking is silent); if the component ever drops that prop,
    the night would start to click.
+8. **「⏰ 時間到」 on the dim (one-phone #7).** The seat's own screen says 「⏰ 時間到 — 部手機擺返中間，閉眼」 only if its clock
+   reaches zero before the host moves on — on the whole-table phone (the host itself) a split second. Request: when a shared
+   phone goes to the middle at the end of an anonymous step, let the opaque dim read 「⏰ 時間到」 for a few seconds, on every
+   shared phone and step alike (real gate or decoy).
+9. **VotePanel local pick (one-phone C7, multi-phone only).** On one phone each, 「✓ 我同意圈票」 stays lit after a person is
+   picked but before 確定 (the agreement is dropped only when the ballot lands). An `onPick(pid | null)` callback on `VotePanel`
+   would let the ring button untick the moment a person is picked.
+
+## 9. One phone in the middle (2026-10-04 UTC) — what the one-phone playtest changed
+
+From `docs/playtest/single/onuw.md` (C1–C12) and the cross-game summary (decisions U1, U2, U5, U6, U8):
+
+| finding | change |
+|---|---|
+| C1 / C2 dawn on the Robber's screen, ungated first ballot | shell (table mode, #2 gates); the vote focus carries `label: '投票'` (#33) |
+| C3 both night actions lapsed | hidden `passPhone`: +8 s on every role step (U6); `view.step.windowMs`; bar with 「仲有 N 秒」 / 「⏰ 時間到…」; lapse note 「今晚你冇確定（時間到或者唔想用）」 |
+| C4 靜音 / 讀稿 on one phone | `meta.eyesClosed: true` (U1); the 「用一部手機玩」 rules rewritten; one-phone night help lines |
+| C5 two wolves / Masons | one combined screen, one 📓 per seat, one tap acks for all (`seats`, U2) |
+| C6 「你贏咗」 / 「（你）」 | none on a shared phone (🐺 開牌) |
+| C7 the ring vote costs a second hand-over | one phone: agree + fallback ballot in the same turn; 「⭕ 全枱同意圈票」 on the day's table screen |
+| C8 夠鐘投票 / 睇完 need every seat | `ready-vote` / `done` / `extend` take `seats`; the table screen's 「大家夠鐘投票」 and 「大家睇完 ✓（一下就得）」 (both two taps since the re-run) |
+| C9 own-phone wording, stale one-phone rules | quick line, flow step 2, deal tip, decoy sub-line, vote line, begin line, 「用一部手機玩」 |
+| C10 reaching for the phone is heard | `meta.nightAmbient: true` (U8) and 「一隻手放喺枱上」 in the begin line |
+| C12 what "nobody dies" means | behind 💡 (the agreer's hint) and in 📖 投票同死亡 |
+
+### One-phone re-run (2026-10-05 UTC, `docs/playtest/single/onuw-rerun.md`)
+
+| finding | change |
+|---|---|
+| R2 one tap ends the discussion | `tableSend(…, { confirm })` with the time left (「再㩒一次：全枱都夠鐘？仲有 2:11」); label 「🗳️ 大家夠鐘投票」; an early vote's cue opens 「夠鐘投票！」; rules 「要㩒兩下先算」 |
+| R3 dawn says 睜開眼 the instant the last window ends | `passPhone`: dawn cue 「…請閉眼。大家繼續閉住眼，部手機擺返枱中間。」, the dawn step stays `night` (+3 s, `PASS_DAWN_PAD_MS`), 「天光喇，大家睜開眼！…」 is the day's first cue |
+| R4 the called role is told to put the phone back during its cue | `passPhone`: every role line calls the role last (「…請睜開眼，拎起部手機。」), so the gate is up as its eyes open |
+| R5 the one-by-one vote never asks for quiet | vote cue, gate label 「投票 · 投完先好講」, ballot and table screens 「全部投完先好講」 |
+| R6 the lapse note cannot tell declined from time-out | `passPhone`: `idle.why` = `declined` (a big-button tap with the ability unused, `state.passed`) / `time`; note and public log say which |
+| R1, R7, R8 | shell (walk start, 💡 roles in play from `view.roleList`, table card) |

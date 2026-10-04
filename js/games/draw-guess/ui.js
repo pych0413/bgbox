@@ -58,7 +58,17 @@ export function mount(root, api) {
   const { Cover, Timer, Canvas } = api.components;
   const nameOf = (pid) => api.players.find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => api.players.find((p) => p.id === pid)?.color ?? 'var(--cheese, #f5c518)';
-  const seatName = (pid, me) => nameOf(pid) + (pid === me ? '（你）' : '');
+  // §7.1: a shared phone (2+ seats) is read by more than its holder — never 「你」, the word only under a held cover,
+  // the canvas as big as it gets; a whole-table phone also lies flat in the middle while the drawer draws (#16)
+  const shared = () => api.shared === true;
+  const wholeTable = () => api.wholeTable === true;
+  const isMe = (pid, me) => pid != null && pid === me && !shared();
+  // U10 (re-run N1): the game clock — api.now(), except while the room holds it at a one-phone gate: then the time it
+  // stands at, so every countdown here stands still with it (the shared Timer does this by itself)
+  const clockNow = () => (typeof api.clockNow === 'function' ? api.clockNow() : api.now());
+  const heldNow = (c) => !!c?.clockHeld && !c?.paused;
+  const HELD = '⏸ 等緊接手';
+  const seatName = (pid, me) => nameOf(pid) + (isMe(pid, me) ? '（你）' : '');
 
   let view = null;
   let ctx = {};
@@ -122,7 +132,7 @@ export function mount(root, api) {
     scoreSig = sig;
     if (v.teams) {
       scoreStrip.replaceChildren(...v.teams.map((t) => h('div', {
-        class: 'dg-score team' + (t.i === v.turn.team ? ' now' : '') + (t.i === v.myTeam ? ' me' : ''), role: 'listitem',
+        class: 'dg-score team' + (t.i === v.turn.team ? ' now' : '') + (t.i === v.myTeam && !shared() ? ' me' : ''), role: 'listitem',
       },
       h('span', { class: 'dg-score-name', text: S.teamLabel(t.i) }),
       h('span', { class: 'dg-score-n', text: String(t.score) }),
@@ -135,7 +145,7 @@ export function mount(root, api) {
     scoreStrip.replaceChildren(...api.players.filter((p) => p.id in v.scores).map((p) => {
       const d = v.phase === 'reveal' ? delta.get(p.id) : 0;
       return h('div', {
-        class: 'dg-score' + (p.id === v.me ? ' me' : '') + (p.id === v.turn.drawer && v.phase !== 'over' ? ' drawing' : '')
+        class: 'dg-score' + (isMe(p.id, v.me) ? ' me' : '') + (p.id === v.turn.drawer && v.phase !== 'over' ? ' drawing' : '')
           + (v.phase === 'over' && v.scores[p.id] === best && best > 0 ? ' lead' : ''),
         role: 'listitem', style: `--seat:${p.color ?? '#f5c518'}`,
       },
@@ -157,14 +167,14 @@ export function mount(root, api) {
     let p = props;
     let frozen = null;
     let wasPaused = false;
-    const left = () => (p.deadline == null ? null : Math.max(0, (p.deadline - p.now()) / 1000));
+    const left = () => (p.deadline == null ? null : Math.max(0, (p.deadline - clockNow()) / 1000));
     const paint = () => {
       const rem = p.paused && frozen != null ? frozen : left();
       clock.textContent = rem == null ? '–:––' : `${Math.floor(Math.ceil(rem) / 60)}:${String(Math.ceil(rem) % 60).padStart(2, '0')}`;
       const last = Math.min(...(p.warnAt?.length ? p.warnAt : [10]));
       root.classList.toggle('urgent', rem != null && rem > 0 && rem <= last);
       root.classList.toggle('done', rem === 0);
-      root.classList.toggle('paused', !!p.paused);
+      root.classList.toggle('paused', !!p.paused || !!p.heldNow);
     };
     const iv = setInterval(paint, 250);
     const api2 = {
@@ -198,7 +208,9 @@ export function mount(root, api) {
         const k = `${v.phase}|${v.sub}|${label}|${v.guessMode}`;
         if (t && k !== key) { t.destroy(); t = null; }
         key = k;
-        const props = { deadline: v.deadline, now: api.now, label, paused: !!c?.paused, warnAt };
+        // the held clock (U10): the shared Timer freezes by itself; say so explicitly too, at the room's time
+        const held = heldNow(c) ? (Number.isFinite(c.clockHeldAt) ? c.clockHeldAt : true) : undefined;
+        const props = { deadline: v.deadline, now: api.now, label, paused: !!c?.paused, warnAt, held, heldNow: heldNow(c) };
         if (!t) { t = v.guessMode === 'typed' ? silentClock(props) : Timer(props); host.append(t.el); } else t.update(props);
       },
       destroy() { t?.destroy(); host.remove(); },
@@ -213,12 +225,16 @@ export function mount(root, api) {
     const el = h('div', { class: 'dg-count' });
     let deadline = null;
     let paused = false;
+    let held = false;
     let iv = null;
     let fmt = label;
     const paint = () => {
       if (deadline == null || paused) return;
-      const n = Math.max(0, Math.ceil((deadline - api.now()) / 1000));
-      el.textContent = typeof fmt === 'function' ? fmt(n) : `${fmt} · ${n} 秒`;
+      // while the room holds the clock at a gate (U10) the count stands still at the held time, and says why
+      const n = Math.max(0, Math.ceil((deadline - clockNow()) / 1000));
+      const base = typeof fmt === 'function' ? fmt(n) : `${fmt} · ${n} 秒`;
+      el.textContent = held ? `${base} · ${HELD}` : base;
+      el.classList.toggle('held', held);
     };
     return {
       el,
@@ -226,6 +242,7 @@ export function mount(root, api) {
         if (nextLabel) fmt = nextLabel;
         deadline = v.deadline ?? null;
         paused = !!c?.paused;
+        held = heldNow(c);
         el.hidden = deadline == null;
         paint();
         if (!iv) iv = setInterval(paint, 500);
@@ -257,7 +274,7 @@ export function mount(root, api) {
     return { el, set(s) { t.textContent = s; } };
   };
 
-  /** The canvas for this seat. The drawer gets full tools; everyone else only watches. */
+  /** The canvas for this seat. The drawer gets full tools; everyone else only watches. `extra`: more classes. */
   function makeCanvas(role, typedGuesser, extra = '') {
     const cls = `dg-canvas${role === 'drawer' ? ' drawer' : typedGuesser ? ' typed' : ''}${extra ? ` ${extra}` : ''}`;
     const host = h('div', { class: cls });
@@ -275,16 +292,23 @@ export function mount(root, api) {
     };
   }
 
-  /** The word on the drawer's phone. Hidden until asked for: paper mode = hold (Cover), canvas mode = tap (auto-hides). */
+  /**
+   * The word on the drawer's phone. Hidden until asked for: paper mode = hold (Cover), canvas mode = tap (auto-hides).
+   * A shared phone lies face up for the table (#22): there it is always the hold cover — the word shows only while a
+   * finger is down, and a hand can shield it — never the tap chip that opens it big for 2.5 s.
+   */
   function makeWordPeek(paper) {
     const wordEl = h('div', { class: 'dg-word-text' });
     const altEl = h('div', { class: 'dg-word-alt' });
     const metaEl = h('div', { class: 'dg-word-meta' });
-    if (paper) {
+    const faceUp = shared();
+    if (paper || faceUp) {
       const front = h('div', { class: 'dg-word-face' }, wordEl, altEl, metaEl);
-      const props = { front, backArt: '🙈', backLabel: '㩒住睇個詞', lockMode: 'none', ariaLabel: '㩒住睇個詞' };
+      const label = faceUp ? '拎起部機，㩒住睇個詞' : '㩒住睇個詞';
+      const props = { front, backArt: '🙈', backLabel: label, lockMode: 'none', ariaLabel: label };
       const cover = Cover(props);
       cover.el.classList.add('dg-word-cover');
+      if (faceUp && !paper) cover.el.classList.add('slim');   // keeps the canvas big
       return {
         el: cover.el,
         set(word) {
@@ -377,9 +401,12 @@ export function mount(root, api) {
         timer.update(v, c, [5]);
         mod.update(v, c);
         const o = v.choose?.offers ?? [];
+        // one phone for the whole table (#16): it goes flat in the middle once the word is picked
         note.textContent = v.drawMode === 'paper'
-          ? '先攞定張白紙同支筆。揀完就即刻計時，其他人睇唔到你揀咗乜。'
-          : '揀完就即刻計時，其他人隨即睇到你畫。難啲嘅詞分數高啲。';
+          ? (wholeTable() ? '先攞定紙筆。揀好就將部手機擺喺枱中間計時，其他人睇唔到你揀咗乜。'
+            : '先攞定張白紙同支筆。揀完就即刻計時，其他人睇唔到你揀咗乜。')
+          : (wholeTable() ? '揀好就將部手機平放喺枱中間，大家望住你畫。難啲嘅詞分數高啲。'
+            : '揀完就即刻計時，其他人隨即睇到你畫。難啲嘅詞分數高啲。');
         const paused = !!c?.paused;
         const sig = JSON.stringify([o, v.scoring, guard.busy, paused]);
         if (sig !== offerSig) {
@@ -499,7 +526,7 @@ export function mount(root, api) {
         let latest = feed.slice().reverse();
         if (closeFirst) latest = [...latest.filter(near), ...latest.filter((g) => !near(g))];
         const rows = latest.slice(0, isDrawer ? 20 : 12).map((g) => {
-          const mine = g.pid === v.me;
+          const mine = isMe(g.pid, v.me);
           let text;
           let cls = g.kind;
           if (g.kind === 'right') text = isDrawer ? '✅ 估中（已計）' : '✅ 估中咗！';
@@ -604,7 +631,7 @@ export function mount(root, api) {
         const ruling = p.sub === 'ruling';
         const undoable = grace || buzzer;
         head.textContent = ruling ? '🚩 等主持裁決…'
-          : grace ? '✅ 確認緊 — 仲有人同時估中就加埋，揀錯可以撤銷'
+          : grace ? '✅ 仲有人估中？一齊㩒 · ↩ 撤銷'
             : buzzer ? '⏰ 時間到 — 最後一刻有人講啱，仲㩒得到'
               : '邊個估中？㩒佢個名';
         head.classList.toggle('hot', grace || buzzer);
@@ -646,7 +673,10 @@ export function mount(root, api) {
     const chipRow = h('div', { class: 'dg-hintrow' }, catChip, solvedRow);
     const peek = isDrawer ? makeWordPeek(paper) : null;
     const chips = isDrawer && !typed ? guesserChips() : null;
-    const canvas = !paper ? makeCanvas(role, typed && canGuess) : null;
+    // a shared phone: the table guesses from the drawer's own screen, so its canvas takes the full width and the name
+    // chips go under it (the drawer reaches them after the shout) — D9
+    const big = isDrawer && shared();
+    const canvas = !paper ? makeCanvas(role, typed && canGuess, big ? 'table' : '') : null;
     const input = canGuess && typed ? guessInput() : null;
     const feed = typed ? makeFeed(isDrawer, (v) => v.phase === 'play' && v.sub === 'run') : null;
     const foul = !isDrawer ? foulButton() : null;
@@ -668,9 +698,10 @@ export function mount(root, api) {
     ruling.el,
     mask.el, chipRow,
     peek?.el,
-    chips?.el,
+    big ? null : chips?.el,
     input?.el, solvedBlock,
     canvas?.el,
+    big ? chips?.el : null,
     feed?.el,
     prompt,
     foul?.el,
@@ -701,11 +732,16 @@ export function mount(root, api) {
         if (input) input.el.hidden = solved;
         solvedBlock.hidden = !(canGuess && solved);
         const sub = p.sub;
+        const shout = `睇住${paper ? '張紙' : '個畫板'}，大聲講出你嘅答案，畫家會㩒你個名。`;
         prompt.textContent = isDrawer
-          ? (paper ? '用紙筆畫，唔准講嘢、寫字同數字。' : '喺畫板上畫，唔准講嘢、寫字同數字。')
+          ? (wholeTable()
+            ? (paper ? '部手機擺喺中間計時，用紙筆畫 · 唔准講嘢、寫字同數字。' : '部手機平放喺枱中間畫 · 唔准講嘢、寫字同數字。')
+            : (paper ? '用紙筆畫，唔准講嘢、寫字同數字。' : '喺畫板上畫，唔准講嘢、寫字同數字。'))
           : role === 'guesser'
-            ? (solved ? '' : typed ? '' : `睇住${paper ? '張紙' : '個畫板'}，大聲講出你嘅答案，畫家會㩒你個名。`)
-            : role === 'rival' ? `呢輪係 ${S.teamLabel(v.turn.team)} 畫同估，你唔使估；見到犯規可以㩒 🚩。` : '旁觀緊。';
+            ? (solved ? '' : typed ? '' : shout)
+            : role === 'rival' ? `呢輪係 ${S.teamLabel(v.turn.team)} 畫同估，你唔使估；見到犯規可以㩒 🚩。`
+              // the phone lying in the middle (the table screen of a shared phone) is everybody's, not a spectator's
+              : api.atTable === true && shared() && !typed ? shout : '旁觀緊。';
         prompt.hidden = !prompt.textContent || (sub === 'grace' && isDrawer) || sub === 'ruling';
         foul?.update(p.foul, !!p.foul.can);
         if (abandon) { abandon.el.hidden = !(sub === 'run' || sub === 'buzzer'); abandon.paint(); }
@@ -715,6 +751,15 @@ export function mount(root, api) {
         timer.destroy(); peek?.destroy(); canvas?.destroy(); input?.destroy(); foul?.destroy(); abandon?.destroy(); mod.destroy();
       },
     };
+  }
+
+  /**
+   * 「下一個畫：小美」. On a shared phone the reveal and the standings are the only screens the table sees between
+   * turns (the waiting screen's queue is never on show there), so they also carry 「之後：大熊 → 阿珍」 (D8).
+   */
+  function nextLine(v, pid) {
+    const after = shared() ? (v.upNext ?? []).slice(1) : [];
+    return `下一個畫：${seatName(pid, v.me)}${after.length ? `（之後：${after.map(nameOf).join(' → ')}）` : ''}`;
   }
 
   // ---------- ranking rows (standings between cycles, and the end) ----------
@@ -747,7 +792,7 @@ export function mount(root, api) {
         head.textContent = `第 ${st.cycle}/${st.cycles} 圈完 · 而家排名`;
         const s = JSON.stringify([v.scores, v.teams, v.me]);
         if (s !== sig) { sig = s; list.replaceChildren(...rankRows(v)); }
-        next.textContent = v.upNext?.length ? `下一個畫：${seatName(v.upNext[0], v.me)}` : '';
+        next.textContent = v.upNext?.length ? nextLine(v, v.upNext[0]) : '';
         next.hidden = !next.textContent;
         count.update(v, c);
       },
@@ -824,9 +869,9 @@ export function mount(root, api) {
         }
         // who draws next — in bold on that phone, so nobody laughing at the reveal misses their 20 s pick
         const nextPid = rv.ruling || v.last ? null : v.upNext?.[0];
-        next.textContent = nextPid ? `下一個畫：${seatName(nextPid, v.me)}` : '';
+        next.textContent = nextPid ? nextLine(v, nextPid) : '';
         next.hidden = !nextPid;
-        next.classList.toggle('mine', !!nextPid && nextPid === v.me);
+        next.classList.toggle('mine', isMe(nextPid, v.me));
         mod.update(v, c);
       },
       destroy() { cancel(lateHandle); stopLate(); timer.destroy(); canvas?.destroy(); foul?.destroy(); mod.destroy(); },
@@ -869,7 +914,7 @@ export function mount(root, api) {
     if (v.phase === 'play' && cur.solved > b.solved) sound('reveal');
     if (v.phase === 'play' && cur.hints > b.hints) sound('join');
     if (v.phase === 'reveal' && b.phase === 'play' && v.reveal) {
-      const mineSolved = v.reveal.solvers.some((x) => x.pid === v.me);
+      const mineSolved = v.reveal.solvers.some((x) => isMe(x.pid, v.me));
       if (v.reveal.outcome === 'solved') sound(mineSolved ? 'win' : 'reveal');
     }
   }

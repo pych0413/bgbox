@@ -47,6 +47,10 @@ const TIE_RULES = ['must-guess', 'escape', 'revote'];
 const GUESS_MODES = ['spoken', 'typed'];
 const END_MODES = ['target', 'rounds'];
 const FIRST_MODES = ['auto', 'random', 'qm'];
+// U7 (one-phone playtest): 'ballot' = everyone picks on a phone, in secret (one phone: in turn, each behind a hand-over
+// card); 'point' = 一齊指 — a 3-2-1 count, everybody points at once, one person enters who pointed at whom
+const VOTE_MODES = ['ballot', 'point'];
+export const COUNT_MS = 3000;         // 一齊指: 「三、二、一」 runs this long after the tap, then 「指！」
 const LEVEL_IDS = [1, 2, 3];
 
 // The categories of js/data/draw-words.js that make a drawable, concrete title. The bank also has charades-style
@@ -193,10 +197,10 @@ export const meta = {
 
 export const rules = {
   quick: [
-    '每輪一個題目：真畫家知，假畫家淨係知主題。',
+    '每局一個題目：真畫家知，假畫家淨係知主題。',
     '順時針輪流，每人畫一筆，一共畫兩圈。',
     '畫到令真畫家睇得明，但唔好太明顯。',
-    '畫完同時投票，揪出邊個係假畫家。',
+    '畫完一齊投票（或者一齊指），揪出邊個係假畫家。',
     '揪到假畫家，佢仲有一次機會估題目。',
     '假畫家贏 +2（有出題者，佢都 +2）；真畫家贏每人 +1。',
   ],
@@ -213,18 +217,18 @@ export const rules = {
   ],
   sections: [
     { title: '玩法流程', body:
-      '1. 每輪有一個主題（大家都知）同一個題目（真畫家先知）。有人出題就由佢打；冇人出題就由手機抽。\n'
+      '1. 每局有一個主題（大家都知）同一個題目（真畫家先知）。有人出題就由佢打；冇人出題就由手機抽。\n'
       + '2. 每個畫家㩒住張卡睇：真畫家見到題目，假畫家見到 ✕。睇完㩒「睇完喇」，齊人先開始畫。\n'
       + '3. 順時針輪流，每人一筆（一筆過，筆離開就算完），畫兩圈。用自己嘅顏色，所以邊筆係邊個畫一睇就知。\n'
-      + '4. 畫完同時投票，揀你覺得係假畫家嘅人（唔可以投自己，出題者唔投）。\n'
+      + '4. 畫完一齊投票，揀你覺得係假畫家嘅人（唔可以投自己，出題者唔投）：各自喺手機秘密投，或者「一齊指」— 數三、二、一，大家同時指，一個人㩒結果。\n'
       + '5. 揭曉票數（邊個投邊個會留喺結果度）；假畫家被揪出就有一次機會估題目。\n'
-      + '6. 揭曉題目、假畫家同分數；全部人㩒「睇完」就開下一輪。' },
+      + '6. 揭曉題目、假畫家同分數；全部人㩒「睇完」就開下一局。' },
     { title: '兩種畫法', body:
-      '📱 手機畫板：畫喺手機上，其他人即時睇到；一筆太短（碰一碰）唔算，可以再畫。\n'
+      '📱 手機畫板：畫喺手機上，大家一齊睇住（一部手機就擺喺中間輪流畫）；一筆太短（碰一碰）唔算，可以再畫。\n'
       + '📝 實體紙筆：用真紙真筆畫，手機只負責派題、報「輪到邊個（邊個顏色）」同第幾圈，畫完嗰個㩒「畫完」。' },
     { title: '出題者', body:
       '「手機出題」：手機由詞庫抽一個題目，主題係詞庫嘅類別，人人都畫、人人都投票。\n'
-      + '「輪流有人出題」：出題者打主題同題目（可以㩒 🎲 由詞庫抽一個再改），佢唔畫、唔投票，但知道假畫家係邊個。每輪向左傳。\n'
+      + '「輪流有人出題」：出題者打主題同題目（可以㩒 🎲 由詞庫抽一個再改），佢唔畫、唔投票，但知道假畫家係邊個。每局向左傳。\n'
       + '主題唔可以包住題目（例如主題「獅子」題目「獅子」）。' },
     { title: '投票同平票', body:
       '票數最高嘅人就係被揪出嘅人。平票點算由設定決定：\n'
@@ -233,19 +237,25 @@ export const rules = {
       + '・民間玩法：平票再投一次，只有冇被指嘅人投，只可以揀平票嘅人；再平就照現行規則。' },
     { title: '估題目', body:
       '假畫家被揪出，有且只有一次機會估題目。估中，假畫家贏；估錯，真畫家贏。\n'
-      + '「開口講」：佢大聲講，出題者（冇出題者就係房主）㩒啱／錯。\n'
+      + '「開口講」：佢大聲講，出題者（冇出題者就由手機指定一個人，通常係房主）㩒啱／錯。\n'
       + '「打字」：佢喺手機打，同詞庫答案（包括近義寫法）一樣就自動啱；唔一樣就由出題者／房主決定算唔算。' },
     { title: '計分同贏', body:
       '・假畫家冇被揪出，或者被揪出但估中：假畫家 +2，出題者（如果有）+2。\n'
       + '・假畫家被揪出而且估錯：每個真畫家 +1，假畫家同出題者 0。\n'
-      + '・先到目標分數（預設 5 分）贏；同一輪有幾個人超過，最高分贏，同分就一齊贏。\n'
-      + '・亦可以改做打固定輪數，玩完比總分。\n'
-      + '・「唔計分」（新版盒嘅玩法）：每輪淨係分邊隊贏；打完指定輪數，贏得最多輪嘅人贏。' },
+      + '・先到目標分數（預設 5 分）贏；同一局有幾個人超過，最高分贏，同分就一齊贏。\n'
+      + '・亦可以改做打固定局數，玩完比總分。\n'
+      + '・「唔計分」（新版盒嘅玩法）：每局淨係分邊隊贏；打完指定局數，贏得最多局嘅人贏。' },
     { title: '有人部手機冇電', body:
-      '房主可以㩒「呢鋪唔計」：呢輪作廢、冇人得分，換下一個出題者重新派過題目。輪數照計返。\n'
-      + '睇緊結果嗰陣，呢輪已經計咗分，唔可以作廢；大家㩒「睇完」就得。\n'
+      '房主可以㩒「呢鋪唔計」：呢局作廢、冇人得分，換下一個出題者重新派過題目。局數照計返。\n'
+      + '睇緊結果嗰陣，呢局已經計咗分，唔可以作廢；大家㩒「睇完」就得。\n'
       + '有人走開咗：房主可以將佢設做「唔喺度」（💤）。輪到佢畫就跳過，佢唔使投票，亦唔會再做假畫家或者出題者；'
-      + '如果佢係今輪嘅假畫家（未被揪出）或者出題者，呢輪就唔計，重新嚟過。' },
+      + '如果佢係今局嘅假畫家（未被揪出）或者出題者，呢局就唔計，重新嚟過。' },
+    { title: '一部手機玩', body:
+      '派卡逐個傳部機睇，每次都有交接卡。\n'
+      + '輪到邊個畫，部機擺喺枱中間，佢㩒一下就畫，大家一齊睇住；交接卡唔會冚住幅畫。\n'
+      + '畫完部機擺喺中間，大家睇清楚幅畫先投票。預設「一齊指」：㩒「3、2、1」，數到「指」大家同時指，一個人㩒邊個指邊個。'
+      + '揀咗各自投就輪流投，全部投完先好講。\n'
+      + '開口估嗰陣部機擺喺中間俾假畫家睇幅畫，答案冚住；佢講完，判斷嗰個人先㩒住睇答案。' },
     { title: '小貼士', body:
       '・真畫家：第一筆唔好太明顯，細節留返後面；睇吓邊個畫得似是而非。\n'
       + '・假畫家：先睇人哋畫乜，筆劃盡量延伸前面嘅線，唔好第一個落筆太具體。\n'
@@ -259,6 +269,9 @@ const DEFAULTS = Object.freeze({
   draw: 'phone', qm: 'app', laps: 2, tieRule: 'must-guess', guess: 'spoken', scoring: 'points',
   endMode: 'target', target: 5, rounds: 0, first: 'qm', turnSecs: 0, antiStreak: false,
   topics: Object.freeze({ cats: Object.freeze([]), levels: Object.freeze([]) }),
+  vote: 'ballot',
+  // hidden (no form field): set by config.defaults from env.singleDevice — one phone passed round the table (#3)
+  passPhone: false,
 });
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -293,7 +306,8 @@ function keyOk(key, v) {
     case 'scoring': return SCORING_MODES.includes(v);
     case 'endMode': return END_MODES.includes(v);
     case 'first': return FIRST_MODES.includes(v);
-    case 'antiStreak': return typeof v === 'boolean';
+    case 'vote': return VOTE_MODES.includes(v);
+    case 'antiStreak': case 'passPhone': return typeof v === 'boolean';
     case 'topics':
       if (Array.isArray(v)) return allStrings(v);
       return isObj(v) && ['cats', 'categories'].every((k) => v[k] === undefined || allStrings(v[k]))
@@ -346,14 +360,18 @@ export const config = {
   /**
    * Recommended setup for n players. Keeps every taste from `prev` (the last game) that still fits the head-count.
    * `env.singleDevice` (one phone holds every seat): the app is the question master (a QM on a passed-round phone
-   * has nobody to hide the fake from) and there is no stroke clock (handing the phone over eats into it).
+   * has nobody to hide the fake from), there is no stroke clock (handing the phone over eats into it), the vote is
+   * 一齊指 (U7: no hand-over per ballot, nobody hears early voters), and the hidden `passPhone` tells the engine and
+   * its cues that the phone goes round (a shared look at the picture before secret ballots). A later room with
+   * several phones gets the multi-phone defaults back.
    */
   defaults(n, prev, env) {
     // `first` stays as asked even without a QM: the official 「出題者揀」 is what you get when you switch to a QM game
     // (the engine's norm() treats it as `auto` while there is no QM)
     const c = clean(prev);
     if (c.qm === 'player' && n < MIN_ARTISTS + 1) c.qm = 'app';
-    if (env && env.singleDevice) { c.qm = 'app'; c.turnSecs = 0; }
+    if (env && env.singleDevice) { c.qm = 'app'; c.turnSecs = 0; c.vote = 'point'; c.passPhone = true; }
+    else if (env && c.passPhone) { c.vote = 'ballot'; c.passPhone = false; }
     return c;
   },
 
@@ -369,13 +387,13 @@ export const config = {
       out.push({ id: 'host', label: '輪流出題', reason: '官方玩法：輪流做出題者，佢唔畫，但知邊個係假畫家', cfg: { qm: 'player' } });
     }
     out.push(
-      { id: 'quick', label: '快玩', reason: '時間唔多：淨係玩 3 輪，比總分', cfg: { scoring: 'points', endMode: 'rounds', rounds: 3 } },
-      { id: 'noscore', label: '唔計分', reason: '新版盒玩法：每輪淨係分勝負，每人一輪', cfg: { scoring: 'none', rounds: 0 } },
+      { id: 'quick', label: '快玩', reason: '時間唔多：淨係玩 3 局，比總分', cfg: { scoring: 'points', endMode: 'rounds', rounds: 3 } },
+      { id: 'noscore', label: '唔計分', reason: '新版盒玩法：每局淨係分勝負，每人一局', cfg: { scoring: 'none', rounds: 0 } },
     );
     return out;
   },
 
-  validate(cfg, n) {
+  validate(cfg, n, env) {
     const warnings = [];
     if (!Number.isInteger(n) || n < meta.players[0] || n > meta.players[1]) {
       return { ok: false, message: `假畫家要 ${meta.players[0]}–${meta.players[1]} 個人玩。`, warnings };
@@ -383,8 +401,10 @@ export const config = {
     const c = isObj(cfg) ? cfg : {};
     const label = {
       draw: '畫法', qm: '出題方式', laps: '畫幾圈', tieRule: '平票點算', guess: '估題目方式', scoring: '計分', endMode: '結束方式',
-      target: '目標分數', rounds: '輪數', first: '邊個先畫', turnSecs: '每筆限時', antiStreak: '假畫家唔連續做', topics: '題目類別',
+      target: '目標分數', rounds: '局數', first: '邊個先畫', turnSecs: '每筆限時', antiStreak: '假畫家唔連續做', topics: '題目類別',
+      vote: '投票方式', passPhone: '一部手機',
     };
+    if (env && env.singleDevice && c.vote !== 'point') warnings.push('一部手機建議揀「一齊指」：唔使逐個傳部機投票，亦冇人聽到前面點投');
     for (const key of Object.keys(DEFAULTS)) {
       if (key in c && !keyOk(key, c[key])) return { ok: false, message: `「${label[key]}」設定唔啱。`, warnings };
     }
@@ -402,7 +422,7 @@ export const config = {
     if (m.tieRule === 'escape' && a <= 5) warnings.push('舊版規則（平票當冇揪到）人少嗰陣好偏幫假畫家');
     if (a * m.laps > 24) warnings.push(`一共 ${a * m.laps} 筆，會畫好耐`);
     if (m.endMode === 'target' && m.target > 8) warnings.push('目標分數高，會玩好耐');
-    if (m.endMode === 'rounds' && totalRoundsFor(m, n) > 12) warnings.push(`一共 ${totalRoundsFor(m, n)} 輪，會玩好耐`);
+    if (m.endMode === 'rounds' && totalRoundsFor(m, n) > 12) warnings.push(`一共 ${totalRoundsFor(m, n)} 局，會玩好耐`);
     if (m.turnSecs > 0 && m.turnSecs < 5) warnings.push('每筆限時太短，未必畫得切');
     if (m.antiStreak && a <= 3) warnings.push('3 個畫家嘅時候，「唔連續做」唔會生效');
     return { ok: true, message: '', warnings };
@@ -413,7 +433,7 @@ export const config = {
     const a = artistsFor(m, n);
     const out = [
       { key: 'draw', label: '畫法', type: 'select',
-        help: m.draw === 'paper' ? '手機淨係派題、報輪次、投票；畫喺真紙上，畫完㩒「畫完」。' : '畫喺手機上，其他人即時睇到；一筆太短唔算，可以再畫。',
+        help: m.draw === 'paper' ? '手機淨係派題、報輪到邊個、投票；畫喺真紙上，畫完㩒「畫完」。' : '畫喺手機上，大家一齊睇住（一部手機就擺喺中間輪流畫）；一筆太短唔算，可以再畫。',
         options: [{ value: 'phone', label: '📱 手機畫板' }, { value: 'paper', label: '📝 實體紙筆' }] },
       { key: 'qm', label: '出題方式', type: 'select',
         help: m.qm === 'player'
@@ -423,31 +443,36 @@ export const config = {
           ...(n >= MIN_ARTISTS + 1 ? [{ value: 'player', label: '輪流有人出題（出題者唔畫）' }] : [])] },
       { key: 'laps', label: '畫幾圈', type: 'int', min: 1, max: 3,
         help: `官方畫 2 圈。${a} 個畫家共 ${a * m.laps} 筆。` },
+      { key: 'vote', label: '投票方式', type: 'select',
+        help: m.vote === 'point'
+          ? '數三、二、一，大家同時指住你覺得係假畫家嘅人，一個人喺手機㩒邊個指邊個。一部手機玩揀呢個。'
+          : '每人喺手機秘密投（一部手機就輪流投，全部投完先好講）。',
+        options: [{ value: 'ballot', label: '各自喺手機投（秘密）' }, { value: 'point', label: '一齊指（3、2、1）' }] },
       { key: 'tieRule', label: '平票點算', type: 'select',
         help: '最高票平手嗰陣，假畫家算唔算被揪出。',
         options: [{ value: 'must-guess', label: '現行官方：假畫家喺最高票入面就要估' },
           { value: 'escape', label: '舊版：平票當冇揪到' },
           { value: 'revote', label: '民間：平票再投一次' }] },
       { key: 'guess', label: '估題目方式', type: 'select',
-        help: m.guess === 'typed' ? '假畫家打字；同詞庫答案一樣就自動啱，否則由出題者／房主判。' : '假畫家開口講，出題者（冇就係房主）㩒啱或者錯。',
+        help: m.guess === 'typed' ? '假畫家打字；同詞庫答案一樣就自動啱，否則由出題者／房主判。' : '假畫家開口講，出題者（冇就由手機指定一個人，通常係房主）㩒啱或者錯。',
         options: [{ value: 'spoken', label: '開口講（唔使打字）' }, { value: 'typed', label: '打字（自動對詞庫）' }] },
       { key: 'scoring', label: '計分', type: 'select',
         help: m.scoring === 'none'
-          ? '新版盒冇分數：每輪淨係分邊隊贏。打完指定輪數，贏得最多輪嘅人贏。'
+          ? '新版盒冇分數：每局淨係分邊隊贏。打完指定局數，贏得最多局嘅人贏。'
           : m.qm === 'player'
             ? '舊版盒有分：假畫家同出題者贏各 +2，真畫家贏每人 +1。'
             : '舊版盒有分：假畫家贏 +2，真畫家贏每人 +1。',
-        options: [{ value: 'points', label: '計分（舊版）' }, { value: 'none', label: '唔計分（新版：每輪分勝負）' }] },
+        options: [{ value: 'points', label: '計分（舊版）' }, { value: 'none', label: '唔計分（新版：每局分勝負）' }] },
     ];
     if (m.scoring === 'points') {
       out.push({ key: 'endMode', label: '結束方式', type: 'select',
-        options: [{ value: 'target', label: '先到目標分數' }, { value: 'rounds', label: '打固定輪數' }] });
+        options: [{ value: 'target', label: '先到目標分數' }, { value: 'rounds', label: '打固定局數' }] });
     }
     if (m.endMode === 'target') {
       out.push({ key: 'target', label: '目標分數', type: 'int', min: 1, max: 15, help: '官方係 5 分。假畫家贏 +2，真畫家贏每人 +1。' });
     } else {
-      out.push({ key: 'rounds', label: '打幾多輪', type: 'int', min: 0, max: 20,
-        help: `0＝每人一輪（而家 ${n} 輪）。玩完${m.scoring === 'none' ? '贏得最多輪' : '最高分'}嘅人贏。` });
+      out.push({ key: 'rounds', label: '打幾多局', type: 'int', min: 0, max: 20,
+        help: `0＝每人一局（而家 ${n} 局）。玩完${m.scoring === 'none' ? '贏得最多局' : '最高分'}嘅人贏。` });
     }
     if (m.qm === 'player') {
       out.push({ key: 'first', label: '邊個先畫', type: 'select',
@@ -456,7 +481,7 @@ export const config = {
     out.push(
       { key: 'turnSecs', label: '每筆限時（秒）', type: 'seconds', min: 0, max: 60, step: 5,
         help: '0＝唔限時。超時就當放棄呢一筆，輪到下一個。' },
-      { key: 'antiStreak', label: '上一輪嘅假畫家呢輪唔做', type: 'bool', help: '4 個畫家或以上先生效。' },
+      { key: 'antiStreak', label: '上一局嘅假畫家呢局唔做', type: 'bool', help: '4 個畫家或以上先生效。' },
       { key: 'topics', label: '題目類別', type: 'categories',
         help: '唔揀類別＝全部；唔揀難度＝簡單同中等。只影響手機抽嘅題目。',
         options: CATEGORIES.map((c) => ({ value: c, label: c })),
@@ -468,12 +493,13 @@ export const config = {
   summary(cfg, n) {
     const m = norm(cfg, n);
     const lines = [headcountLine(m, n)];
-    lines.push(m.draw === 'paper' ? '實體紙筆（手機報輪次）' : '手機畫板');
+    lines.push(m.draw === 'paper' ? '實體紙筆（手機報輪到邊個）' : '手機畫板');
     lines.push(`每人畫 ${m.laps} 圈`);
+    if (m.vote === 'point') lines.push('一齊指（3、2、1）投票');
     lines.push({ 'must-guess': '平票：假畫家喺最高票入面就要估', escape: '平票當冇揪到（舊版）', revote: '平票再投一次' }[m.tieRule]);
     lines.push(m.guess === 'typed' ? '打字估題目' : '開口估題目');
-    if (m.scoring === 'none') lines.push(`唔計分：打 ${totalRoundsFor(m, n)} 輪，每輪分勝負`);
-    else lines.push(m.endMode === 'target' ? `先到 ${m.target} 分` : `打 ${totalRoundsFor(m, n)} 輪，比總分`);
+    if (m.scoring === 'none') lines.push(`唔計分：打 ${totalRoundsFor(m, n)} 局，每局分勝負`);
+    else lines.push(m.endMode === 'target' ? `先到 ${m.target} 分` : `打 ${totalRoundsFor(m, n)} 局，比總分`);
     if (m.turnSecs > 0) lines.push(`每筆限時 ${m.turnSecs} 秒`);
     if (m.topics.cats.length) lines.push(`類別：${m.topics.cats.join('、')}`);
     if (m.topics.levels.length) lines.push(`難度：${m.topics.levels.map((l) => ['', '簡單', '中等', '困難'][l]).join('、')}`);
@@ -694,10 +720,20 @@ function advanceTurn(s, ctx, kind) {
 }
 
 /** Everyone at the table votes; an absent artist is no candidate either (were it the fake, the round was voided). */
+/**
+ * A ballot. `mode` 'ballot' (each voter on a phone) or 'point' (一齊指: nobody is called one by one; after the
+ * table's 3-2-1 `count`, one person enters who pointed at whom as `point`). `look` (secret ballots on one phone that is
+ * passed round, #2): the finished picture lies in the middle first, and anybody's 「開始投票」 starts the ballot walk.
+ */
+function newVote(s, round, voters, candidates) {
+  const mode = s.cfg.vote === 'point' ? 'point' : 'ballot';
+  return { round, voters, candidates, votes: {}, mode, look: mode === 'ballot' && round === 1 && !!s.cfg.passPhone, countAt: null, counts: 0 };
+}
+
 function startVote(s, ctx) {
   const r = s.round;
   const present = here(s, r.artists);
-  r.vote = { round: 1, voters: present, candidates: present.slice(), votes: {} };
+  r.vote = newVote(s, 1, present, present.slice());
   s.phase = 'vote';
   clearTimer(s);
   if (allVoted(r.vote)) resolveVote(s, ctx);
@@ -706,10 +742,23 @@ function startVote(s, ctx) {
 function startRevote(s, ctx) {
   const r = s.round;
   const top = r.tally1.top;
-  r.vote = { round: 2, voters: here(s, r.artists).filter((a) => !top.includes(a)), candidates: top.slice(), votes: {} };
+  r.vote = newVote(s, 2, here(s, r.artists).filter((a) => !top.includes(a)), top.slice());
   s.phase = 'revote';
   clearTimer(s);
   if (allVoted(r.vote)) resolveVote(s, ctx);             // nobody left to re-vote: the second-tie rule decides
+}
+
+/** 一齊指: is `votes` a full entry for this ballot — every voter once, each a candidate other than itself (or null)? */
+function pointEntry(v, votes) {
+  if (!isObj(votes)) return null;
+  const out = {};
+  for (const voter of v.voters) {
+    if (!(voter in votes)) return null;
+    const t = votes[voter];
+    if (t !== null && !(typeof t === 'string' && v.candidates.includes(t) && t !== voter)) return null;
+    out[voter] = t;
+  }
+  return out;
 }
 
 const allVoted = (v) => v.voters.every((p) => p in v.votes);
@@ -982,17 +1031,28 @@ function rawCue(s) {
       if (lapStart) return { id: `r${r.key ?? r.n}:lap:${lap}`, minMs: 1500, text: S.cueLap({ lap, laps: s.cfg.laps, first: nm(drawerOf(r)) }) };
       return null;
     }
-    case 'vote':
-      return { id: `r${r.key ?? r.n}:vote`, text: S.cueVote(), minMs: 3000 };
-    case 'revote':
-      return { id: `r${r.key ?? r.n}:revote`, text: S.cueRevote(), minMs: 2500 };
+    case 'vote': case 'revote': {
+      // (ids carry the sub-step: the shared look, the ballot walk, and every 3-2-1 count are each said once)
+      const v = r.vote;
+      const id = `r${r.key ?? r.n}:${s.phase}`;
+      const second = s.phase === 'revote';
+      if (v?.mode === 'point') {
+        return v.countAt == null
+          ? { id: `${id}:point`, text: S.cuePoint({ second }), minMs: 2500 }
+          : { id: `${id}:go:${v.counts ?? 1}`, text: S.cuePointGo(), minMs: 2500 };
+      }
+      if (v?.look) return { id: `${id}:look`, text: S.cueLook(), minMs: 3000 };
+      if (s.cfg.passPhone) return { id, text: second ? S.cueRevote({ pass: true }) : S.cueVote({ pass: true }), minMs: 2500 };
+      return second ? { id, text: S.cueRevote(), minMs: 2500 } : { id, text: S.cueVote(), minMs: 3000 };
+    }
     case 'tally': {
       const t = lastTally(r);
       return { id: `r${r.key ?? r.n}:tally:${t.round}`, minMs: 2500,
         text: S.cueTally({ top: t.top, caught: r.caught === true, fake: r.fake, revote: r.revotePending }, nm) };
     }
     case 'guess':
-      return { id: `r${r.key ?? r.n}:guess`, text: S.cueGuess({ fake: r.fake, mode: s.cfg.guess }, nm), minMs: 3000 };
+      return { id: `r${r.key ?? r.n}:guess`, minMs: 3000,
+        text: S.cueGuess({ fake: r.fake, mode: s.cfg.guess, judge: s.cfg.passPhone ? r.judge : null }, nm) };
     case 'judge':
       return { id: `r${r.key ?? r.n}:judge`, text: S.cueJudge(nm(r.judge)), minMs: 2000 };
     case 'result':
@@ -1016,6 +1076,7 @@ function skipStep(s, ctx) {
     case 'first': beginDraw(s, ctx, r.artists[rint(ctx.rng, r.artists.length)]); break;
     case 'draw': advanceTurn(s, ctx, s.cfg.draw === 'paper' ? 'paper' : 'forfeit'); break;
     case 'vote': case 'revote':
+      if (r.vote.look) { r.vote.look = false; break; }    // the shared look at the picture is over: the ballots start
       for (const p of r.vote.voters) if (!(p in r.vote.votes)) r.vote.votes[p] = null;   // an abstention, flagged in the reveal
       resolveVote(s, ctx);
       break;
@@ -1105,13 +1166,34 @@ function act(state, msg, ctx) {
       if (s.phase === 'draw' && pid === drawerOf(r)) advanceTurn(s, ctx, 'forfeit');
       return s;
     case 'vote': {
-      if ((s.phase === 'vote' || s.phase === 'revote') && r.vote.voters.includes(pid) && !(pid in r.vote.votes)) {
+      if ((s.phase === 'vote' || s.phase === 'revote') && r.vote.mode !== 'point' && !r.vote.look
+        && r.vote.voters.includes(pid) && !(pid in r.vote.votes)) {
         const t = a.target;
         if (t === null || (typeof t === 'string' && r.vote.candidates.includes(t) && t !== pid)) {
           r.vote.votes[pid] = t;
           if (allVoted(r.vote)) resolveVote(s, ctx);
         }
       }
+      return s;
+    }
+    case 'start-vote':
+      // the shared look at the finished picture (one phone, secret ballots): anybody's tap starts the ballot walk
+      if ((s.phase === 'vote' || s.phase === 'revote') && r.vote.look) r.vote.look = false;
+      return s;
+    case 'count':
+      // 一齊指: 「三、二、一，指！」 on every phone at once (again = count again, before anything is entered)
+      if ((s.phase === 'vote' || s.phase === 'revote') && r.vote.mode === 'point') {
+        r.vote.countAt = ctx.now;
+        r.vote.counts = (r.vote.counts ?? 0) + 1;
+      }
+      return s;
+    case 'point': {
+      // 一齊指: one person enters where every finger pointed, after the count; the tally and the tie rule run as usual
+      if ((s.phase !== 'vote' && s.phase !== 'revote') || r.vote.mode !== 'point' || r.vote.countAt == null) return s;
+      const votes = pointEntry(r.vote, a.votes);
+      if (!votes) return s;
+      r.vote.votes = votes;
+      resolveVote(s, ctx);
       return s;
     }
     case 'guess':
@@ -1122,9 +1204,12 @@ function act(state, msg, ctx) {
         && ((s.phase === 'guess' && s.cfg.guess === 'spoken') || s.phase === 'judge')) giveVerdict(s, ctx, a.correct, 'judge');
       return s;
     case 'next': {
-      // 睇完 (D3). `seats`: the other seats of a passed-round phone, which reads the result once for all of them
-      if (s.phase !== 'result' || !(isArtist || isQm) || r.seen?.[pid]) return s;
+      // 睇完 (D3). `seats`: the other seats of a passed-round phone, which reads the result once for all of them. A
+      // whole-table tap (`table: true`, DESIGN §7.1) counts every listed reader, whichever seat carried it
+      if (s.phase !== 'result') return s;
       const also = Array.isArray(a.seats) ? a.seats.filter((x) => typeof x === 'string') : [];
+      if (a.table === true) return markSeen(s, ctx, [pid, ...also]);
+      if (!(isArtist || isQm) || r.seen?.[pid]) return s;
       return markSeen(s, ctx, [pid, ...also]);
     }
     default:
@@ -1195,12 +1280,18 @@ function view(state, pid) {
   const v = {
     me: seat,
     phase: s.phase,
-    title: `第 ${r.n}${s.totalRounds ? `/${s.totalRounds}` : ''} 輪`,
+    title: `第 ${r.n}${s.totalRounds ? `/${s.totalRounds}` : ''} 局`,
     subtitle: themeKnown ? `主題：${r.theme}${s.phase === 'draw' ? ` · 第 ${lapOf(r)}/${cfg.laps} 圈` : ''}` : `${nameOf(s, r.qm)} 出題`,
     round: { n: r.n, total: s.totalRounds, key: r.key ?? r.n, redo: !!r.redo },
     mode: { draw: cfg.draw, qm: cfg.qm, laps: cfg.laps, tieRule: cfg.tieRule, guess: cfg.guess, scoring: cfg.scoring, endMode: cfg.endMode, target: cfg.target, first: cfg.first },
     qm: r.qm,
     artists: r.artists.slice(),
+    // the 💡 sheet's 「呢局有咩角色」 (DESIGN §7.1 re-run #5): how many of each is public, who is not
+    rolesInPlay: [
+      { id: 'artist', count: Math.max(0, r.artists.length - 1) },
+      { id: 'fake', count: 1 },
+      ...(r.qm ? [{ id: 'question-master', count: 1 }] : []),
+    ],
     seats: s.order.slice(),
     pens: { ...pensOf(s) },
     scores: { ...s.scores },
@@ -1242,10 +1333,16 @@ function view(state, pid) {
   if ((s.phase === 'vote' || s.phase === 'revote') && r.vote) {
     const vt = r.vote;
     const voted = seat !== null && seat in vt.votes;
+    const own = vt.mode !== 'point' && !vt.look;          // a ballot of one's own (not 一齊指, not the shared look)
     v.vote = {
       round: vt.round, candidates: vt.candidates.slice(), voters: vt.voters.slice(),
       done: vt.voters.filter((p) => p in vt.votes).length, total: vt.voters.length,
-      canVote: seat !== null && vt.voters.includes(seat) && !voted,
+      canVote: own && seat !== null && vt.voters.includes(seat) && !voted,
+      mode: vt.mode ?? 'ballot',
+      look: !!vt.look,
+      countAt: vt.countAt ?? null,
+      counts: vt.counts ?? 0,
+      countMs: COUNT_MS,
     };
     if (voted) v.vote.myVote = vt.votes[seat];           // null = abstained (autoAct); a pid otherwise
   }
@@ -1264,6 +1361,8 @@ function view(state, pid) {
     v.guess = {
       mode: cfg.guess, judge: r.judge, stage: s.phase === 'guess' && typed ? 'fake' : 'judge',
       text: r.guess.text || null, canGuess, canJudge,
+      // one phone, spoken (re-run N1): the fake speaks with the phone, then hands it to the judge
+      handOver: !typed && !!cfg.passPhone,
     };
     if (seat === r.judge) v.guess.word = r.word;          // the judge never is the fake, so the fake never gets the word here
   }
@@ -1281,10 +1380,15 @@ function view(state, pid) {
     drawerIsMe: seat !== null && seat === drawer,
     drawerName: drawer ? nameOf(s, drawer) : '',
     acked: seat !== null && !!r.acks[seat],
-    voted: !!v.vote && seat !== null && !v.vote.canVote && v.vote.voters.includes(seat),
+    voted: !!v.vote && seat !== null && !v.vote.canVote && v.vote.voters.includes(seat) && v.vote.mode !== 'point' && !v.vote.look,
     canVote: !!v.vote?.canVote,
+    point: v.vote?.mode === 'point',
+    look: !!v.vote?.look,
     canGuess, canJudge,
     isFake: isFake && fakeShown,
+    handOver: !!v.guess?.handOver,
+    fakeName: v.guess ? nameOf(s, r.fake) : '',
+    judgeName: v.guess ? nameOf(s, r.judge) : '',
     last: !!s.ending,
   });
   return v;
@@ -1295,16 +1399,34 @@ function cue(state) {
   return c && c.id !== state.cueAck ? c : null;
 }
 
+/**
+ * Who must look at or touch their phone. The one-phone hints (DESIGN §7.1, read only by a shared phone):
+ * `open` = a public one-person step — a stroke (#4: the drawing is the game, everybody watches it) and the spoken
+ * guess (#29: the phone lies in the middle so the caught fake can study the picture; the answer stays under the
+ * judge's hold-to-peek) — handed over with the public card instead of 「其他人唔好望」; `step` re-gates the same seat
+ * for a new turn; `label` names the step on the gate (#30: 「全部投完先好講」 on the ballot walk). 一齊指 and the shared
+ * look at the picture call nobody: the phone lies in the middle for the whole table.
+ */
 function focus(state) {
   const s = state;
   const r = s.round;
   switch (s.phase) {
-    case 'qm-input': case 'first': return { pids: [r.qm] };
-    case 'deal': return { pids: here(s, r.artists).filter((p) => !r.acks[p]) };
-    case 'draw': return { pids: [drawerOf(r)] };
-    case 'vote': case 'revote': return { pids: r.vote.voters.filter((p) => !(p in r.vote.votes)) };
-    case 'guess': return { pids: [s.cfg.guess === 'typed' ? r.fake : r.judge] };
-    case 'judge': return { pids: [r.judge] };
+    case 'qm-input': return { pids: [r.qm], label: '出題' };
+    case 'first': return { pids: [r.qm], label: '揀邊個先畫' };
+    case 'deal': return { pids: here(s, r.artists).filter((p) => !r.acks[p]), label: '睇卡' };
+    case 'draw': return { pids: [drawerOf(r)], open: true, step: `draw:${r.turn}`, label: `畫第 ${r.turn + 1} 筆` };
+    case 'vote': case 'revote': {
+      const v = r.vote;
+      if (v.mode === 'point' || v.look) return null;
+      return { pids: v.voters.filter((p) => !(p in v.votes)), step: `vote:${v.round}`, label: v.round === 2 ? '再投 · 全部投完先好講' : '投票 · 全部投完先好講' };
+    }
+    // spoken guess: on one phone (re-run N1) the card names the caught fake, who speaks with the picture in front of
+    // them and then hands the phone to the judge by name (the UI's 「講完 · 交俾 X 判斷」); with phones of their own
+    // the judge's phone is the one that matters
+    case 'guess':
+      if (s.cfg.guess === 'typed') return { pids: [r.fake], label: '打字估題目' };
+      return { pids: [s.cfg.passPhone ? r.fake : r.judge], open: true, label: '開口估題目' };
+    case 'judge': return { pids: [r.judge], step: 'judge', label: '判斷估啱唔啱' };
     default: return null;
   }
 }
@@ -1332,7 +1454,16 @@ function legalActions(state, pid) {
       break;
     case 'vote': case 'revote': {
       const v = r.vote;
-      if (v.voters.includes(pid) && !(pid in v.votes)) for (const t of v.candidates) if (t !== pid) out.push({ type: 'vote', target: t });
+      if (v.look) out.push({ type: 'start-vote' });
+      else if (v.mode === 'point') {
+        // anybody at the table counts, then enters the pointing (examples: everybody on the first other candidate, or nobody)
+        if (v.countAt == null) out.push({ type: 'count' });
+        else {
+          const at = (voter) => v.candidates.find((c) => c !== voter) ?? null;
+          out.push({ type: 'point', votes: Object.fromEntries(v.voters.map((p) => [p, at(p)])) },
+            { type: 'point', votes: Object.fromEntries(v.voters.map((p) => [p, null])) });
+        }
+      } else if (v.voters.includes(pid) && !(pid in v.votes)) for (const t of v.candidates) if (t !== pid) out.push({ type: 'vote', target: t });
       break;
     }
     case 'guess':
@@ -1364,6 +1495,7 @@ function autoAct(state, pid) {
       if (pid !== drawerOf(r)) return null;
       return s.cfg.draw === 'paper' ? { type: 'done' } : { type: 'skip' };
     case 'vote': case 'revote':
+      if (r.vote.mode === 'point' || r.vote.look) return null;      // the table's own step: nobody to stand in for
       return r.vote.voters.includes(pid) && !(pid in r.vote.votes) ? { type: 'vote', target: null } : null;
     case 'guess':
       if (s.cfg.guess === 'typed') return pid === r.fake ? { type: 'guess', text: '' } : null;
@@ -1383,6 +1515,8 @@ function blocking(state, pid) {
   const s = state;
   if (typeof pid !== 'string' || isAbsent(s, pid)) return false;
   if (s.phase === 'result') return readers(s).includes(pid) && !s.round.seen?.[pid];
+  // a spoken guess waits on the judge's verdict, also while the caught fake holds the one phone (re-run N1)
+  if (s.phase === 'guess' && s.cfg.guess !== 'typed') return pid === s.round.judge;
   const f = focus(s);
   return !!f && f.pids.includes(pid);
 }
@@ -1395,7 +1529,7 @@ function blocking(state, pid) {
 function canVoid(state) {
   const s = state;
   // the result screen's button reads 睇總結 when this round decided the game (view.last)
-  if (s.phase === 'result') return { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' };
+  if (s.phase === 'result') return { ok: false, message: '呢局已經計咗分，大家㩒「睇完」就得' };
   if (s.phase === 'over' || !s.round) return { ok: false, message: '遊戲已經完咗' };
   return { ok: true };
 }

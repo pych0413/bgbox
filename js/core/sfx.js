@@ -194,3 +194,64 @@ export function sfx(name, opts) {
   if (!fn) return;
   try { fn(c.currentTime + 0.01); } catch { /* audio graph hiccup; not worth breaking play */ }
 }
+
+// ---------- U8: the night's neutral noise bed (DESIGN §7.1) ----------
+// The phone in the middle at night: a quiet, steady, filtered-noise bed under every night window, the same at every step,
+// so the sound of someone reaching for the phone in the middle gives nothing away. It goes through the master
+// gain (the user's 🔇 silences it) but NOT through the night suppression (the night is exactly when it plays).
+
+const AMBIENT_GAIN = 0.05;
+let bed = null;       // { src, gain } while playing
+let bedWanted = false; // asked for (also where Web Audio is missing, e.g. under Node)
+
+/** Long brown-ish noise (2 s, looped): softer than white noise, no audible seam. */
+function bedBuf() {
+  const len = Math.floor(ctx.sampleRate * 2);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+    data[i] = last * 3.5;
+  }
+  return buf;
+}
+
+/** Is the bed on (asked for)? */
+export function ambientOn() { return bedWanted; }
+
+/** Start / stop the bed. Fades in over ~1.5 s and out over ~0.8 s; safe to call repeatedly. */
+export function ambient(on) {
+  bedWanted = !!on;
+  if (!on) {
+    if (!bed) return;
+    const b = bed;
+    bed = null;
+    try {
+      const t = ctx.currentTime;
+      b.gain.gain.cancelScheduledValues(t);
+      b.gain.gain.setValueAtTime(b.gain.gain.value, t);
+      b.gain.gain.linearRampToValueAtTime(0.0001, t + 0.8);
+      b.src.stop(t + 0.85);
+    } catch { /* already gone */ }
+    return;
+  }
+  if (bed) return;
+  const c = ensure();
+  if (!c) return;
+  try {
+    const src = c.createBufferSource();
+    src.buffer = bedBuf();
+    src.loop = true;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    const gain = c.createGain();
+    const t = c.currentTime;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(AMBIENT_GAIN, t + 1.5);
+    src.connect(lp).connect(gain).connect(master);
+    src.start(t);
+    bed = { src, gain };
+  } catch { bed = null; }
+}

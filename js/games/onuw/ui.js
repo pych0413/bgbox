@@ -83,7 +83,52 @@ function makeEnv(api, local, refresh) {
   };
   /** One public line naming the 💤 seats, or '' when nobody is away. */
   const awayText = (view) => (view?.absent?.length ? T.absentLine(view.absent.map(nameOf).join('、')) : '');
-  return { api, C: api.components, local, refresh, players, nameOf, colorOf, markedPlayers, awayText };
+  // §7.1 one phone: a phone holding 2+ seats (the whole table: every seated player). A single-seat phone sees neither.
+  const shared = () => !!api.shared;
+  const whole = () => !!api.wholeTable;
+  /** Who a screen the table reads calls 「你」: nobody on a shared phone (#20) — everybody reads it at once. */
+  const me = () => (shared() ? null : api.me);
+  return { api, C: api.components, local, refresh, players, nameOf, colorOf, markedPlayers, awayText, shared, whole, me };
+}
+
+/**
+ * The night countdown: a plain bar (no sound, no Timer — its ticks would tell the room who is awake) drawn from the
+ * step's FIXED length (`view.step.windowMs`, #7), so a screen that mounts half-way through a window — a shared phone,
+ * after its gate — shows the time already gone. The seconds left are written next to it; when they run out on a shared
+ * phone the line says to put the phone back. Every phone's bar is the same (the length is public).
+ */
+function makeBar(E) {
+  const fill = h('i');
+  const bar = h('div', { class: 'on-bar', role: 'progressbar', 'aria-valuemin': '0' }, fill);
+  const words = h('span', { class: 'on-bar-text', 'aria-hidden': 'true' });
+  const el = h('div', { class: 'on-barwrap' }, bar, words);
+  let total = 1;
+  let seen = null;
+  return {
+    el,
+    tick(view, ctx) {
+      const dl = view?.deadline;
+      if (dl == null || view.step?.stage !== 'window') {
+        seen = null;
+        bar.classList.add('is-wait');
+        fill.style.transform = 'scaleX(1)';
+        setText(words, '');
+        return;
+      }
+      if (ctx?.paused) return;                 // the host paused: the bar stays where it is
+      const fixed = Number(view.step.windowMs);
+      if (dl !== seen) { seen = dl; total = Math.max(1, fixed > 0 ? fixed : dl - E.api.now()); }
+      const left = Math.max(0, dl - E.api.now());
+      const sec = Math.ceil(left / 1000);
+      const text = sec > 0 ? T.barLeft(sec) : E.shared() ? T.timeUpShared : T.timeUp;
+      bar.classList.remove('is-wait');
+      fill.style.transform = `scaleX(${Math.min(1, left / total).toFixed(3)})`;
+      setText(words, text);
+      bar.setAttribute('aria-valuemax', String(Math.round(total / 1000)));
+      bar.setAttribute('aria-valuenow', String(sec));
+      bar.setAttribute('aria-valuetext', text);
+    },
+  };
 }
 
 /** A small public line under a count: 「💤 暫時離開（唔使等）：阿明」 while anybody is marked absent. */
@@ -177,7 +222,7 @@ function buildDeal(E) {
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-ready', type: 'button', onclick: () => { api.sfx('lock'); api.send({ type: 'ready' }); } });
   const count = h('p', { class: 'on-count' });
   const away = makeAway(E);
-  const tip = h('details', { class: 'on-tip' }, h('summary', { text: '夜晚點玩？' }), h('p', { text: T.dealTip }));
+  const tip = h('details', { class: 'on-tip' }, h('summary', { text: '夜晚點玩？' }), h('p', { text: E.shared() ? T.dealTipShared : T.dealTip }));
   const el = h('div', { class: 'on-screen on-deal' }, lead, roleCard.el, list.el, readyBtn, count, away.el, tip);
   return {
     el,
@@ -236,8 +281,7 @@ function buildNight(E) {
   const icon = h('span', { class: 'on-n-icon' });
   const title = h('b', { class: 'on-n-title' });
   const head = h('div', { class: 'on-n-head' }, icon, title);
-  const fill = h('i');
-  const bar = h('div', { class: 'on-bar' }, fill);
+  const bar = makeBar(E);
 
   const lines = h('div', { class: 'on-lines' });
   const peekFront = h('div', { class: 'on-peekfront' });
@@ -257,13 +301,11 @@ function buildNight(E) {
   const ackSub = h('span', { class: 'on-ack-sub' });
   const ack = h('button', { class: 'on-ack', type: 'button' }, ackLabel, ackSub);
   const help = h('p', { class: 'on-help' });
-  const node = h('div', { class: 'on-screen on-night' }, head, bar, panel, pick, ack, help);
+  const node = h('div', { class: 'on-screen on-night' }, head, bar.el, panel, pick, ack, help);
 
   let sel = { players: [], centre: [] };   // local, uncommitted: where the thumb is
   let modeKey = '';
   let current = null;
-  let barTotal = 1;
-  let barDeadline = null;
 
   const mode = () => (current?.my?.night?.awake ? current.my.night.ab?.mode ?? null : null);
 
@@ -371,39 +413,133 @@ function buildNight(E) {
     // the one big button: the same shape for everybody
     const a = pending();
     setText(ackLabel, a ? labelFor(a) : T.ackMain);
-    setText(ackSub, a ? T.ackConfirm : T.ackSub);
+    // a shared phone (#19): nobody taps a decoy there — the plain tap means "done", and the phone goes back
+    setText(ackSub, a ? T.ackConfirm : E.shared() && awake ? T.ackSubShared : T.ackSub);
     ack.classList.toggle('is-action', !!a);
     ack.classList.toggle('is-done', !!view.my.acked);
 
-    setText(help, view.__ctx?.narrationMode === 'silent' ? T.helpSilent : T.helpVoice);
+    setText(help, nightHelp(E, view));
   }
 
-  // the countdown bar: a plain element, no sound
-  function tick() {
-    const view = current;
-    if (!view) return;
-    const dl = view.deadline;
-    if (dl == null || view.step.stage !== 'window') {
-      barDeadline = null;
-      bar.classList.add('is-wait');
-      fill.style.transform = 'scaleX(1)';
-      return;
-    }
-    if (view.__ctx?.paused) return;                 // the host paused: the bar stays where it is
-    if (dl !== barDeadline) { barDeadline = dl; barTotal = Math.max(1, dl - api.now()); }
-    bar.classList.remove('is-wait');
-    fill.style.transform = `scaleX(${Math.max(0, Math.min(1, (dl - api.now()) / barTotal)).toFixed(3)})`;
-  }
-  const timer = setInterval(tick, 120);
+  const timer = setInterval(() => { if (current) bar.tick(current, current.__ctx); }, 120);
 
   return {
     el: node,
     update(view, ctx) {
       current = { ...view, __ctx: ctx };
       paint();
-      tick();
+      bar.tick(current, ctx);
     },
     destroy() { clearInterval(timer); peekCover.destroy(); node.remove(); },
+  };
+}
+
+/** The help line under the big button. A shared phone never says 「望住自己部機」 (#19). */
+function nightHelp(E, view) {
+  const silent = view.__ctx?.narrationMode === 'silent';
+  if (E.shared()) return silent ? T.helpSilentShared : T.helpVoiceShared;
+  return silent ? T.helpSilent : T.helpVoice;
+}
+
+// ============================================================
+// night on a shared phone, several of its seats awake in one step (U2): ONE combined screen
+// ============================================================
+//
+// Two werewolves or two Masons (a Doppelgänger who copied one wakes with them) have their eyes open together and may
+// see each other: the team is written once, for all of them. What each one learned tonight stays behind that seat's own
+// 📓 cover (the others look away), because it may hold what the others must not know (a Doppelgänger's copy). Nobody
+// on this screen has a choice to make (a lone wolf is alone by definition), so the one big button acks for all of them
+// at once (`seats`). Nothing here ends the window early.
+
+/** The co-wakers on this screen and their own views (the mounted seat's is `view`). */
+function coList(E, view, ctx) {
+  const co = Array.isArray(ctx?.coWakers) ? ctx.coWakers : [];
+  return co
+    .map((pid) => ({ pid, v: ctx?.views?.[pid] ?? (pid === E.api.me ? view : null) }))
+    .filter((x) => x.v?.my?.night?.awake);
+}
+
+/** May this step be shown as ONE screen? Only while none of them has an ability to use (each pick is its own). */
+const coFits = (list) => list.length >= 2 && list.every((x) => !x.v.my.night.ab);
+
+function buildCoNight(E) {
+  const { api, C } = E;
+  const icon = h('span', { class: 'on-n-icon' });
+  const title = h('b', { class: 'on-n-title' });
+  const head = h('div', { class: 'on-n-head' }, icon, title);
+  const bar = makeBar(E);
+  const lines = h('div', { class: 'on-lines' });
+  const books = h('div', { class: 'on-co-books' });
+  const panel = h('div', { class: 'on-panel on-co-panel' }, lines, h('p', { class: 'on-co-booktitle', text: T.coBookTitle }), books);
+  const ackSub = h('span', { class: 'on-ack-sub', text: T.coAckSub });
+  const ack = h('button', { class: 'on-ack', type: 'button' }, h('span', { class: 'on-ack-main', text: T.ackMain }), ackSub);
+  const help = h('p', { class: 'on-help' });
+  const node = h('div', { class: 'on-screen on-night on-co is-awake' }, head, bar.el, panel, ack, help);
+  let current = null;
+  const covers = new Map();       // pid → { wrap, front, cover }: one 📓 per co-waker, kept across updates
+
+  const listNow = () => (current ? coList(E, current, current.__ctx) : []);
+  ack.addEventListener('click', () => {
+    // "we have all seen it": one ack for every co-waker (never ends the window)
+    api.send({ type: 'ack', seats: listNow().map((x) => x.pid) });
+  });
+
+  function paintBooks(step, list) {
+    const want = list.map((x) => x.pid);
+    for (const [pid, c] of covers) if (!want.includes(pid)) { c.cover.destroy(); covers.delete(pid); }
+    for (const x of list) {
+      let c = covers.get(x.pid);
+      if (!c) {
+        const front = h('div', { class: 'on-peekfront' });
+        const cover = C.Cover({ front, backArt: '📓', backLabel: T.coBookBack(E.nameOf(x.pid)), lockMode: 'none', locked: false, openSound: 'none' });
+        c = { front, cover, wrap: h('div', { class: 'on-peekwrap on-co-book' }, cover.el) };
+        covers.set(x.pid, c);
+      }
+      const book = S.nightBook(step, x.v.my.night, E.nameOf);
+      const bk = sig(book);
+      if (c.front.dataset.key !== bk) {
+        c.front.dataset.key = bk;
+        c.front.replaceChildren(h('ul', {}, book.map(([t, cls]) => h('li', { class: cls || null, text: t }))));
+      }
+      c.cover.update({ front: c.front, backArt: '📓', backLabel: T.coBookBack(E.nameOf(x.pid)), lockMode: 'none', locked: false, openSound: 'none' });
+    }
+    const order = list.map((x) => covers.get(x.pid).wrap);
+    if (order.some((w, i) => books.children[i] !== w) || books.children.length !== order.length) books.replaceChildren(...order);
+  }
+
+  function paint() {
+    const view = current;
+    const step = view.step;
+    const list = listNow();
+    const [ic, tt] = S.stepHead(step.k);
+    setText(icon, ic);
+    setText(title, tt);
+    // the team: every co-waker here, plus anyone their own notes name awake with them on another phone
+    const here = list.map((x) => x.pid);
+    const elsewhere = new Set();
+    for (const x of list) for (const n of x.v.my.night.info ?? []) for (const p of n.with ?? []) if (!here.includes(p)) elsewhere.add(p);
+    const names = (ids) => ids.map(E.nameOf).join('、');
+    const ls = [['head', T.coHead(step.k)], ['with', T.coWith(names(here))]];
+    if (elsewhere.size) ls.push(['note', T.coOthers(names(E.players().map((p) => p.id).filter((p) => elsewhere.has(p))))]);
+    const lk = sig(ls);
+    if (lines.dataset.key !== lk) {
+      lines.dataset.key = lk;
+      lines.replaceChildren(...ls.map(([cls, text]) => h('p', { class: `on-line ${cls}`, text })));
+    }
+    paintBooks(step, list);
+    ack.classList.toggle('is-done', list.length > 0 && list.every((x) => !!x.v.my.acked));
+    setText(help, nightHelp(E, view));
+  }
+
+  const timer = setInterval(() => { if (current) bar.tick(current, current.__ctx); }, 120);
+  return {
+    el: node,
+    update(view, ctx) {
+      current = { ...view, __ctx: ctx };
+      paint();
+      bar.tick(current, ctx);
+    },
+    destroy() { clearInterval(timer); for (const c of covers.values()) c.cover.destroy(); node.remove(); },
   };
 }
 
@@ -423,7 +559,7 @@ function buildDay(E) {
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'ready-vote', on: !mine }) });
   const count = h('p', { class: 'on-count' });
   const away = makeAway(E);
-  const hostNote = h('p', { class: 'on-count', text: T.hostSkip, hidden: !api.isHost });
+  const hostNote = h('p', { class: 'on-count', text: T.hostSkip });
   const el = h('div', { class: 'on-screen on-day' }, banner, timerSlot, lead, recap.el, list.el, readyBtn, count, away.el, hostNote);
   return {
     el,
@@ -432,9 +568,12 @@ function buildDay(E) {
       recap.update(view.my?.notes);
       list.update(view.roleList);
       mine = !!view.dayReady.mine;
+      // a shared phone (#5): 夠鐘投票 is one table decision on the screen in the middle — a seat's own screen says where
+      setHidden(readyBtn, E.shared());
       readyBtn.classList.toggle('btn-locked', mine);
       setText(readyBtn, mine ? T.readyVoteDone : T.readyVote);
-      setText(count, T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
+      setText(count, E.shared() ? T.seatToTable : T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
+      setHidden(hostNote, !api.isHost || E.shared());
       away.update(view);
     },
     destroy() { timer.destroy(); recap.destroy(); el.remove(); },
@@ -464,7 +603,8 @@ function buildVote(E) {
     update(view) {
       // 💤 an absent seat casts no vote (D4): its phone says so instead of offering a ballot or the circle
       const benched = !!view.my?.absent && view.myVote === undefined;
-      setText(lead, benched ? T.absentSelf : T.voteLead);
+      // a shared phone (re-run R5): the ballots go round one by one — quiet until the last one is in
+      setText(lead, benched ? T.absentSelf : E.shared() ? T.voteLeadShared : T.voteLead);
       setHidden(panel.el, benched);
       panel.update({
         players: E.markedPlayers(view), candidates: view.candidates ?? [], me: api.me,
@@ -478,7 +618,10 @@ function buildVote(E) {
       setHidden(ring, !view.ring.on || benched);
       ringMine = !!view.ring.mine;
       ringBtn.classList.toggle('btn-locked', ringMine);
-      setText(ringBtn, ringMine ? T.ringOn : T.ringOff);
+      // one phone (#24): agreeing comes with a fallback ballot in the same turn, so nobody needs the phone twice
+      const fallback = !!view.ring.fallback;
+      setText(ringBtn, ringMine ? (fallback ? T.ringOnFallback : T.ringOn) : T.ringOff);
+      setText(ringHelp, fallback ? T.ringHelpFallback : T.ringHelp);
       setText(ringCount, T.ringCount(view.ring.done, view.ring.total));
       setHidden(ringStuck, !(view.ring.stuck && ringMine));
       recap.update(view.my?.notes);
@@ -501,7 +644,16 @@ function buildReveal(E) {
   const whyBox = h('section', { class: 'on-box on-why' });
   const recapBox = h('details', { class: 'on-box on-recapbox' });
   let done = false;
-  const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'done' }) });
+  // the phone in the middle of a shared table (#5): one tap (and a second to confirm) finishes it for every seat here
+  const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: (e) => {
+    if (E.shared() && api.atTable) {
+      const ask = E.whole() ? T.revealDoneConfirm : T.revealDoneConfirmPart;
+      if (typeof api.confirm === 'function' && !api.confirm(ask, e?.currentTarget ?? doneBtn)) return;
+      api.tableSend?.({ type: 'done' });
+      return;
+    }
+    api.send({ type: 'done' });
+  } });
   const count = h('p', { class: 'on-count' });
   const away = makeAway(E);
   const el = h('div', { class: 'on-screen on-reveal' }, banner, summary, votesBox, deadBox, cardsBox, whyBox, recapBox, doneBtn, count, away.el);
@@ -516,11 +668,12 @@ function buildReveal(E) {
 
   return {
     el,
-    update(view) {
+    update(view, ctx) {
       const rv = view.reveal;
       if (!rv) return;
       if (chime === null && view.phase === 'reveal') chime = setTimeout(() => api.sfx('reveal'), 700);
-      const me = api.me;
+      // a shared phone is read by the whole table: no 「你贏咗」 and no 「（你）」 there (#20)
+      const me = E.me();
       const won = me ? rv.winners.includes(me) : null;
       setText(banner, won == null ? T.watching : won ? T.won : T.lost);
       el.classList.toggle('won', !!won);
@@ -574,11 +727,14 @@ function buildReveal(E) {
       ]);
 
       done = !!view.revealDone?.mine;
-      const seat = !!me;
-      setHidden(doneBtn, !seat);
-      doneBtn.disabled = done;
-      setText(doneBtn, done ? T.revealDoneAck : T.revealDone);
-      setText(count, T.revealCount(view.revealDone?.done ?? 0, view.revealDone?.total ?? 0));
+      const table = E.shared() && !!api.atTable;
+      // a seat of its own taps for itself; a shared phone does it once, from the middle (its seats' screens point there)
+      const seat = !!api.me && !E.shared();
+      setHidden(doneBtn, !seat && !table);
+      doneBtn.disabled = table ? !!ctx?.tableLocked : done;
+      setText(doneBtn, table ? (E.whole() ? T.revealDoneTable : T.revealDoneTablePart) : done ? T.revealDoneAck : T.revealDone);
+      setText(count, table && E.whole() ? '' : T.revealCount(view.revealDone?.done ?? 0, view.revealDone?.total ?? 0));
+      setHidden(count, !count.textContent);
       away.update(view.phase === 'reveal' ? view : null);
     },
     destroy() { clearTimeout(chime); el.remove(); },
@@ -604,35 +760,39 @@ function buildTable(E) {
   const { api } = E;
   const title = h('h2', { class: 'on-table-title' });
   const body = h('p', { class: 'on-lead' });
-  const fill = h('i');
-  const bar = h('div', { class: 'on-bar', hidden: true }, fill);
+  const bar = makeBar(E);
+  setHidden(bar.el, true);
   const count = h('p', { class: 'on-count' });
   const timerSlot = h('div', { class: 'on-timer', hidden: true });
   const timer = makeTimer(E, timerSlot);
   const list = makeRoleList();
   const away = makeAway(E);
-  const el = h('div', { class: 'on-screen on-table' }, title, body, bar, timerSlot, count, away.el, list.el);
+  // §7.1 the phone in the middle of a shared table: by day the table's own taps (#5, #24) — each one counts for every
+  // seat on the phone; locked while the 「擺返中間」 card is up (U5). 夠鐘投票 ends the talk for everybody, so on a
+  // whole-table phone the shell asks for a second tap, naming the time still on the clock (re-run R2)
+  const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-table-ready', type: 'button', onclick: () => {
+    const dl = current?.phase === 'day' ? current.deadline : null;
+    const now = typeof api.clockNow === 'function' ? api.clockNow() : api.now();
+    api.tableSend?.({ type: 'ready-vote', on: true }, { confirm: T.tableReadyConfirm(dl != null ? dl - now : NaN), node: readyBtn });
+  } });
+  const ringBtn = h('button', { class: 'btn btn-ghost on-table-ring', type: 'button', onclick: (e) => {
+    if (typeof api.confirm === 'function' && !api.confirm(T.tableRingConfirm, e?.currentTarget ?? ringBtn)) return;
+    api.tableSend?.({ type: 'ring', on: true });
+  } });
+  setHidden(readyBtn, true);
+  setHidden(ringBtn, true);
+  const el = h('div', { class: 'on-screen on-table' }, title, body, bar.el, timerSlot, readyBtn, ringBtn, count, away.el, list.el);
   let current = null;
-  let total = 1;
-  let seen = null;
 
-  function tick() {
-    const v = current;
-    if (!v || v.phase !== 'night') return;
-    const dl = v.deadline;
-    if (dl == null || v.step.stage !== 'window') { bar.classList.add('is-wait'); fill.style.transform = 'scaleX(1)'; return; }
-    if (dl !== seen) { seen = dl; total = Math.max(1, dl - api.now()); }
-    bar.classList.remove('is-wait');
-    fill.style.transform = `scaleX(${Math.max(0, Math.min(1, (dl - api.now()) / total)).toFixed(3)})`;
-  }
-  const iv = setInterval(tick, 120);
+  const iv = setInterval(() => { if (current?.phase === 'night') bar.tick(current, current.__ctx); }, 120);
 
   return {
     el,
     update(view, ctx) {
-      current = view;
+      current = { ...view, __ctx: ctx };
       list.update(view.roleList);
-      setHidden(bar, view.phase !== 'night');
+      setHidden(bar.el, view.phase !== 'night');
+      const table = E.shared() && view.phase === 'day';
       switch (view.phase) {
         case 'deal':
           setText(title, T.tableDeal);
@@ -648,19 +808,32 @@ function buildTable(E) {
         case 'day':
           setText(title, T.tableDay);
           setText(body, T.tableDayBody);
-          setText(count, T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
+          // the whole table on this phone: one tap is everybody's, so no n / m waiting list (#5)
+          setText(count, table && E.whole() ? '' : T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
           break;
         case 'vote':
           setText(title, T.tableVote);
-          setText(body, T.tableVoteBody);
+          setText(body, E.shared() ? T.tableVoteBodyShared : T.tableVoteBody);
           setText(count, T.votedCount(view.progress.done, view.progress.total));
           break;
         default: break;
       }
       setHidden(count, !count.textContent);
+      setHidden(readyBtn, !table);
+      // 「全枱同意圈票」 needs every seat at once: only a phone holding the whole table can say it in one tap
+      setHidden(ringBtn, !(table && E.whole() && view.opts?.ringVote));
+      if (table) {
+        // not while the shell has it armed (「再㩒一次：…」): a repaint would hide the question
+        if (!readyBtn.classList.contains('armed')) setText(readyBtn, E.whole() ? T.tableReady : T.tableReadyPart);
+        readyBtn.disabled = !!ctx?.tableLocked;
+        setText(ringBtn, T.tableRing);
+        ringBtn.disabled = !!ctx?.tableLocked;
+      }
       away.update(view.phase === 'night' ? null : view);
-      timer.update(view.phase === 'day' ? view : { deadline: null }, ctx);
-      tick();
+      // the host's +60 s from the middle of a phone that holds the host's seat (the engine checks the seat)
+      const extend = table && api.isHost && !ctx?.tableLocked ? { onExtend: () => api.tableSend?.({ type: 'extend' }) } : {};
+      timer.update(view.phase === 'day' ? view : { deadline: null }, ctx, extend);
+      if (view.phase === 'night') bar.tick(current, ctx);
     },
     destroy() { clearInterval(iv); timer.destroy(); el.remove(); },
   };
@@ -690,11 +863,13 @@ export function mount(root, api) {
     lastCtx = ctx;
     const seat = !!view.seat && !!view.my;
     const isReveal = view.phase === 'reveal' || view.phase === 'over';
-    const k = view.voided ? 'void' : `${seat ? 'seat' : 'table'}:${isReveal ? 'reveal' : view.phase}`;
+    // U2: two werewolves / Masons of this shared phone awake in one step share ONE screen
+    const co = seat && view.phase === 'night' && coFits(coList(E, view, ctx));
+    const k = view.voided ? 'void' : `${seat ? 'seat' : 'table'}:${isReveal ? 'reveal' : view.phase}${co ? ':co' : ''}`;
     if (k !== key) {
       screen?.destroy();
       key = k;
-      const build = view.voided ? buildVoid : isReveal ? buildReveal : seat ? (SEAT_SCREENS[view.phase] ?? buildTable) : buildTable;
+      const build = view.voided ? buildVoid : isReveal ? buildReveal : co ? buildCoNight : seat ? (SEAT_SCREENS[view.phase] ?? buildTable) : buildTable;
       screen = build(E);
       wrap.replaceChildren(screen.el);
     }

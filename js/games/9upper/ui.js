@@ -38,11 +38,22 @@ const LEVELS = [
   { level: 3, name: '困難', pts: 3, sub: '冇提示，作起嚟最辣' },
 ];
 
+/**
+ * One phone (re-run #2 N5): did this seat open its card in its read window? A shared phone mounts a fresh UI for every
+ * hand-over, so a per-mount record is gone by the time the 老實人 takes the phone back to check their card — this one
+ * lives as long as the page. Keyed by the deal (round key, term, readers) and the seat; trimmed to the last entries.
+ */
+const READ_LOG = new Map();
+const READ_LOG_MAX = 60;
+
 export function mount(root, api) {
   const { Cover, PlayerPicker, Timer } = api.components;
   const nameOf = (pid) => api.players.find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => api.players.find((p) => p.id === pid)?.color ?? 'var(--cheese, #f5c518)';
-  const seatName = (pid, me) => nameOf(pid) + (pid === me ? '（你）' : '');
+  /** §7.1 #20: a shared phone is read by the whole table, so it never says 「你」 to whoever touched it last. */
+  const shared = () => api.shared === true;
+  const isMe = (pid, me) => pid != null && pid === me && !shared();
+  const seatName = (pid, me) => nameOf(pid) + (isMe(pid, me) ? '（你）' : '');
   // the round as this UI remembers it: a 呢輪作廢 redeal keeps the number but gets a new key
   const roundKey = (v) => String(v.round.key ?? v.round.n);
   const away = (v, pid) => (v.absent ?? []).includes(pid);
@@ -54,8 +65,21 @@ export function mount(root, api) {
   let callSeen = null;       // { round, count } — so a new 收皮啦 sounds once, not on every update
   let termSeen = null;       // { round, text } — so a 換題 is announced on every phone, once
   // `${round}|${seat}` → did this seat open its card during its read window? Set when this phone watched the window;
-  // missing (a reload after it) means "don't know", and the card then says what it always said.
-  const readLog = new Map();
+  // missing (a reload after it) means "don't know", and the card then says what it always said. A shared phone keeps it
+  // in READ_LOG (above), keyed by the whole deal, so it survives the remount at every hand-over.
+  const ownLog = new Map();
+  const dealKey = (v) => `${roundKey(v)}|${v.term?.text ?? ''}|${(v.explainers ?? []).join(',')}|${v.me}`;
+  const readLog = {
+    get: (v) => (shared() ? READ_LOG.get(dealKey(v)) : ownLog.get(`${roundKey(v)}|${v.me}`)),
+    has: (v) => (shared() ? READ_LOG.has(dealKey(v)) : ownLog.has(`${roundKey(v)}|${v.me}`)),
+    set(v, opened) {
+      if (!shared()) { ownLog.set(`${roundKey(v)}|${v.me}`, opened); return; }
+      const k = dealKey(v);
+      READ_LOG.delete(k);
+      READ_LOG.set(k, opened);
+      while (READ_LOG.size > READ_LOG_MAX) READ_LOG.delete(READ_LOG.keys().next().value);
+    },
+  };
   const timers = new Set();  // setTimeout handles owned by the UI
 
   const later = (fn, ms) => {
@@ -131,7 +155,7 @@ export function mount(root, api) {
       .map((p) => {
         const d = delta.get(p.id);
         return h('div', {
-          class: 'g9-score' + (p.id === v.me ? ' me' : '') + (p.id === v.judge ? ' judge' : '')
+          class: 'g9-score' + (isMe(p.id, v.me) ? ' me' : '') + (p.id === v.judge ? ' judge' : '')
             + (v.phase === 'over' && v.scores[p.id] === best ? ' lead' : ''),
           role: 'listitem',
           style: `--seat:${p.color ?? '#f5c518'}`,
@@ -184,8 +208,13 @@ export function mount(root, api) {
     if (v.mine?.honest) {
       if (v.mine.explain) return { role: '你係老實人 🙋', text: v.mine.explain, note: '用自己嘅講法講，唔好照讀。' };
       // this phone watched the whole window and the card was never opened: do not pretend it was read
-      if (readLog.get(key) === false) {
+      const opened = readLog.get(v);
+      if (opened === false) {
         return { role: '你係老實人 🙋', text: '你冇打開到張卡，問到就答「張卡冇寫」。', note: '唔好話俾人知你冇睇到。' };
+      }
+      // a shared phone that does not know (a reload, or a look nobody took) never claims a read either (re-run #2 N5)
+      if (opened !== true && shared()) {
+        return { role: '你係老實人 🙋', text: '照你記得張卡寫乜講；唔肯定就答「張卡冇寫」。', note: '用自己嘅講法講，唔好照讀。' };
       }
       return { role: '你係老實人 🙋', text: '你睇過真正解釋喇，用自己嘅講法講。', note: '唔記得嘅細節可以話「張卡冇寫」。' };
     }
@@ -243,9 +272,9 @@ export function mount(root, api) {
         const used = v.callouts.used;
         el.hidden = used.length === 0;
         el.replaceChildren(...used.map((pid) => h('div', {
-          class: 'g9-callbanner-row' + (pid === v.me ? ' me' : ''),
+          class: 'g9-callbanner-row' + (isMe(pid, v.me) ? ' me' : ''),
           text: `🛑 ${seatName(v.judge, v.me)} 對 ${seatName(pid, v.me)} 出咗收皮啦！`
-            + (pid === v.me ? '俾人 call 咗，繼續撐落去。' : ''),
+            + (isMe(pid, v.me) ? '俾人 call 咗，繼續撐落去。' : ''),
         })));
       },
     };
@@ -264,7 +293,9 @@ export function mount(root, api) {
     const paint = () => {
       const v = last;
       el.hidden = v.callouts.max === 0;
-      head.textContent = `🛑 收皮啦 · 剩 ${v.callouts.left} 張`;
+      // re-run #2 N6: once every card is used the chips go (disabled, they read like a second target list)
+      head.textContent = v.callouts.left > 0 ? `🛑 收皮啦 · 剩 ${v.callouts.left} 張` : '🛑 收皮啦 · 用晒';
+      chips.hidden = v.callouts.left === 0;
       const sig = JSON.stringify([v.explainers, v.callouts, armed, v.me]);
       if (sig === drawn) return;
       drawn = sig;
@@ -380,7 +411,8 @@ export function mount(root, api) {
         redo.update(v);
         note.textContent = role === 'judge'
           ? '有人已經識呢個詞？出聲就換題，身份唔變。冇人識就開始。'
-          : '已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。';
+          : role === 'table' ? '已經識呢個詞？出聲話俾諗樣知，佢決定換唔換。'
+            : '已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。';
         wait?.set(`等 ${nameOf(v.judge)} 開始睇卡…`);
         if (startBtn) startBtn.disabled = guard.busy;
         if (swap) {
@@ -412,9 +444,9 @@ export function mount(root, api) {
     // did this seat open its card in its window? (the 老實人's reminder must not claim a read that never happened)
     // Only a phone that watched the window from its start can say "never opened": a reload mid-window does not know
     // whether the card was opened before it, so it records nothing and the usual line stays.
-    const key = `${roundKey(v0)}|${v0.me}`;
-    if (showCard && role === 'player' && fresh && !readLog.has(key)) readLog.set(key, false);
-    const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(key, true); }) : null;
+    // (a shared phone's window always starts on this mount: the reader taps 開始睇卡 on it, so it is a fresh record)
+    if (showCard && role === 'player' && fresh && (!readLog.has(v0) || (shared() && sub === 'peek'))) readLog.set(v0, false);
+    const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(v0, true); }) : null;
     const timer = makeTimer();
     const note = h('p', { class: 'g9-note' });
     const wait = sub === 'wait' ? waitBlock('📱', '') : null;
@@ -466,7 +498,7 @@ export function mount(root, api) {
    *  system  系統派 — the phone announces who speaks (and who is next); nobody can call out of turn
    *  free    自己決定 — nobody is "up": a 玩家 ticks themselves off with 我講完, the 諗樣 taps a name to tick it off
    */
-  function explainBody(role, mode) {
+  function explainBody(role, mode, pass = false) {
     const free = mode === 'free';
     const system = mode === 'system';
     const list = h('div', { class: 'g9-speakers' });
@@ -478,25 +510,34 @@ export function mount(root, api) {
     const guard = sendGuard(rerender);
     const turnKey = (v) => (v?.turn ? `${v.turn.no ?? v.turn.spoken.length}|${v.turn.pid}` : '');
     let sentTurn = '';   // one 「done」 per turn, whoever taps it
-    const sendDone = () => {
+    const sendDone = (skip = false) => {
       const v = view;
       if (!v?.turn) return;
       if (free) { guard.fire(() => api.send({ type: 'done' })); return; }   // my own 我講完
       const k = turnKey(v);
       if (!k || sentTurn === k) return;
       // the turn number rides along, so a 我講完 and a 下一位 tapped together end one turn, not two
-      guard.fire(() => { sentTurn = k; api.send({ type: 'done', turn: v.turn.no ?? v.turn.spoken.length }); });
+      const action = { type: 'done', turn: v.turn.no ?? v.turn.spoken.length };
+      if (skip) action.skip = true;
+      guard.fire(() => { sentTurn = k; api.send(action); });
     };
     const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', text: '我講完' });
-    doneBtn.addEventListener('click', sendDone);
-    const nextBtn = role === 'judge' && !free ? h('button', { class: 'btn btn-ghost', type: 'button', text: '下一位' }) : null;
-    nextBtn?.addEventListener('click', sendDone);
+    doneBtn.addEventListener('click', () => sendDone());
+    // one phone (#11): the 諗樣 holds it, so 下一位 means the speaker finished (✅ 已講); a skip is its own small button
+    const nextBtn = role === 'judge' && !free
+      ? h('button', { class: pass ? 'btn btn-primary' : 'btn btn-ghost', type: 'button', text: pass ? '✅ 講完 · 下一位' : '下一位' })
+      : null;
+    nextBtn?.addEventListener('click', () => sendDone());
+    const skipBtn = role === 'judge' && !free && pass
+      ? h('button', { class: 'btn btn-ghost btn-sm g9-skip', type: 'button', text: '⏭ 佢唔喺度，跳過' })
+      : null;
+    skipBtn?.addEventListener('click', () => sendDone(true));
     const decideBtn = h('button', { class: 'btn btn-primary', type: 'button', text: '我決定咗，要揀人' });
     decideBtn.addEventListener('click', () => api.send({ type: 'decide' }));
     const ASK = '可以問任何關於個詞嘅嘢，但唔可以問人係咩身份。';
     const noteText = role === 'judge'
-      ? { judge: `㩒名叫佢講，次序由你話事。${ASK}`,
-        system: `電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「下一位」跳過，佢最尾會再輪到。${ASK}`,
+      ? { judge: pass ? `講完㩒「✅ 講完」，或者直接㩒下一個嘅名。${ASK}` : `㩒名叫佢講，次序由你話事。${ASK}`,
+        system: `電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「${pass ? '⏭ 跳過' : '下一位'}」，佢最尾會再輪到。${ASK}`,
         free: `大家自己傾邊個先講，講完㩒佢個名。${ASK}` }[mode]
       : role === 'player'
         ? { system: '電話隨機派人，次序同邊個係老實人冇關。', free: '大家自己傾好邊個先講；講完㩒「我講完」。' }[mode]
@@ -509,7 +550,8 @@ export function mount(root, api) {
       h('h2', { class: 'g9-h', text: free ? '自己決定次序' : '輪流解釋' }),
       announce, list, noteEl, timer.el, banner.el,
       doneBtn,
-      role === 'judge' ? h('div', { class: 'g9-judgebtns' + (free ? ' solo' : '') }, nextBtn, decideBtn) : null,
+      role === 'judge' ? h('div', { class: 'g9-judgebtns' + (free ? ' solo' : pass ? ' pass' : '') }, nextBtn, decideBtn) : null,
+      skipBtn,
       callRow?.el,
       card?.el);
 
@@ -521,11 +563,12 @@ export function mount(root, api) {
       const key = `${now}|${next}|${v.me}`;
       if (key === announceKey) return;
       announceKey = key;
-      announce.classList.toggle('me', now !== null && now === v.me);
+      const mine = isMe(now, v.me);   // a shared phone names the speaker: whoever holds it is not the one talking
+      announce.classList.toggle('me', mine);
       announce.replaceChildren(
-        h('div', { class: 'g9-announce-main', text: now ? (now === v.me ? '🎤 輪到你講！' : `🎤 輪到 ${nameOf(now)}`) : '' }),
+        h('div', { class: 'g9-announce-main', text: now ? (mine ? '🎤 輪到你講！' : `🎤 輪到 ${nameOf(now)}`) : '' }),
         h('div', { class: 'g9-announce-next', text: next ? `下一位：${nameOf(next)}` : '之後就到諗樣揀人' }));
-      if (now !== null && now === v.me) api.sfx('turn');
+      if (mine) api.sfx('turn');
     }
 
     return {
@@ -544,9 +587,11 @@ export function mount(root, api) {
             const state = pid === now ? 'now' : away(v, pid) ? 'away' : skipped.includes(pid) ? 'skipped'
               : spoken.includes(pid) ? 'done' : 'todo';
             const called = v.callouts.used.includes(pid);
+            // one phone (re-run #2 N4): a ✅ player can be called again for a follow-up, and keeps the ✅
             const act = role !== 'judge' ? null
               : state === 'todo' ? (free ? 'done' : system ? null : 'call')
-                : state === 'skipped' && !free && !system ? 'call' : null;
+                : state === 'skipped' && !free && !system ? 'call'
+                  : state === 'done' && pass && !free && !system ? 'call' : null;
             const row = h(act ? 'button' : 'div', {
               class: `g9-speaker ${state}${act ? ' callable' : ''}`, style: `--seat:${colorOf(pid)}`,
               type: act ? 'button' : null,
@@ -554,7 +599,8 @@ export function mount(root, api) {
             h('span', { class: 'g9-speaker-dot' }),
             h('span', { class: 'g9-speaker-name', text: (system ? `${i + 1}. ` : '') + seatName(pid, v.me) }),
             h('span', { class: 'g9-speaker-state',
-              text: state === 'away' ? '💤 唔喺度' : state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗') : state === 'done' ? '✅ 已講'
+              text: state === 'away' ? '💤 唔喺度' : state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗')
+                : state === 'done' ? (act ? '✅ 已講 · 再問佢' : '✅ 已講')
                 : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
             called ? h('span', { class: 'g9-speaker-call', text: '🛑' }) : null);
             if (act) {
@@ -574,6 +620,7 @@ export function mount(root, api) {
         if (sentTurn !== k) sentTurn = '';
         doneBtn.disabled = guard.busy && (free || sentTurn === k);
         if (nextBtn) nextBtn.disabled = guard.busy && sentTurn === k;
+        if (skipBtn) skipBtn.disabled = guard.busy && sentTurn === k;
         if (callRow) callRow.update(v);
         if (card) card.set(faceFor(v));
       },
@@ -640,12 +687,20 @@ export function mount(root, api) {
     nextBtn.addEventListener('click', () => {
       guard.fire(() => { nextBtn.disabled = true; api.send({ type: 'next' }); });
     });
+    // §7.1 #1/#5: one phone lies in the middle for the reveal — anybody taps once for the whole table (api.tableSend), never
+    // before the 「擺返中間」 card was tapped (U5), so nobody moves the table on before everybody could read it
+    const atTable = role === 'table' && api.atTable === true && shared();
+    const tableBtn = atTable ? h('button', { class: 'btn btn-primary btn-lg g9-tablenext', type: 'button' }) : null;
+    tableBtn?.addEventListener('click', () => {
+      if (ctx?.tableLocked) return;
+      guard.fire(() => { tableBtn.disabled = true; api.tableSend?.({ type: 'next' }); });
+    });
     later(() => api.sfx('reveal'), 1200);
     // a 諗樣 marked 💤 cannot press it: then the button is on every seated phone
-    const el = h('div', { class: 'g9-stack g9-reveal' }, pickLine, late, nextBtn, waitTxt);
+    const el = h('div', { class: 'g9-stack g9-reveal' }, pickLine, late, nextBtn, tableBtn, waitTxt);
     return {
       el,
-      update(v) {
+      update(v, c) {
         const rv = v.reveal;
         if (!rv) return;
         pickLine.textContent = `${seatName(rv.judge, v.me)} 揀咗 ${seatName(rv.pick, v.me)}…`;
@@ -658,9 +713,16 @@ export function mount(root, api) {
         changes.textContent = `分數變動：${S.changeLine(rv.changes, nameOf)}`;
         const anyone = away(v, v.judge) && !!v.me && !away(v, v.me);
         nextBtn.hidden = !(role === 'judge' || anyone);
-        waitTxt.hidden = !nextBtn.hidden;
         nextBtn.textContent = v.last ? '睇總結' : '下一輪';
         nextBtn.disabled = guard.busy;
+        if (tableBtn) {
+          // the table's tap counts for the 諗樣 only when the 諗樣 sits on this phone (or is 💤 and somebody here is not)
+          const mine = Array.isArray(api.mySeats) ? api.mySeats : [];
+          tableBtn.hidden = !(mine.includes(v.judge) || (away(v, v.judge) && mine.some((p) => !away(v, p))));
+          tableBtn.textContent = `大家睇完 ✓ · ${v.last ? '睇總結' : '下一輪'}（一下就得）`;
+          tableBtn.disabled = guard.busy || !!c?.tableLocked;
+        }
+        waitTxt.hidden = !nextBtn.hidden || (!!tableBtn && !tableBtn.hidden);
         waitTxt.textContent = `等 ${nameOf(v.judge)} ${v.last ? '睇總結' : '開下一輪'}…`;
       },
       destroy() {},
@@ -698,7 +760,7 @@ export function mount(root, api) {
           : waitingBody((x) => `${nameOf(x.judge)} 揀緊題目難度…`);
       case 'term': return termBody(role);
       case 'read': return readBody(role, sub, v);
-      case 'explain': return explainBody(role, v.speakOrder ?? 'judge');
+      case 'explain': return explainBody(role, v.speakOrder ?? 'judge', v.readMode === 'pass');
       case 'judge': return judgeBody(role);
       case 'reveal': return revealBody(role);
       default: return overBody();
@@ -711,8 +773,7 @@ export function mount(root, api) {
     const count = v.callouts.used.length;
     if (callSeen && callSeen.round === roundKey(v) && count > callSeen.count) {
       api.sfx('deny');
-      const mine = v.callouts.used[count - 1] === v.me;
-      if (mine) api.toast('俾人 call 咗，繼續撐落去。');
+      if (isMe(v.callouts.used[count - 1], v.me)) api.toast('俾人 call 咗，繼續撐落去。');
     }
     callSeen = { round: roundKey(v), count };
   }

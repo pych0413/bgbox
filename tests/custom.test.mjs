@@ -568,11 +568,13 @@ test('custom: only the host seat can use host actions', () => {
 
 test('custom: peeking is public as 已睇牌 and drives focus in seat order', () => {
   const sim = mk(4);
-  assert.deepEqual(sim.focus(), { pids: ['p1', 'p2', 'p3', 'p4'] });
+  // `label` names the step on a shared phone's gate (§7.1 #33): the walk is for the card AND the dice (#15)
+  assert.deepEqual(sim.focus(), { pids: ['p1', 'p2', 'p3', 'p4'], label: '睇牌、搖骰' });
   assert.equal(sim.view('p3').seats[1].seenRole, false);
   changed(sim, 'p2', { type: 'seen' });
   assert.equal(sim.view('p3').seats[1].seenRole, true);
-  assert.deepEqual(sim.focus(), { pids: ['p1', 'p3', 'p4'] });
+  assert.deepEqual(sim.focus(), { pids: ['p1', 'p3', 'p4'], label: '睇牌、搖骰' });
+  assert.equal(mk(4, { patch: { selfRoll: false } }).focus().label, '睇牌', 'only the host rolls: just the card');
   unchanged(sim, 'p2', { type: 'seen' });   // already seen: no-op
   for (const p of ['p1', 'p3', 'p4']) changed(sim, p, { type: 'seen' });
   assert.equal(sim.focus(), null);
@@ -931,7 +933,7 @@ test('custom: garbage from the network never throws and never changes the state'
 
 test('custom: views are whitelist-built (no state field leaks through by name)', () => {
   const sim = mk(5, { seed: 3, patch: { hostPlays: false, modSees: true } });
-  const topKeys = ['all', 'can', 'controller', 'dealId', 'dice', 'hint', 'log', 'me', 'phase', 'revealDice', 'revealRoles', 'roles', 'round', 'seats', 'selfRoll', 'subtitle', 'title'];
+  const topKeys = ['all', 'can', 'controller', 'dealId', 'dice', 'hint', 'host', 'log', 'me', 'phase', 'revealDice', 'revealRoles', 'roles', 'round', 'seats', 'selfRoll', 'subtitle', 'title'];
   assert.deepEqual(Object.keys(sim.view('p1')).sort(), topKeys);
   assert.deepEqual(Object.keys(sim.view('p2')).sort(), topKeys.filter((k) => k !== 'all'));
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topKeys.filter((k) => k !== 'all'));
@@ -1357,6 +1359,266 @@ test('custom ui: #3 — host buttons confirm in the page (api.confirm on the tap
   });
 });
 
+// ---------- one phone in the middle (DESIGN §7.1; one-phone playtest #15, #22, custom C1–C3, C8) ----------
+
+/** A seat (or the table, pid null) on a phone holding `mySeats` (every seat by default: a whole-table phone). */
+function mountShared(ui, sim, pid, { mySeats = sim.state.order, extra = {} } = {}) {
+  const handed = [];
+  const tables = [];
+  const ph = mountFor(ui, sim, pid, {
+    shared: mySeats.length > 1, wholeTable: mySeats.length === sim.state.order.length, atTable: pid === null && mySeats.length > 1,
+    mySeats, handTo: (to, opts) => { handed.push([to, opts]); return true; }, toTable: (opts) => { tables.push(opts ?? {}); return true; },
+    ...extra,
+  });
+  sharedMounts.push(ph);
+  return { ...ph, handed, tables };
+}
+const sharedMounts = [];
+/** Destroy every shared-phone screen a test mounted (their one-tap guards hold a 3.5 s timer). */
+const destroyShared = () => { for (const ph of sharedMounts.splice(0)) ph.handle.destroy(); };
+/** What the shell hands a UI on a shared phone: the focus filtered to this phone's seats. */
+const ctxOne = (sim, mySeats = sim.state.order) => {
+  const f = sim.focus();
+  const pids = (f?.pids ?? []).filter((p) => mySeats.includes(p));
+  return { focus: pids.length ? { ...f, pids } : null, paused: false, shared: true };
+};
+
+test('custom ui: one phone — re-run #2 F1/F2/F3: 主持掣 from the middle, two taps for 下一回合 / 全體搖骰, the controls folded on the host\'s own walk turn, the 只有主持搖 note', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 21 });   // p1 is the host and holds a card
+    const show = (ph) => ph.handle.update(sim.view(ph.pid), ctxOne(sim));
+    const asks = [];
+    let armed = null;
+    const confirm = (text, node, opts) => { if (armed === opts?.key) { armed = null; return true; } armed = opts?.key; asks.push(text); return false; };
+    const ctlBody = (ph) => findEls(ph.root, (x) => x.cls.has('cu-ctlbody'))[0];
+    const toggle = (ph) => findEls(ph.root, (x) => x.cls.has('cu-ctltoggle'))[0];
+
+    // F2: the host's own walk turn — the controls are folded behind one button
+    const host = mountShared(ui, sim, 'p1', { extra: { confirm } });
+    show(host);
+    assert.ok(shown(findEls(host.root, (x) => x.cls.has('c-rolecard'))[0]));
+    assert.ok(shown(toggle(host)) && !shown(ctlBody(host)), 'folded while the walk waits for the host');
+    toggle(host).click();
+    assert.ok(shown(ctlBody(host)), 'one tap opens them');
+    toggle(host).click();
+    assert.ok(!shown(ctlBody(host)));
+    // F3: 只有主持搖 — the host's turn says when to roll for everybody
+    const solo = mk(3, { seed: 22, patch: { selfRoll: false } });
+    const sh = mountShared(ui, solo, 'p1', { mySeats: solo.state.order });
+    sh.handle.update(solo.view('p1'), ctxOne(solo));
+    sh.stub.made.cards.at(-1).props.onOpen(true);
+    sh.stub.made.cards.at(-1).props.onOpen(false);
+    const note = findEls(sh.root, (x) => x.cls.has('cu-done-note'))[0];
+    assert.ok(shown(note) && note.textContent.includes('全體搖骰就而家㩒'), note.textContent);
+    // after the walk: unfolded; 下一回合 and 全體搖骰 take a second tap on a shared phone
+    for (const pid of sim.state.order) changed(sim, pid, { type: 'seen' });
+    show(host);
+    assert.ok(!shown(toggle(host)) && shown(ctlBody(host)), 'not folded once the host has had his turn');
+    button(host.root, '➡️ 下一回合').click();
+    assert.deepEqual(host.sent, [], 'the first tap only arms');
+    assert.deepEqual(asks, ['下一回合？大家嘅骰會清晒、重新派牌。']);
+    button(host.root, '➡️ 下一回合').click();
+    assert.deepEqual(host.sent.at(-1), { type: 'next-round' });
+    host.sent.length = 0;
+    button(host.root, '🎲 全體搖骰').click();
+    assert.deepEqual(host.sent, []);
+    assert.equal(asks.at(-1), '全體搖骰？大家嘅骰會重新搖。');
+    button(host.root, '🎲 全體搖骰').click();
+    assert.deepEqual(host.sent, [{ type: 'roll-all' }]);
+    // phones of their own: unchanged — one tap each
+    const own = mk(4, { seed: 23 });
+    const ownHost = mountFor(ui, own, 'p1', { confirm });
+    ownHost.handle.update(own.view('p1'), { focus: own.focus(), paused: false });
+    button(ownHost.root, '➡️ 下一回合').click();
+    button(ownHost.root, '🎲 全體搖骰').click();
+    assert.deepEqual(ownHost.sent, [{ type: 'next-round' }, { type: 'roll-all' }]);
+    assert.ok(!shown(findEls(ownHost.root, (x) => x.cls.has('cu-ctltoggle'))[0]), 'never folded on a phone of your own');
+    ownHost.handle.destroy();
+
+    // F1: the table screen hands the phone to the host for the controls — a public card
+    const table = mountShared(ui, sim, null);
+    show(table);
+    const hb = findEls(table.root, (x) => x.cls.has('cu-tohost'))[0];
+    assert.ok(shown(hb) && hb.textContent === '🎛 主持掣 · 交俾 玩家1', hb?.textContent);
+    hb.click();
+    assert.deepEqual(table.handed, [['p1', { open: true, why: '主持掣' }]]);
+    // …private when the host is a moderator who sees every role (the 👁 tags are on that screen)
+    const mod = mk(5, { seed: 24, patch: { hostPlays: false, modSees: true } });
+    const mt = mountShared(ui, mod, null);
+    mt.handle.update(mod.view(null), ctxOne(mod));
+    findEls(mt.root, (x) => x.cls.has('cu-tohost'))[0].click();
+    assert.deepEqual(mt.handed, [['p1', { open: false, why: '主持掣' }]]);
+    // not on a phone that does not hold the host's seat, not on a spectator's phone
+    const part = mountShared(ui, sim, null, { mySeats: ['p2', 'p3'] });
+    part.handle.update(sim.view(null), ctxOne(sim, ['p2', 'p3']));
+    assert.ok(!shown(findEls(part.root, (x) => x.cls.has('cu-tohost'))[0]));
+    const spect = mountFor(ui, sim, null);
+    spect.handle.update(sim.view(null), { focus: null, paused: false });
+    assert.ok(!shown(findEls(spect.root, (x) => x.cls.has('cu-tohost'))[0]));
+    spect.handle.destroy();
+    destroyShared();
+  });
+});
+
+test('custom ui: one phone — #15 the walk covers peek, roll and lock: 「✓ 搞掂 · 交俾 X」 after the peek; the last seat hands back to the host', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 9 });   // p1 is the host and holds a card
+    const show = (ph) => ph.handle.update(sim.view(ph.pid), ctxOne(sim));
+    const play = (ph) => { while (ph.sent.length) changed(sim, ph.pid, ph.sent.shift()); show(ph); };
+    const done = (ph) => findEls(ph.root, (x) => x.cls.has('cu-done'))[0];
+    // the host looks first (the walk starts with the holder): release sends nothing on a shared phone
+    const host = mountShared(ui, sim, 'p1');
+    show(host);
+    assert.ok(!shown(done(host)), 'no 搞掂 before the card was looked at');
+    assert.equal(host.stub.made.cards.at(-1).props.onLockToggle, undefined, 'no latch while the walk waits for this seat (a latch counts as looked)');
+    host.stub.made.cards.at(-1).props.onOpen(true);
+    host.stub.made.cards.at(-1).props.onOpen(false);
+    assert.deepEqual(host.sent, [], 'the phone does not move on at the release');
+    assert.ok(shown(done(host)) && done(host).textContent === '✓ 搞掂 · 交俾 玩家2', done(host).textContent);
+    const note = findEls(host.root, (x) => x.cls.has('cu-done-note'))[0];
+    assert.ok(shown(note) && note.textContent === '要搖骰就而家搖、鎖埋先交');
+    assert.ok(findEls(host.root, (x) => x.cls.has('cu-status'))[0].textContent.includes('搞掂㩒下面「✓ 搞掂」'), 'the banner says what comes next');
+    // roll and lock in the same turn, then hand on
+    host.stub.made.cups.at(-1).props.onRoll();
+    play(host);
+    host.stub.made.cups.at(-1).props.onLock();
+    play(host);
+    assert.equal(seatOf(sim, 'p1').diceLocked, true);
+    assert.ok(shown(done(host)), 'still there after rolling');
+    done(host).click();
+    assert.deepEqual(host.sent, [{ type: 'seen' }]);
+    assert.deepEqual(host.handed, [], 'the walk itself hands the phone to the next seat (with its 搞掂 k/n on the gate)');
+    play(host);
+    assert.ok(!shown(done(host)), 'done: gone');
+    // the middle seats: 交俾 the next one round the table
+    for (const [pid, next] of [['p2', '玩家3'], ['p3', '玩家4']]) {
+      const ph = mountShared(ui, sim, pid);
+      show(ph);
+      ph.stub.made.cards.at(-1).props.onOpen(true);
+      ph.stub.made.cards.at(-1).props.onOpen(false);
+      assert.equal(done(ph).textContent, `✓ 搞掂 · 交俾 ${next}`);
+      done(ph).click();
+      play(ph);
+      assert.deepEqual(ph.handed, []);
+    }
+    // the last seat: back to the host, whose seat has the controls
+    const last = mountShared(ui, sim, 'p4');
+    show(last);
+    last.stub.made.cards.at(-1).props.onOpen(true);
+    last.stub.made.cards.at(-1).props.onOpen(false);
+    assert.equal(done(last).textContent, '✓ 搞掂 · 交返俾房主 玩家1');
+    done(last).click();
+    assert.equal(done(last).disabled, true, 'one tap only');
+    done(last).click();   // a double tap hands the phone over once
+    assert.deepEqual(last.sent, [{ type: 'seen' }]);
+    assert.deepEqual(last.handed, [['p1', { open: true, why: '大家睇完牌' }]], 're-run #2 F1: a public card — nothing secret is face up there');
+    play(last);
+    assert.equal(sim.focus(), null, 'everybody has looked');
+    // a fresh deal comes up face down: the button waits for a new look
+    changed(sim, 'p1', { type: 'next-round' });
+    show(host);
+    assert.ok(!shown(done(host)));
+    // the host is the last one: the phone goes to the middle (the shell's table card), nobody to hand it to
+    for (const pid of ['p2', 'p3', 'p4']) changed(sim, pid, { type: 'seen' });
+    show(host);
+    host.stub.made.cards.at(-1).props.onOpen(true);
+    host.stub.made.cards.at(-1).props.onOpen(false);
+    assert.equal(done(host).textContent, '✓ 搞掂 · 擺返中間');
+    host.sent.length = 0;
+    done(host).click();
+    assert.deepEqual(host.sent, [{ type: 'seen' }]);
+    assert.deepEqual(host.handed, []);
+    // a phone shared by two seats in a room of phones: the last seat here puts it in the middle (the host is elsewhere)
+    const sim2 = mk(4, { seed: 2 });
+    const pair = ['p3', 'p4'];
+    changed(sim2, 'p3', { type: 'seen' });
+    const p4 = mountShared(ui, sim2, 'p4', { mySeats: pair });
+    p4.handle.update(sim2.view('p4'), ctxOne(sim2, pair));
+    p4.stub.made.cards.at(-1).props.onOpen(true);
+    p4.stub.made.cards.at(-1).props.onOpen(false);
+    assert.equal(findEls(p4.root, (x) => x.cls.has('cu-done'))[0].textContent, '✓ 搞掂 · 擺返中間');
+    // only the host rolls: no dice line under the button
+    const sim3 = mk(3, { seed: 4, patch: { selfRoll: false } });
+    const s3 = mountShared(ui, sim3, 'p2');
+    s3.handle.update(sim3.view('p2'), ctxOne(sim3));
+    s3.stub.made.cards.at(-1).props.onOpen(true);
+    s3.stub.made.cards.at(-1).props.onOpen(false);
+    const note3 = findEls(s3.root, (x) => x.cls.has('cu-done-note'))[0];
+    assert.ok(!shown(note3) || !note3.textContent, 'no dice line under the button');
+    const status3 = findEls(s3.root, (x) => x.cls.has('cu-status'))[0].textContent;
+    assert.ok(!status3.includes('要搖骰') && status3.includes('✓ 搞掂'), status3);
+    destroyShared();
+  });
+});
+
+test('custom ui: one phone — #22 the table screen holds nobody\'s card or cup; 開盅 / 開角色 send the phone to the middle; never 「你」', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 9 });
+    for (const pid of ['p1', 'p2', 'p3', 'p4']) changed(sim, pid, { type: 'seen' });
+    for (const pid of ['p1', 'p2', 'p3']) changed(sim, pid, { type: 'roll' });
+    const table = mountShared(ui, sim, null);
+    table.handle.update(sim.view(null), ctxOne(sim));
+    assert.equal(table.stub.made.cards.length + table.stub.made.cups.length, 0, 'no card, no cup in the middle');
+    assert.ok(table.root.textContent.includes('部機喺枱中間'), table.root.textContent);
+    assert.ok(!table.root.textContent.includes('下一局先加入到'), 'the table is not a spectator');
+    assert.ok(!shown(button(table.root, '🎲 全體搖骰')), 'host controls stay on the host\'s seat');
+    // the host opens the dice on a shared phone → the phone goes to the middle (the table card), not the host's seat face up
+    const confirm = () => true;
+    const host = mountShared(ui, sim, 'p1', { extra: { confirm } });
+    host.handle.update(sim.view('p1'), ctxOne(sim));
+    button(host.root, '👁 開晒啲骰').click();
+    assert.deepEqual(host.sent, [{ type: 'reveal-dice' }]);
+    assert.deepEqual(host.tables, [{}], 'api.toTable(): the public 擺返中間 card');
+    changed(sim, 'p1', host.sent.shift());
+    table.handle.update(sim.view(null), ctxOne(sim));
+    assert.ok(table.root.textContent.includes('開盅'), 'the 開盅 list is on the table screen');
+    for (const pid of ['p1', 'p2', 'p3']) assert.ok(table.root.textContent.includes(String(sim.state.seats[pid].dice[0])));
+    host.handle.update(sim.view('p1'), ctxOne(sim));
+    button(host.root, '🔓 開晒角色').click();
+    assert.equal(host.tables.length, 2, '開角色 too');
+    button(host.root, '🃏 重新派牌').click();
+    assert.equal(host.tables.length, 2, 'a re-deal is no reveal');
+    // #20: no 「（你）」 on any screen of a shared phone
+    for (const pid of ['p1', 'p2', null]) {
+      const ph = mountShared(ui, sim, pid);
+      ph.handle.update(sim.view(pid), ctxOne(sim));
+      assert.ok(!ph.root.textContent.includes('（你）'), `${pid ?? 'table'}`);
+      assert.equal(findEls(ph.root, (x) => x.cls.has('cu-row') && x.cls.has('me')).length, 0);
+    }
+    // phones of their own: unchanged — the release sends seen, the host's reveal stays on its own phone, 「（你）」
+    const own = mk(4, { seed: 9 });
+    const p2 = mountFor(ui, own, 'p2');
+    p2.handle.update(own.view('p2'), { focus: own.focus() });
+    assert.ok(p2.root.textContent.includes('玩家2（你）'));
+    p2.stub.made.cards.at(-1).props.onOpen(true);
+    p2.stub.made.cards.at(-1).props.onOpen(false);
+    assert.deepEqual(p2.sent, [{ type: 'seen' }]);
+    assert.equal(findEls(p2.root, (x) => x.cls.has('cu-done') && shown(x)).length, 0);
+    let toTable = 0;
+    const ownHost = mountFor(ui, own, 'p1', { confirm, toTable: () => { toTable++; return false; } });
+    changed(own, 'p1', { type: 'roll' });
+    ownHost.handle.update(own.view('p1'), { focus: own.focus() });
+    button(ownHost.root, '👁 開晒啲骰').click();
+    assert.equal(toTable, 0, 'a phone of your own stays where it is');
+    destroyShared();
+    for (const ph of [p2, ownHost]) ph.handle.destroy();
+  });
+});
+
+test('custom: re-run #2 F4/F5 — the recap is headed 「今局嘅牌同骰」; two holders with two different cards get a warning', () => {
+  const sim = mk(3, { seed: 4 });
+  sim.act(sim.state.hostPid ?? 'p1', { type: 'end' });
+  assert.equal(sim.result().linesTitle, '今局嘅牌同骰', 'not 「點解會咁」 for a game that judges nothing');
+  const warn = (c, n) => config.validate(c, n).warnings.some((w) => w.includes('睇完自己張牌就知對方係咩'));
+  assert.ok(warn(config.defaults(2), 2), '2 players, 內鬼 + 好人');
+  assert.ok(warn(config.defaults(3, { preset: 'traitor', hostPlays: false }), 3), 'a moderator and 2 holders');
+  assert.ok(config.validate(config.defaults(2), 2).ok, 'a warning, never a refusal');
+  assert.ok(!warn(config.defaults(3), 3), '3 holders: your card says nothing for sure');
+  const same = { ...config.defaults(2), preset: 'custom', roles_custom: [
+    { name: '好人', emoji: '🙂', filler: true, count: 0, desc: '' }, { name: '內鬼', emoji: '🎭', count: 0, desc: '' }] };
+  assert.ok(!warn(same, 2), 'both cards the same: nothing to tell');
+});
+
 test('custom: result() says the app keeps no score (noScore), so the shell can say 「邊個贏由你哋講」', () => {
   const sim = mk(4, { seed: 2 });
   assert.equal(sim.result(), null);
@@ -1457,4 +1719,238 @@ test('custom: the rules call the dice lock by the button\'s name (鎖定點數)'
   const text = rules.sections.map((s) => s.body).join('\n');
   assert.ok(text.includes('㩒「鎖定點數」'));
   assert.ok(!text.includes('鎖定骰盅'));
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
+// seat). This checks that the engine's focus, the shell's gates and this UI fit together (DESIGN §7.1).
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false;
+    if (tag === 'template') this.content = { firstElementChild: new ShEl('svg') };   // dom.fromHTML (the dice cup's art)
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  /** Enough for the shell's menus, which compare outerHTML before they rebuild. */
+  get outerHTML() {
+    return `<${this.tag} class="${this.className}">${this.children.map((c) => (c instanceof ShEl ? c.outerHTML : c.textContent)).join('')}</${this.tag}>`;
+  }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  setPointerCapture() {}
+  focus() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** What a person could read: hidden subtrees left out. */
+const shText = (n) => (n instanceof ShText ? n.data : !n || n.hidden ? '' : n.children.map(shText).join(''));
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+/** Hold a cover down and let go (Cover listens for pointerdown / pointerup). */
+const shPeek = (cover) => {
+  assert.ok(cover, 'no cover to hold');
+  for (const f of cover.listeners.pointerdown ?? []) f({ preventDefault() {}, pointerId: 1 });
+  for (const f of cover.listeners.pointerup ?? []) f({ preventDefault() {}, pointerId: 1 });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. `mount` = this game's real ui.mount. */
+async function onePhoneShell(dom, sim, mount) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: game.meta.id, players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false, config: sim.config,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  const holds = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true,
+      holdClock: (on) => { holds.push(on); return true; },
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gameEl = () => shFind(screen.el, (n) => n.cls.has('play-game'))[0];
+  return {
+    st, acts, holds, render,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => { shTap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]); await shSettle(); await render(); },
+    game: gameEl,
+    text: () => shText(gameEl()),
+    find: (pred) => shFind(gameEl(), pred),
+    tapIn: async (pred) => { shTap(shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && pred(n))[0]); await shSettle(); await render(); },
+    chip: () => shFind(screen.el, (n) => n.cls.has('seat-chip'))[0],
+    home: () => shFind(screen.el, (n) => n.cls.has('seat-home'))[0],
+    menu: () => shFind(shDoc.body, (n) => n.cls.has('menu-sheet')).at(-1) ?? null,
+    destroy: () => screen.destroy(),
+  };
+}
+
+test('custom, one phone through the real play screen: one hand-over per seat covers card and dice (#15), the last hands back to the host, the middle shows nobody\'s card (#22)', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/custom/ui.js?v=1');
+    const sim = mk(3, { seed: 5 });   // p1 is the host and holds a card
+    const ph = await onePhoneShell(dom, sim, mount);
+    const name = (pid) => sim.players.find((p) => p.id === pid).name;
+    const doneBtn = () => ph.find((n) => n.cls.has('cu-done'))[0];
+    assert.equal(ph.st.activeSeat, null, 'the phone starts in the middle');
+    for (const [i, pid] of ['p1', 'p2', 'p3'].entries()) {
+      assert.equal(ph.gate(), 'private', `${pid}: the private gate`);
+      const g = ph.gateText();
+      assert.ok(g.includes(`交俾 ${name(pid)}`) && g.includes('睇牌、搖骰') && g.includes(`搞掂 ${i}/3`), g);
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, pid);
+      const before = ph.acts.length;
+      assert.ok(!doneBtn() || !shShown(doneBtn()), 'no 搞掂 before the look');
+      const card = ph.find((n) => n.cls.has('c-rolecard'))[0];
+      shPeek(shFind(card, (n) => n.cls.has('c-cover'))[0]);
+      assert.equal(ph.acts.length, before, 'the release does not hand the phone on');
+      assert.equal(ph.gate(), null, 'still this seat\'s phone: time to roll');
+      // roll in the same turn
+      await ph.tapIn((n) => n.textContent.includes('🎲 搖我嘅骰'));
+      assert.deepEqual(ph.acts.at(-1), { pid, action: { type: 'roll' } });
+      assert.ok(sim.state.seats[pid].dice, 'rolled');
+      assert.equal(ph.st.activeSeat, pid, 'a roll keeps the phone here');
+      const want = pid === 'p3' ? `✓ 搞掂 · 交返俾房主 ${name('p1')}` : `✓ 搞掂 · 交俾 ${name(`p${i + 2}`)}`;
+      assert.equal(doneBtn().textContent, want);
+      await ph.tapIn((n) => n.cls.has('cu-done'));
+      assert.deepEqual(ph.acts.at(-1), { pid, action: { type: 'seen' } });
+    }
+    // the walk is over: back to the host (a public card naming them, re-run #2 F1), whose seat has the controls
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(name('p1')) && !ph.gateText().includes('其他人唔好望'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p1');
+    assert.ok(ph.text().includes('主持控制') && ph.text().includes('大家都睇咗牌'), ph.text());
+    assert.ok(!ph.text().includes('（你）'), 'a shared phone never says 你');
+    // 📱 擺返中間: the table screen — nobody's card, cup or controls
+    shTap(ph.home());
+    await ph.render();
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(ph.find((n) => n.cls.has('c-rolecard') || n.cls.has('c-dicecup')).filter(shShown).length, 0);
+    assert.ok(ph.text().includes('部機喺枱中間') && !ph.text().includes('主持控制'), ph.text());
+    // re-run #2 F1: the controls are one tap from the middle — 「🎛 主持掣 · 交俾 玩家1」, a public card, the host's screen
+    await ph.tapIn((n) => n.cls.has('cu-tohost'));
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(name('p1')), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p1');
+    assert.ok(ph.text().includes('主持控制'), ph.text());
+    ph.destroy();
+  });
 });

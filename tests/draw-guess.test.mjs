@@ -140,7 +140,7 @@ test('draw-guess: config.defaults is valid for every head-count and every previo
   assert.equal(config.defaults(6).guessMode, 'shout', 'shout is the default guessing mode');
 });
 
-test('draw-guess: one phone for everybody — typed is never the default, is warned about, and has no preset', () => {
+test('draw-guess: one phone for everybody — typed is never the default, is refused (#21), and has no preset', () => {
   for (let n = 3; n <= 12; n++) {
     for (const prev of [undefined, { guessMode: 'typed' }, { guessMode: 'typed', drawMode: 'paper', teamMode: 'teams' }]) {
       const cfg = config.defaults(n, prev, { singleDevice: true });
@@ -150,10 +150,15 @@ test('draw-guess: one phone for everybody — typed is never the default, is war
     }
     // several phones: the previous choice is kept
     assert.equal(config.defaults(n, { guessMode: 'typed' }, { singleDevice: false }).guessMode, 'typed');
-    // chosen anyway on one phone: still valid (it can be played, badly) but the warning says why not
+    // chosen anyway on one phone: nobody but the drawer could ever type (#21), so it is an error that says why
     const typed = { ...config.defaults(n), guessMode: 'typed' };
     const w1 = config.validate(typed, n, { singleDevice: true });
-    assert.ok(w1.ok && w1.warnings.some((w) => w.includes('一部手機唔啱打字估')), `n=${n}: ${w1.warnings}`);
+    assert.ok(!w1.ok && w1.message.includes('一部手機冇得打字估') && w1.message.includes('講出口'), `n=${n}: ${w1.message}`);
+    assert.ok(config.validate(typed, n, { singleDevice: false }).ok, 'several phones: typed is fine');
+    // the hidden one-phone flag follows the env (the cues say 「部手機擺喺中間」)
+    assert.equal(config.defaults(n, undefined, { singleDevice: true }).passPhone, true);
+    assert.equal(config.defaults(n, { passPhone: true }, { singleDevice: false }).passPhone, false);
+    assert.ok(!config.fields(config.defaults(n, undefined, { singleDevice: true }), n).some((f) => f.key === 'passPhone'), 'no field: hidden');
     assert.ok(config.validate(typed, n).warnings.some((w) => w.includes('每人用自己部手機')), 'without env: the generic warning');
     const ids = config.presets(n, { singleDevice: true }).map((p) => p.id);
     assert.ok(!ids.includes('quiet'), 'no typed preset for one phone');
@@ -923,14 +928,17 @@ test('draw-guess: abandon, void (host only, re-queued once), skipping and the st
 test('draw-guess: blocking, autoAct and focus — the table only waits on the drawer while choosing', () => {
   const sim = mk(4, 2, { roundSeconds: 80 }, bankOf(TRIO));
   const other = guessers(sim)[0];
-  assert.deepEqual(engine.focus(sim.state), { pids: [D(sim)] });
+  // choosing is private (the offers); U10: a whole-table phone holds the pick clock until the drawer has the phone
+  assert.deepEqual(engine.focus(sim.state), { pids: [D(sim)], label: '揀詞', hold: true });
   assert.equal(engine.blocking(sim.state, D(sim)), true, 'choosing: the drawer is who the table waits for');
   for (const p of guessers(sim)) assert.equal(engine.blocking(sim.state, p), false);
   assert.equal(engine.autoAct(sim.state, other, sim.ctx()), null);
   const a1 = engine.autoAct(sim.state, D(sim), sim.ctx());
   assert.equal(T(sim).offers[a1.i].level, 2, '代佢做 picks the medium card, like the timeout');
   assert.ok(sim.act(D(sim), a1));
-  assert.deepEqual(engine.focus(sim.state), { pids: [D(sim)] }, 'the drawer still holds the phone privately (pass gate on a shared phone)');
+  // drawing is a public one-person step (§7.1 #4): the public card — and the drawing clock waits for it (U10)
+  assert.deepEqual(engine.focus(sim.state), { pids: [D(sim)], open: true, label: '畫畫', hold: true },
+    'the drawer holds the phone; on a shared phone the table watches'); 
   for (const p of sim.state.order) {
     assert.equal(engine.blocking(sim.state, p), false, 'nobody blocks a drawing clock: it runs out by itself');
     assert.equal(engine.autoAct(sim.state, p, sim.ctx()), null);
@@ -1582,7 +1590,7 @@ test('draw-guess: tie-breaks — more correct guesses wins, then more drawer poi
 // ============================================================
 
 const ALLOWED_VIEW_KEYS = ['me', 'role', 'phase', 'title', 'subtitle', 'drawMode', 'guessMode', 'hintsOn', 'scoring', 'turn', 'upNext', 'scores', 'teams',
-  'myTeam', 'mod', 'last', 'sub', 'choose', 'play', 'reveal', 'standings', 'feed', 'deadline', 'timerLabel', 'hint'];
+  'myTeam', 'mod', 'last', 'sub', 'choose', 'play', 'reveal', 'standings', 'feed', 'deadline', 'timerLabel', 'hint', 'rolesInPlay'];
 
 /** Characters of the live word that this seat may NOT see yet, plus every offer it may not see at all. */
 function secretsFor(sim, pid) {
@@ -2166,6 +2174,7 @@ test('draw-guess room: one phone, every seat — shout by default, and no seat v
     assert.equal(sel.ok, true, sel.message);
     assert.equal(room.config.guessMode, 'shout', 'one phone: typed guessing is never the default');
     assert.equal(room.config.drawMode, drawMode, 'the rest of the last setup is kept');
+    assert.equal(room.config.passPhone, true, 'the hidden one-phone flag');
     assert.equal(room.start().ok, true);
     const pids = room.session.state.order;
     const lastViews = () => [...sent].reverse().find((x) => x.deviceId === 'dev_host' && x.msg.t === 'views')?.msg;
@@ -2192,7 +2201,10 @@ test('draw-guess room: one phone, every seat — shout by default, and no seat v
         for (const c of secrets) assert.ok(!json.includes(c), `${drawMode}: ${pid} sees ${c} in ${st.phase}`);
         checked++;
       }
-      if (st.phase === 'choose' || st.phase === 'play') assert.deepEqual(m.focus, { pids: [t.drawer] }, 'the pass gate hands the phone to the drawer');
+      // the pass gate hands the phone to the drawer: privately for the offers, then the public 「擺喺枱中間畫」 card (#16),
+      // each holding the clock until it is answered (U10)
+      if (st.phase === 'choose') assert.deepEqual(m.focus, { pids: [t.drawer], label: '揀詞', hold: true });
+      if (st.phase === 'play') assert.deepEqual(m.focus, { pids: [t.drawer], open: true, label: '擺喺枱中間畫', hold: true });
       // ink: only the drawer, only while drawing on the phone canvas
       if (drawMode === 'canvas' && st.phase === 'play' && rnd() < 0.2) {
         const who = pids[Math.floor(rnd() * pids.length)];
@@ -2332,9 +2344,10 @@ function stubComponents(log) {
     },
     Timer(p0) {
       const root = E('div', 'c-timer');
-      const api = { el: root, update(p) { root.textContent = p.label ?? ''; }, destroy() { root.remove(); } };
+      const api = { el: root, props: p0, update(p) { api.props = p; root.textContent = p.label ?? ''; }, destroy() { root.remove(); } };
       api.update(p0);
       log.timers++;
+      (log.timerApis ??= []).push(api);
       return api;
     },
     Canvas(p0) {
@@ -2591,6 +2604,193 @@ test('draw-guess ui: typed — the drawer’s feed never spells the word, the la
   });
 });
 
+// ---------- one phone in the middle (DESIGN §7.1; one-phone playtest #2 #16 #21 #22 #23, D6–D10, U10) ----------
+
+test('draw-guess: one phone — #16 the play cue says the phone goes in the middle; phones of their own hear the old line', () => {
+  const one = mk(4, 2, { passPhone: true }, bankOf(TRIO));
+  pick(one, '摩天輪');
+  const t1 = one.cue().text;
+  const dn = one.players.find((p) => p.id === D(one)).name;
+  // re-run N2: said as the word is picked, while the public card still holds the clock — so no 「開始！」 yet
+  assert.ok(t1.startsWith(`${dn}揀好喇。部手機平放喺枱中間，${dn}㩒「開始」就計時，限時 `), t1);
+  assert.ok(!t1.includes('開始！'), t1);
+  assert.ok(!t1.includes('摩天輪'), 'never the word');
+  const own = mk(4, 2, {}, bankOf(TRIO));
+  pick(own, '摩天輪');
+  assert.ok(!own.cue().text.includes('部手機'), own.cue().text);
+  assert.ok(own.cue().text.startsWith('開始！限時 '), 'phones of their own: unchanged');
+  // D6: the lobby help for 畫喺邊 fits one phone and phones of their own alike
+  const help = config.fields(config.defaults(5), 5).find((f) => f.key === 'drawMode').help;
+  assert.ok(!help.includes('每部手機'), help);
+  const rule = rules.sections.find((x) => x.title === '用一部手機玩').body;
+  assert.ok(rule.includes('平放喺枱中間') && rule.includes('㩒住') && rule.includes('冇得打字估'), rule);
+});
+
+test('draw-guess: one phone — re-run N4: the reveal lasts 10 s (the table card comes first); phones of their own keep 7 s', () => {
+  for (const [over, ms] of [[{ passPhone: true }, 10000], [{}, 7000]]) {
+    const sim = mk(4, 3, { ...over, roundSeconds: 60 }, bankOf(TRIO));
+    pick(sim, '老虎');
+    assert.ok(sim.act(D(sim), { type: 'accept', target: guessers(sim)[0] }));
+    toReveal(sim);
+    assert.equal(sim.state.revealMs, ms);
+    assert.equal(sim.state.deadline - sim.now, ms);
+    // the late-✔ / 🚩 window is still the first 5 s of it
+    assert.equal(sim.view(null).reveal.lateUntil, sim.now + 5000);
+  }
+});
+
+test('draw-guess ui: U10 / re-run N1 — while the room holds the clock, the countdowns stand still at the held time and say so', async () => {
+  await withUi(async (ui) => {
+    const log = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const sim = mk(4, 5, { passPhone: true, roundSeconds: 60 }, bankOf(TRIO));
+    const all = sim.state.order;
+    let heldAt = null;
+    const mount = (pid) => {
+      const root = new FEl('div');
+      const api = {
+        me: pid, players: sim.players, isHost: true, meta, config: sim.state.cfg, send() {}, ink() {}, now: () => sim.now,
+        clockNow: () => heldAt ?? sim.now, sfx() {}, toast() {}, components: stubComponents(log),
+        shared: true, wholeTable: true, atTable: pid === null, mySeats: all,
+      };
+      return { root, handle: ui.mount(root, api) };
+    };
+    const ctxOf = () => ({ paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] }, shared: true, clockHeld: heldAt != null, clockHeldAt: heldAt });
+    // the table screen behind the drawer's private gate: 「最遲 N 秒後開始畫」
+    const table = mount(null);
+    const show = (seat) => seat.handle.update(sim.view(seat === table ? null : D(sim)), ctxOf());
+    const count = () => findEls(table.root, (n) => n.cls.has('dg-count'))[0];
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫');
+    heldAt = sim.now;                                    // the gate is up: the room holds the clock here
+    sim.now += 15_000;                                   // nobody has taken the phone yet
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫 · ⏸ 等緊接手', 'stands still at the held time');
+    // released: the session moved the deadline on by the time held, so the count carries on from the same value
+    sim.state.deadline += 15_000;
+    heldAt = null;
+    show(table);
+    assert.equal(count().textContent, '最遲 20 秒後開始畫');
+    // the drawing clock (the shared Timer): told the held time explicitly
+    pick(sim, '老虎');
+    const drawer = mount(D(sim));
+    heldAt = sim.now;
+    show(drawer);
+    const timer = log.timerApis.at(-1);
+    assert.equal(timer.props.held, heldAt);
+    heldAt = null;
+    show(drawer);
+    assert.equal(timer.props.held, undefined, 'a running clock is left to the Timer');
+    table.handle.destroy();
+    drawer.handle.destroy();
+  });
+});
+
+test('draw-guess: D10 — 最快反應 only for a solve in the first half of its turn', () => {
+  for (const [r, want] of [[0.9, true], [0.6, true], [0.3, false], [0.05, false]]) {
+    const sim = mk(3, 4, { roundSeconds: 80, cycles: 1 }, bankOf(TRIO));
+    pick(sim, '老虎');
+    at(sim, r);
+    assert.ok(sim.act(D(sim), { type: 'accept', target: guessers(sim)[0] }));
+    let guard = 0;
+    while (sim.state.phase !== 'over' && guard++ < 60) { if (sim.state.phase === 'choose') pick(sim, 1); else sim.advance(); }
+    const lines = sim.result().lines;
+    assert.equal(lines.some((l) => l.includes('最快反應')), want, `${r} of the clock left`);
+  }
+});
+
+test('draw-guess ui: one phone (§7.1) — lay it flat (#16), the word under a held cover (#22), a full-width canvas, never 「你」', async () => {
+  await withUi(async (ui) => {
+    const mountShared = (sim, log, { mySeats = sim.state.order, sends = [] } = {}) => [...sim.state.order, null].map((pid) => {
+      const root = new FEl('div');
+      const shared = mySeats.length > 1;
+      const api = {
+        me: pid, players: sim.players, isHost: pid === 'p1', meta, config: sim.state.cfg,
+        send: (a) => sends.push([pid, a]), ink() {}, now: () => sim.now, sfx: (name) => log.sfx.push(name), toast() {},
+        components: stubComponents(log),
+        shared, wholeTable: shared && mySeats.length === sim.state.order.length, atTable: shared && pid === null, mySeats,
+      };
+      return { pid, root, handle: ui.mount(root, api) };
+    });
+    const ctxOf = (sim) => ({ paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] }, shared: true });
+
+    // canvas, a whole-table phone
+    const log = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const sim = mk(4, 5, { passPhone: true, roundSeconds: 60 }, bankOf(TRIO));
+    const seats = mountShared(sim, log);
+    const render = () => { for (const s of seats) s.handle.update(sim.view(s.pid), ctxOf(sim)); };
+    const seatOf = (pid) => seats.find((x) => x.pid === pid);
+    render();
+    const drawer = seatOf(D(sim));
+    let text = visibleText(drawer.root);
+    assert.ok(text.includes('平放喺枱中間') && !text.includes('其他人隨即睇到'), `pick note: ${text}`);
+    pick(sim, '摩天輪');
+    render();
+    text = visibleText(drawer.root);
+    assert.equal(findEls(drawer.root, (n) => n.cls.has('dg-word-chip')).length, 0, 'no tap chip that opens the word big for 2.5 s');
+    const cover = log.covers.at(-1);
+    assert.ok(cover && findEls(drawer.root, (n) => n === cover.el).length === 1, 'a hold cover on the drawer\'s screen');
+    assert.ok(cover.el.cls.has('slim') && text.includes('拎起部機，㩒住睇個詞'));
+    assert.ok(visibleText(cover.front).includes('摩天輪') && !text.includes('摩天輪'), 'the word only under the finger');
+    assert.ok(text.includes('部手機平放喺枱中間畫'), text);
+    // D9: the canvas takes the full width, the name chips sit under it
+    const cv = canvasOf(log, drawer.root);
+    const host = findEls(drawer.root, (n) => n.cls.has('dg-canvas'))[0];
+    assert.ok(cv && host.cls.has('table') && host.cls.has('drawer'));
+    const order = findEls(drawer.root, (n) => n.cls.has('dg-canvas') || n.cls.has('dg-chipsbox')).map((n) => (n.cls.has('dg-canvas') ? 'canvas' : 'chips'));
+    assert.deepEqual(order, ['canvas', 'chips']);
+    // the table screen (the phone lying in the middle) is everybody's: the shout line, not 「旁觀緊」
+    const table = seatOf(null);
+    text = visibleText(table.root);
+    assert.ok(text.includes('大聲講出你嘅答案') && !text.includes('旁觀緊'), text);
+    // #20: no 「（你）」 on any screen through a whole game; no personal win sound
+    const g = guessers(sim)[0];
+    assert.ok(sim.act(D(sim), { type: 'accept', target: g }));
+    render();
+    sim.advance();
+    render();
+    for (const s of seats) assert.ok(!visibleText(s.root).includes('（你）'), `${s.pid ?? 'table'}: ${visibleText(s.root)}`);
+    assert.ok(!log.sfx.includes('win'), 'a shared phone never plays 「you won」');
+    // D8: the reveal names who draws next and after that (the waiting screen's queue never shows on one phone)
+    text = visibleText(table.root);
+    assert.ok(/下一個畫：\S+（之後：/.test(text), text);
+    let guard = 0;
+    while (sim.state.phase !== 'over' && guard++ < 80) {
+      if (sim.state.phase === 'choose') pick(sim, 1); else sim.advance();
+      render();
+      for (const s of seats) assert.ok(!visibleText(s.root).includes('（你）'), `${s.pid ?? 'table'} in ${sim.state.phase}`);
+    }
+    for (const s of seats) s.handle.destroy();
+
+    // paper, a whole-table phone: the phone is the clock in the middle
+    const plog = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const paper = mk(4, 5, { passPhone: true, drawMode: 'paper' }, bankOf(TRIO));
+    const pseats = mountShared(paper, plog);
+    for (const s of pseats) s.handle.update(paper.view(s.pid), ctxOf(paper));
+    const pd = pseats.find((x) => x.pid === D(paper));
+    assert.ok(visibleText(pd.root).includes('擺喺枱中間計時'));
+    pick(paper, '老虎');
+    for (const s of pseats) s.handle.update(paper.view(s.pid), ctxOf(paper));
+    assert.ok(visibleText(pd.root).includes('部手機擺喺中間計時，用紙筆畫'));
+    assert.ok(!plog.covers.at(-1).el.cls.has('slim'), 'paper keeps the big cover');
+    for (const s of pseats) s.handle.destroy();
+
+    // phones of their own: unchanged — the tap chip, the old lines, 「（你）」 on your own screen
+    const olog = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const own = mk(4, 5, { roundSeconds: 60 }, bankOf(TRIO));
+    const oseats = mountAll(ui, own, olog);
+    for (const s of oseats) s.handle.update(own.view(s.pid), { paused: false, ink: { epoch: own.state.inkEpoch, strokes: [] } });
+    const od = oseats.find((x) => x.pid === D(own));
+    assert.ok(visibleText(od.root).includes('其他人隨即睇到你畫'));
+    pick(own, '摩天輪');
+    for (const s of oseats) s.handle.update(own.view(s.pid), { paused: false, ink: { epoch: own.state.inkEpoch, strokes: [] } });
+    assert.equal(findEls(od.root, (n) => n.cls.has('dg-word-chip')).length, 1);
+    assert.ok(visibleText(od.root).includes('喺畫板上畫'));
+    assert.ok(!findEls(od.root, (n) => n.cls.has('dg-canvas'))[0].cls.has('table'));
+    assert.ok(visibleText(oseats.find((x) => x.pid === null).root).includes('旁觀緊'), 'a spectator phone still says so');
+    for (const s of oseats) s.handle.destroy();
+  });
+});
+
 test('draw-guess result: ranking lines get their own heading, and a highlight shared by most of the table is left out', () => {
   const sim = mk(4, 3, { ...typedCfg, cycles: 1 }, bankOf(TRIO));
   const g = guessers(sim);
@@ -2606,4 +2806,245 @@ test('draw-guess result: ranking lines get their own heading, and a highlight sh
   assert.equal(res.linesTitle, '分數點嚟');
   assert.ok(!res.lines.some((l) => l.includes('最多困難詞')), '3 of 4 share it: it highlights nobody');
   assert.ok(res.lines.some((l) => l.includes('最快反應')));
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
+// seat). This checks that the engine's focus, the shell's gates and this UI fit together (DESIGN §7.1).
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false;
+    if (tag === 'template') this.content = { firstElementChild: new ShEl('svg') };   // dom.fromHTML (the dice cup's art)
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  /** Enough for the shell's menus, which compare outerHTML before they rebuild. */
+  get outerHTML() {
+    return `<${this.tag} class="${this.className}">${this.children.map((c) => (c instanceof ShEl ? c.outerHTML : c.textContent)).join('')}</${this.tag}>`;
+  }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  setPointerCapture() {}
+  focus() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** What a person could read: hidden subtrees left out. */
+const shText = (n) => (n instanceof ShText ? n.data : !n || n.hidden ? '' : n.children.map(shText).join(''));
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+/** Hold a cover down and let go (Cover listens for pointerdown / pointerup). */
+const shPeek = (cover) => {
+  assert.ok(cover, 'no cover to hold');
+  for (const f of cover.listeners.pointerdown ?? []) f({ preventDefault() {}, pointerId: 1 });
+  for (const f of cover.listeners.pointerup ?? []) f({ preventDefault() {}, pointerId: 1 });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    // the post-tap shield (DESIGN §7.1 re-run #3) lives in this fake document until its timer drops it: wait it out,
+    // so the next test file's document gets a shield of its own
+    if (PassGate.shielded?.()) await new Promise((r) => setTimeout(r, (PassGate.SHIELD_MS ?? 400) + 20));
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. `mount` = this game's real ui.mount. */
+async function onePhoneShell(dom, sim, mount) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: game.meta.id, players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false, config: sim.config,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  const holds = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true,
+      holdClock: (on) => { holds.push(on); return true; },
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gameEl = () => shFind(screen.el, (n) => n.cls.has('play-game'))[0];
+  return {
+    st, acts, holds, render,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => { shTap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]); await shSettle(); await render(); },
+    game: gameEl,
+    text: () => shText(gameEl()),
+    find: (pred) => shFind(gameEl(), pred),
+    tapIn: async (pred) => { shTap(shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && pred(n))[0]); await shSettle(); await render(); },
+    chip: () => shFind(screen.el, (n) => n.cls.has('seat-chip'))[0],
+    home: () => shFind(screen.el, (n) => n.cls.has('seat-home'))[0],
+    menu: () => shFind(shDoc.body, (n) => n.cls.has('menu-sheet')).at(-1) ?? null,
+    destroy: () => screen.destroy(),
+  };
+}
+
+test('draw-guess, one phone through the real play screen: the offers behind a private gate, the drawing behind a public 「擺喺枱中間畫」 card, both clocks held until the drawer has the phone (U10)', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/draw-guess/ui.js?v=1');
+    // paper mode: the phone is the clock in the middle (and the fake DOM needs no canvas)
+    const sim = new Sim(game, { n: 3, seed: 4, banks: bankOf(TRIO),
+      config: { ...config.defaults(3, undefined, { singleDevice: true }), drawMode: 'paper' } });
+    const ph = await onePhoneShell(dom, sim, mount);
+    const name = (pid) => sim.players.find((p) => p.id === pid).name;
+    const drawer = D(sim);
+    // #2: the offers behind a private gate, even for the first drawer; #23 / U10: the pick clock waits for the tap
+    assert.equal(ph.gate(), 'private');
+    assert.ok(ph.gateText().includes(`交俾 ${name(drawer)}`) && ph.gateText().includes('揀詞'), ph.gateText());
+    assert.equal(ph.holds.at(-1), true, 'the room clock is held while the gate is up');
+    await ph.tapGate();
+    assert.equal(ph.holds.at(-1), false, 'and runs again from the tap');
+    assert.equal(ph.st.activeSeat, drawer);
+    assert.ok(ph.text().includes('擺喺枱中間計時'), ph.text());
+    await ph.tapIn((n) => n.cls.has('dg-offer') && n.textContent.includes('摩天輪'));
+    // #4 / #16: drawing is the table's — a public card over the table screen, and the drawing clock waits for it
+    assert.equal(sim.state.phase, 'play');
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(`輪到 ${name(drawer)}`) && ph.gateText().includes('擺喺枱中間畫') && !ph.gateText().includes('其他人唔好望'), ph.gateText());
+    assert.equal(ph.st.activeSeat, null, 'the table screen behind the card');
+    assert.ok(!ph.text().includes('摩天輪'), 'nothing secret on it');
+    assert.ok(ph.text().includes('大聲講出你嘅答案') && !ph.text().includes('旁觀緊'), ph.text());
+    assert.equal(ph.holds.at(-1), true, 'the drawing clock is held behind the card');
+    await ph.tapGate();
+    assert.equal(ph.holds.at(-1), false);
+    assert.equal(ph.st.activeSeat, drawer);
+    assert.ok(ph.text().includes('部手機擺喺中間計時，用紙筆畫'), ph.text());
+    // the real Cover keeps its front in the DOM (CSS hides it): the word is there and nowhere else
+    const outside = (n) => (n instanceof ShText ? n.data : n.hidden || n.cls.has('c-cover-front') ? '' : n.children.map(outside).join(''));
+    assert.ok(!outside(ph.game()).includes('摩天輪'), 'the word stays under the cover');
+    assert.ok(ph.find((n) => n.cls.has('c-cover-front')).some((n) => n.textContent.includes('摩天輪')));
+    assert.ok(!ph.text().includes('（你）'));
+    // somebody shouts it: the drawer taps the name; after the grace window the reveal lies in the middle
+    const g = guessers(sim)[0];
+    await ph.tapIn((n) => n.cls.has('dg-chip-guesser') && n.textContent.includes(name(g)));
+    sim.advance();
+    await ph.render();
+    assert.equal(sim.state.phase, 'reveal');
+    assert.equal(ph.gate(), 'table');
+    assert.equal(ph.st.activeSeat, null);
+    assert.ok(ph.text().includes('摩天輪'), 'the answer on the table screen');
+    ph.destroy();
+  });
+});
+
+test('draw-guess: re-run #5 — every view (seats and table) names this turn’s parts for the 💡 sheet', async () => {
+  const { hintRoles } = await import('../js/ui/logic.js?v=1');
+  const ffa = mk(4, 5, { passPhone: true }, bankOf(TRIO));
+  for (const pid of [null, ...ffa.state.order]) assert.deepEqual(ffa.view(pid).rolesInPlay, [{ id: 'drawer', count: 1 }, { id: 'guesser', count: 3 }]);
+  const list = hintRoles(ffa.view(null), game.rules);
+  assert.equal(list.inPlay, true);
+  assert.deepEqual(list.roles.map((r) => r.id), ['drawer', 'guesser'], 'no 對手隊員 outside team play');
+  const teams = mk(6, 5, { teamMode: 'teams', teams: 2 }, bankOf(TRIO));
+  assert.ok(teams.state.teams, 'team play');
+  assert.deepEqual(teams.view(null).rolesInPlay, [{ id: 'drawer', count: 1 }, { id: 'guesser', count: 2 }, { id: 'rival', count: 3 }]);
 });

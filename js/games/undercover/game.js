@@ -125,7 +125,7 @@ export const rules = {
   sections: [
     {
       title: '點玩',
-      body: '1. 每人用自己部手機睇詞語，記住就㩒「記住喇」，張卡會自動鎖住。\n'
+      body: '1. 每人睇自己個詞（一人一部機，或者一部機輪流傳），記住就㩒「記住喇」，張卡會自動鎖住。\n'
         + '2. 隨機揀一個人開始（任何人都可以係第一個），跟座位次序，每人講一句形容自己個詞。\n'
         + '3. 大家都講完，自由討論：邊個最似臥底？過半數未出局嘅人㩒「開始投票」就投票（出咗局嘅人唔可以㩒）。\n'
         + '4. 一齊投票，最多票嗰個出局，並公開身份。\n'
@@ -170,8 +170,9 @@ export const rules = {
     },
     {
       title: '單機玩法',
-      body: '一部手機傳住玩都得：派詞語時逐個接手機睇，投票亦係逐個投。發言時部手機放喺枱中間，講完㩒「講完喇」。\n'
-        + '想再睇返自己個詞：㩒上面嘅座位掣換返自己（會有交接卡，要本人接機），再㩒「睇返我個詞」。',
+      body: '一部手機傳住玩都得：派詞語時逐個接手機睇，投票亦係逐個投，每次都有交接卡。\n'
+        + '發言、討論同睇結果嗰陣部手機放喺枱中間，邊個都可以㩒「講完喇」、「開始投票」（成枱一部機要㩒兩下，傾夠先開）同「大家睇完」。\n'
+        + '想再睇返自己個詞：喺枱中間㩒「🃏 睇返我個詞」，揀返自己個名（會有交接卡），睇完㩒「📱 擺返中間」。',
     },
   ],
 };
@@ -914,7 +915,7 @@ function currentCue(s) {
     case 'deal':
       return {
         id: 'deal',
-        text: `準備開始。今局有 ${countsText(s.counts0)}。大家用自己部手機睇詞語，睇完記住就㩒「記住喇」。`,
+        text: `準備開始。今局有 ${countsText(s.counts0)}。逐個睇自己個詞，記住就㩒「記住喇」。`,
         minMs: 3000,
       };
     case 'speak': {
@@ -1057,6 +1058,12 @@ function overView(s) {
   };
 }
 
+/** `view.rolesInPlay` (shell hints): `{ id, count }` for every role dealt this game, in the rules' order. */
+function rolesInPlay(c0) {
+  const n = { civilian: c0?.civilians ?? 0, undercover: c0?.undercovers ?? 0, blank: c0?.blanks ?? 0 };
+  return ['civilian', 'undercover', 'blank'].filter((id) => n[id] > 0).map((id) => ({ id, count: n[id] }));
+}
+
 function view(s, pid) {
   const v = {
     phase: s.phase,
@@ -1076,6 +1083,8 @@ function view(s, pid) {
       win: s.cfg.win,
     },
     seats: s.seats.map((id) => ({ id, alive: isAlive(s, id) })),
+    // the deck of THIS game for the shell's 💡 role list (no 白板 line when none was dealt; counts are public)
+    rolesInPlay: rolesInPlay(s.counts0),
     absent: s.seats.filter((id) => isAbsent(s, id)),        // public (D4): shown as 💤, never waited on
     outs: s.outs.map((o) => ({ pid: o.pid, round: o.round, role: disclose(s, o.role) })),
     history: s.history.map((h) => ({
@@ -1172,7 +1181,12 @@ function result(s) {
   // Mis-votes are what decides this game: say how many civilians the table threw out.
   const civOut = s.outs.filter((o) => o.role === 'civilian').map((o) => o.pid);
   if (civOut.length) lines.push(`平民投走咗 ${civOut.length} 個自己人：${names(s, civOut)}。`);
-  else if (s.win.side === 'civilians') lines.push('平民一個自己人都冇投錯！');
+  else if (s.win.side === 'civilians') {
+    // 「冇投錯」 only when it is true: no civilian ever put a ballot on another civilian (one-phone playtest #32)
+    const civOnCiv = s.history.some((h) => Object.entries(h.ballots ?? {})
+      .some(([voter, target]) => target && s.roles[voter] === 'civilian' && s.roles[target] === 'civilian'));
+    lines.push(civOnCiv ? '平民一個自己人都冇投走！' : '平民一個自己人都冇投錯！');
+  }
   if (!s.cfg.revealRole && s.outs.length) lines.push('今局出局嗰陣冇公開身份，下面係真身份。');
   for (const h of s.history) lines.push(historyLine(s, h));
   return {
@@ -1394,15 +1408,21 @@ export const engine = {
         return s;
       }
       case 'done': {
-        // `at` (the step id from the view) stops a double tap from skipping the next speaker.
+        // `at` (the step id from the view: round, kind and turn number) stops a double tap from skipping the next
+        // speaker: a tap made on a step that has already moved on is stale and dropped. A whole-table tap (the shared
+        // phone in the middle, `table: true`) must carry it — anyone at the table may tap, so a bare one is never trusted.
         if (s.phase !== 'speak' || (a.at !== undefined && a.at !== speakId(s))) return s;
+        if (a.table === true && a.at === undefined) return s;
         endTurn(s, ctx);
         return s;
       }
       case 'start-vote': {
-        // D2: a seat says it wants to vote; dead seats have no say. `seats`: the other seats of a passed-round phone
+        // D2: a seat says it wants to vote; dead seats have no say. `seats`: the other seats of a passed-round phone.
+        // A whole-table tap (`table: true`, DESIGN §7.1) speaks for every listed seat, whichever seat carried it
         s.want ??= {};
-        if (s.phase !== 'discuss' || !isAlive(s, pid) || s.want[pid]) return s;
+        if (s.phase !== 'discuss') return s;
+        if (a.table === true) return wantVote(s, ctx, [pid, ...alsoSeats(s, a)]);
+        if (!isAlive(s, pid) || s.want[pid]) return s;
         return wantVote(s, ctx, [pid, ...alsoSeats(s, a)]);
       }
       case 'vote': {
@@ -1425,9 +1445,10 @@ export const engine = {
         return s;
       }
       case 'continue': {
-        // D3: 睇完 — counts this seat (and a passed-round phone's other seats); all present seats → move on
+        // D3: 睇完 — counts this seat (and a passed-round phone's other seats); all present seats → move on.
+        // A whole-table tap (`table: true`) counts every listed seat, even when the carrier's own was already in
         s.seen ??= {};
-        if (s.phase !== 'elim' || s.elim.guess?.pending || s.seen[pid]) return s;
+        if (s.phase !== 'elim' || s.elim.guess?.pending || (s.seen[pid] && a.table !== true)) return s;
         return markSeen(s, ctx, [pid, ...alsoSeats(s, a)]);
       }
       default: return s;
@@ -1447,15 +1468,21 @@ export const engine = {
 
   focus(s) {
     switch (s.phase) {
+      // one-phone hints (DESIGN §7.1, read only by a shared phone): `label` names the step on the pass gate (#33),
+      // `step` makes a new step for the same seat gate again (#2) — e.g. the last voter is the white card who guesses
       case 'deal': {
         const pids = presentSeats(s).filter((p) => !s.ready[p]);
-        return pids.length ? { pids } : null;
+        return pids.length ? { pids, label: '睇詞語' } : null;
       }
       case 'vote': {
         const pids = s.voters.filter((p) => !(p in s.ballots));
-        return pids.length ? { pids } : null;
+        return pids.length ? {
+          pids,
+          step: `vote:${s.round}:${s.voteKind}:${s.history.length}`,
+          label: s.voteKind === 'pk' ? `第 ${s.round} 輪 PK 投票` : `第 ${s.round} 輪投票`,
+        } : null;
       }
-      case 'elim': return s.elim.guess?.pending ? { pids: [s.elim.out] } : null;
+      case 'elim': return s.elim.guess?.pending ? { pids: [s.elim.out], step: `guess:${s.elim.seq}`, label: '白板估詞' } : null;
       default: return null;
     }
   },

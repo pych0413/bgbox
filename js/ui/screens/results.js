@@ -283,7 +283,8 @@ export function mountResults(sh) {
       try { paintKeepsake(st); } catch (err) { console.error('[results] keepsake failed', err); keepCard.hidden = true; }
       board.update({
         players: room.players, scoreboard: room.scoreboard, history: room.history,
-        games: sh.gamesById(), me: st.activeSeat ?? st.mySeats?.[0],
+        // #20: a shared phone is read by the whole table — no 「（你）」 row
+        games: sh.gamesById(), me: (st.mySeats?.length ?? 0) > 1 ? null : (st.activeSeat ?? st.mySeats?.[0]),
       });
       againBtn.hidden = !st.isHost;
       lobbyBtn.hidden = !st.isHost;

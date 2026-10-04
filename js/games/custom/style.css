@@ -66,11 +66,27 @@
 }
 .cu-btn.danger { background: rgba(228,87,61,.14); border-color: rgba(228,87,61,.5); color: #ff9b86; }
 .cu-btn.quiet  { background: transparent; color: var(--text-dim, #a2977f); }
+/* #3 arm-then-confirm on a host button (「再㩒一次：…」): the same look as the shell's .btn.armed */
+.cu-btn.armed {
+  background: rgba(228,87,61,.18); border-color: var(--danger, #e4573d); color: #ffb3a3;
+  box-shadow: 0 0 0 2px rgba(228,87,61,.35); animation: cuArm 1s ease-in-out infinite;
+}
+@keyframes cuArm { 50% { box-shadow: 0 0 0 4px rgba(228,87,61,.18); } }
+@media (prefers-reduced-motion: reduce) { .cu-btn.armed { animation: none; } }
+/* one phone (re-run #2): the folded host controls, and 「🎛 主持掣 · 交俾 阿聰」 on the table screen */
+.cu-ctltoggle:not([hidden]) + .cu-ctlbody { margin-top: .625rem; }
+.cu-ctlbody > .cu-btn, .cu-ctlbody > .cu-grid { margin-top: .625rem; }
+.cu-ctlbody > .cu-grid:first-child { margin-top: 0; }
+.cu-tablectl { display: flex; flex-direction: column; gap: .375rem; }
 .cu-card > .cu-btn,
 .cu-card > .cu-grid { margin-top: .625rem; }
 .cu-card > .cu-head + .cu-grid { margin-top: 0; }
 .cu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .625rem; }
 .cu-grid .cu-btn { font-size: .875rem; }
+/* one phone (#15): 「✓ 搞掂 · 交俾 阿明」 under the card, once the seat has looked */
+.cu-donebox { display: flex; flex-direction: column; gap: .375rem; margin-top: .75rem; }
+.cu-donebox[hidden] { display: none; }
+.cu-done-note { text-align: center; }
 
 /* ---------- roster ---------- */
 .cu-roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }

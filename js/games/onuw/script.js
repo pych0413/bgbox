@@ -123,7 +123,7 @@ export const RULES_ROLES = ROLE_RULES.map(({ what, win, ...r }) => ({
 /** The 30-second version: six short lines at most (BACKLOG U1). */
 export const QUICK = [
   '每人一張角色牌，中間仲有 3 張冇人知。',
-  '夜晚手機逐個角色叫醒；冇叫到你都照㩒掣。',
+  '夜晚手機逐個角色叫醒，叫到你先睜眼做嘢。',
   '有啲角色會換牌：你最後係咩，自己未必知。',
   '天光討論幾分鐘，可以講大話，然後一齊投票。',
   '最多票（至少 2 票）嘅人死，平票一齊死。',
@@ -133,7 +133,7 @@ export const QUICK = [
 export const SECTIONS = [
   { title: '玩法流程', body:
     '1. 派牌：每人㩒住張牌睇一次，記住自己係邊個。中間 3 張冇人睇到。「牌組」（有咩角色、各幾張）所有人都睇到。\n'
-    + '2. 夜晚：手機按次序叫角色睜眼。叫到你先有嘢做；冇叫到你，你一樣有掣㩒（假動作），每一輪時間一樣長，所以冇人聽得出邊個醒。\n'
+    + '2. 夜晚：手機按次序叫角色睜眼。叫到你先有嘢做；一人一部機嘅話，冇叫到你一樣有掣㩒（假動作）。每一輪時間一樣長，所以冇人聽得出邊個醒（一部手機玩：見下面「用一部手機玩」）。\n'
     + '3. 天光：大家睜眼，自由討論（有倒數，房主可以加 60 秒）。可以講大話。唔准再睇自己張牌。\n'
     + '4. 投票：每人秘密揀另一個人，全部揀完同時公開。\n'
     + '5. 開牌：死咗嘅人、所有人最後張牌、邊隊贏、點解，一次過顯示；跟住有成個夜晚嘅記錄。' },
@@ -152,7 +152,7 @@ export const SECTIONS = [
     + '1. 數票。最高票如果只有 1 票（例如人人投唔同嘅人，或者大家圍成一圈各投下一位），冇人死。\n'
     + '2. 最高票 ≥ 2：所有拎到最高票嘅人一齊死，冇重投、冇 tiebreak。\n'
     + '3. 獵人死咗，佢投嘅人都死（唔理幾多票）；如果嗰個人又係獵人，繼續開槍。已經死咗嘅人唔會再死多次。\n'
-    + '4. 設定可以開「圈票」：全部人都按同意，系統就幫每人投下一位，等於全場唔殺人（懷疑兩隻狼人都喺中間嗰陣用）。' },
+    + '4. 設定可以開「圈票」：全部人都按同意，系統就幫每人投下一位，等於全場唔殺人（懷疑兩隻狼人都喺中間嗰陣用）。冇人死嘅話：有狼喺玩家入面就係狼人隊贏；兩隻都喺中間先係好人贏。' },
   { title: '邊個贏', body:
     '以夜晚尾每個人手上張牌計（化身幽靈算佢複製咗嘅角色）。\n'
     + '・好人隊：有狼人死咗 → 贏。場上冇人係狼人（兩張狼人牌都喺中間）：要冇人死先贏。\n'
@@ -180,10 +180,11 @@ export const SECTIONS = [
     + '10 人：2 狼人、爪牙、2 守夜人、預言家、強盜、搗蛋鬼、酒鬼、失眠者、獵人、2 村民\n'
     + '牌數一定係「人數 + 3」。第一次玩：唔好加化身幽靈、皮匠、獵人，之後一次加一兩個新角色。' },
   { title: '用一部手機玩', body:
-    '部手機放喺枱中間，全部人閉眼。手機叫到邊個角色，嗰個角色摸到部機先睜眼，㩒一下「交接卡」、做完嘢就放返低。夜晚冇人出聲。\n'
-    + '留意：冇人醒嗰輪（角色喺中間）部機唔會彈交接卡，所以夜晚最好所有人真係閉眼；有條件嘅話，一人一部手機仲穩陣好多。\n'
-    + '一部手機玩，夜晚速度預設「新手（慢）」：每一步都夠時間摸部機、做嘢、放返低。\n'
-    + '投票同日頭都可以逐個傳機，每人揀完先傳下一位。' },
+    '要用🔊語音（冇聲就搵個唔玩嘅人📜讀稿）：全部人全程閉眼聽叫，所以冇靜音。\n'
+    + '部手機放喺枱中間，大家一隻手放喺枱上。聽到「（你嘅角色），請睜開眼，拎起部手機」先摸部機，㩒交接卡，做完放返中間再閉眼。每一步都會彈交接卡（角色喺中間都會），時間一樣長，仲會播住背景聲，摸部機都冇人聽得出。\n'
+    + '一部手機玩，夜晚速度預設「新手（慢）」，每一步再加 8 秒交機時間。\n'
+    + '兩隻狼人（或者兩個守夜人）：一齊拎部機，睇同一個畫面認隊友；自己嘅 📓 㩒自己個名嗰格睇，其他人望開。\n'
+    + '天光部手機擺返中間：計時、「大家夠鐘投票」、「全枱同意圈票」都喺枱面，要㩒兩下先算（免得有人手快）。投票逐個傳機，全部投完先好講；想圈票嘅，同時揀一個人做後備，圈唔成就計後備票。' },
   { title: '有部手機冇電／斷線', body:
     '夜晚唔使理：每一步時間到就自動行落去，一定要做嘅（酒鬼換牌、化身幽靈揀人）系統會隨機幫佢做。投票嗰陣房主可以㩒「代佢做」，系統幫佢隨機投一票。\n'
     + '如果覺得咁唔公平，房主可以宣佈「呢局唔計」：冇人贏、冇人有分，結果頁會公開今晚派咗咩牌、做過啲乜，然後再開過一局。' },
@@ -312,11 +313,12 @@ export function roleTags(roles) {
 }
 
 /** The lobby's summary: every line becomes one tag (they do not wrap), so each stays short. */
-export function summaryLines({ n, preset, roles, reasonShort, pace, discussSec, loneWolf, ringVote, antiStreak }) {
+export function summaryLines({ n, preset, roles, reasonShort, pace, discussSec, loneWolf, ringVote, antiStreak, passPhone = false, padSec = 8 }) {
   const lines = [`🃏 ${n + 3} 張牌（${n}+3）`, presetLabel(preset)];
   lines.push(...roleTags(roles));
   lines.push(...reasonShort);
   lines.push(`🌙 夜晚${PACE_LABEL[pace]}`, `☀️ 討論 ${discussText(discussSec)}`);
+  if (passPhone) lines.push(`📱 每步加 ${padSec} 秒交機`);
   lines.push(loneWolf ? '🐺 獨狼可睇中間一張' : '🐺 獨狼唔可以睇牌');
   if (ringVote) lines.push('⭕ 可以圈票');
   if (antiStreak) lines.push('🔁 唔會連續派到狼人');
@@ -364,7 +366,10 @@ export function anonymousPrompt(k) {
 }
 
 const OPEN = {
-  begin: '天黑請閉眼。大家將部手機放低，閉埋眼，夜晚唔准出聲，唔好偷望。',
+  begin: (ctx) => (ctx.passPhone
+    // one phone in the middle (C10): a hand on the table, so reaching for the phone is not seen or heard
+    ? '天黑請閉眼。部手機放喺枱中間，大家一隻手放喺枱上，閉埋眼，夜晚唔准出聲，唔好偷望。'
+    : '天黑請閉眼。大家將部手機放低，閉埋眼，夜晚唔准出聲，唔好偷望。'),
   doppelganger: '化身幽靈，請睜開眼。揀一個人，睇佢張牌，你就變成佢嘅角色；如果佢有夜晚行動，你即刻做。',
   'doppelganger-minion': '如果化身幽靈複製咗爪牙，請睜開眼，睇邊個係狼人。其他人繼續閉眼。',
   werewolf: (ctx) => '狼人，請睜開眼，睇下有冇其他狼人。'
@@ -380,15 +385,38 @@ const OPEN = {
   dawn: (ctx) => `天光喇，大家睜開眼！由而家開始自由討論，限時 ${discussText(ctx.discussSec)}。夜晚完咗，唔准再睇自己張牌。`,
 };
 
+/**
+ * One phone in the middle (re-run R4): the anonymous gate opens only when the cue is over, so a role called at the START
+ * of its line would reach for the phone and find 「📱 擺返中間 · 閉埋眼」 on it. On one phone the line says what the role
+ * may do first and calls it LAST — 「…預言家，請睜開眼，拎起部手機。」 — so its eyes open as the gate comes up. Every
+ * line is the same for the role awake or in the centre, as before.
+ */
+const WAKE = (r) => `${roleName(r)}，請睜開眼，拎起部手機。`;
+const OPEN_PASS = {
+  doppelganger: `化身幽靈：揀一個人睇佢張牌，你就變成佢嘅角色；如果佢有夜晚行動，你即刻做。${WAKE('doppelganger')}`,
+  'doppelganger-minion': '如果化身幽靈複製咗爪牙，就睇邊個係狼人，其他人繼續閉眼。係嘅話，化身幽靈請睜開眼，拎起部手機。',
+  werewolf: (ctx) => `狼人：睇下有冇其他狼人。${ctx.loneWolf ? '如果淨係得你一隻，你可以睇中間一張牌。' : ''}${WAKE('werewolf')}`,
+  minion: `爪牙：睇邊個係狼人，狼人唔會知你係邊個。${WAKE('minion')}`,
+  mason: `守夜人：睇下另一個守夜人係邊個。${WAKE('mason')}`,
+  seer: `預言家：你可以睇一個人嘅牌，或者睇中間兩張牌。${WAKE('seer')}`,
+  robber: `強盜：你可以同另一個人換牌，然後睇你換返嚟嗰張。${WAKE('robber')}`,
+  troublemaker: `搗蛋鬼：你可以將另外兩個人嘅牌對調，唔准睇。${WAKE('troublemaker')}`,
+  drunk: `酒鬼：你一定要同中間一張牌對調，唔准睇。${WAKE('drunk')}`,
+  insomniac: `失眠者：睇返自己而家張牌有冇變。${WAKE('insomniac')}`,
+  'doppelganger-insomniac': '如果化身幽靈複製咗失眠者，就睇返自己而家張牌。係嘅話，化身幽靈請睜開眼，拎起部手機。',
+  // re-run R3: the dawn step only closes the last role's eyes — everybody opens them on the day's first line
+  dawn: '大家繼續閉住眼，部手機擺返枱中間。',
+};
+
 /** "請閉眼" for the step that just ended; baked into the next cue so there is one line per step. */
 function closeLine(k) {
   const r = STEP_ROLE[k];
   return r ? `${roleName(r)}，請閉眼。` : '';
 }
 
-/** The narration for a step. `prev` is the step before it (or null); ctx = { loneWolf, discussSec }. */
+/** The narration for a step. `prev` is the step before it (or null); ctx = { loneWolf, discussSec, passPhone }. */
 export function cueNight(k, prev, ctx = {}) {
-  const open = OPEN[k];
+  const open = (ctx.passPhone ? OPEN_PASS[k] : undefined) ?? OPEN[k];
   const body = typeof open === 'function' ? open(ctx) : (open ?? '');
   // the Doppelgänger's own sub-steps follow her main step directly: no "請閉眼" in between
   const close = prev && STEP_ROLE[prev] !== STEP_ROLE[k] ? closeLine(prev) : '';
@@ -397,7 +425,16 @@ export function cueNight(k, prev, ctx = {}) {
 
 export const cueDeal = () => '派牌喇。㩒住張牌睇自己係邊個，記住佢。夜晚你張牌可能會被換走，手機唔會再話你知。睇完㩒「記住喇」，全部人好咗，天就會黑。';
 
-export const cueVote = () => '時間到！打開手機，揀你覺得係狼人嘅人。三、二、一，投票！';
+/** One phone (re-run R3): the day's first line, once the dawn step is over — the same words the dawn cue has elsewhere. */
+export const cueDayOpen = (ctx = {}) => OPEN.dawn({ discussSec: ctx.discussSec });
+
+/**
+ * One phone: the ballots go round one by one, so the line asks for quiet until the last one is in (re-run R5); a vote
+ * the table started before the clock ran out opens with 「夠鐘投票！」, not 「時間到！」 (re-run R2).
+ */
+export const cueVote = ({ passPhone = false, early = false } = {}) => (passPhone
+  ? `${early ? '夠鐘投票！' : '時間到！'}部手機逐個交，揀你覺得係狼人嘅人。全部投完先好講，最後一齊公開。`
+  : '時間到！揀你覺得係狼人嘅人。三、二、一，投票！');
 
 export function cueReveal(f, nm) {
   const parts = ['全部人投晒票喇。'];
@@ -447,12 +484,27 @@ export function noteLine(n, nm) {
       return `${pre}酒鬼：你同${slotName(n.slot)}對調咗（你冇睇到）。${n.auto ? '（時間到，系統幫你隨機揀）' : ''}`;
     case 'insomniac':
       return `${pre}失眠者：天光前你張牌係 ${roleTag(n.role)}。`;
-    case 'idle':
-      return `${pre}${roleName(n.ability === 'loneWolf' ? 'werewolf' : n.ability)}：今晚你冇用能力。`;
+    case 'idle': {
+      const who = roleName(n.ability === 'loneWolf' ? 'werewolf' : n.ability);
+      const lapse = LAPSE[n.ability];
+      // one phone (re-run R6): the engine knows — the big button there means "done"
+      if (n.why === 'declined' && lapse) return `${pre}${who}：${lapse.declined}`;
+      if (n.why === 'time' && lapse) return `${pre}${who}：${lapse.time}`;
+      // honest either way (#7): the window may have run out mid-pick, or the seat chose not to
+      return `${pre}${who}：今晚你冇確定（時間到或者唔想用）。`;
+    }
     default:
       return '';
   }
 }
+
+/** A lapsed optional ability, when the engine knows why (one phone, re-run R6): chose not to, or ran out of time. */
+const LAPSE = {
+  seer: { declined: '你揀咗唔睇牌。', time: '時間到，你今晚冇睇到牌。' },
+  robber: { declined: '你揀咗唔換牌。', time: '時間到，你今晚冇換到牌。' },
+  troublemaker: { declined: '你揀咗唔對調。', time: '時間到，你今晚冇對調到。' },
+  loneWolf: { declined: '你揀咗唔睇中間嘅牌。', time: '時間到，你今晚冇睇到中間嘅牌。' },
+};
 
 // ---------- the public night log (shown after the vote) ----------
 
@@ -489,6 +541,8 @@ export function logLine(ev, nm) {
     case 'insomniac':
       return `${actor(ev, nm)} 睇返自己張牌：${roleTag(ev.role)}`;
     case 'idle':
+      if (ev.why === 'declined') return `${actor(ev, nm)} 揀咗唔用能力`;
+      if (ev.why === 'time') return `${actor(ev, nm)} 時間到，冇用能力`;
       return `${actor(ev, nm)} 冇用能力`;
     default:
       return '';
@@ -746,12 +800,13 @@ export const HINT = {
     drunk: '一定要同中間一張牌對調，唔准睇。',
     loneWolf: '得你一隻狼醒：可以睇中間一張牌。',
     dawn: '天光喇：可以睜眼，準備討論。',
+    dawnHold: '就嚟天光：繼續閉住眼，等旁白叫先睜眼。',
   },
   day: '講你係乜、見過乜（可以講大話），搵出狼人。',
   vote: {
     pick: '揀一個你覺得係狼人嘅人，再㩒確定。',
     voted: '投咗喇：等其他人，全部投完一齊公開。',
-    ring: '你同意咗圈票：等其他人決定。',
+    ring: '同意咗圈票。冇人死：有狼喺玩家入面＝狼人隊贏；狼人全部喺中間先係好人贏。',
     stuck: '圈票唔成：你要自己揀一個人。',
     // the host marked this seat 💤 (D4)
     absent: '房主當咗你暫時離開：今次唔使投，返嚟就同房主講聲。',
@@ -776,6 +831,9 @@ export const HINT = {
  */
 export const HINT_ROLE_LABEL = '你派到嘅角色';
 
+/** The public step name a shared phone's pass gate shows (focus.label, #33). */
+export const FOCUS_LABEL = { deal: '睇牌', vote: '投票', votePass: '投票 · 投完先好講' };
+
 // ---------- UI wording ----------
 
 export const T = {
@@ -786,6 +844,7 @@ export const T = {
   dealCount: (d, t) => `已記住 ${d} / ${t}`,
   roleListTitle: '今局角色（中間有 3 張）',
   dealTip: '夜晚點玩？手機會逐個角色叫醒，叫到你先有嘢做。每一輪都喺手機下半部大掣㩒一下（冇做嘢都要㩒），咁就冇人聽得出邊個醒。',
+  dealTipShared: '夜晚點玩？部手機放枱中間，全部人閉眼。叫到你嘅角色先拎起部手機，㩒交接卡，做完放返中間再閉眼。',
   peekHint: '㩒住先睇到，放手即刻冚返', lockedHint: '已鎖定，㩒下面解鎖',
   roleCardBack: '㩒住睇我係邊個',
   // night
@@ -795,9 +854,23 @@ export const T = {
   dawnHead: '🌅 天光喇', dawnSub: '可以睜眼喇。',
   beginHead: '🌙 天黑', beginSub: '閉埋眼，部手機放低，唔好偷望。',
   ackMain: '👆 㩒一下', ackSub: '每一輪都㩒，咁就冇人聽得出邊個醒',
+  // one phone in the middle (#19): nobody taps a decoy there — the last tap means "seen it", and the phone goes back
+  ackSubShared: '做完就㩒，部手機放返枱中間',
   ackConfirm: '㩒落去就定案',
   helpVoice: '夜晚唔好講嘢。個掣有冇用都照㩒，咁就冇人知邊個醒。',
   helpSilent: '靜音模式：唔使閉眼，望住自己部機 — 輪到你嗰陣佢會自動亮起。',
+  helpVoiceShared: '夜晚唔好講嘢。做完就㩒大掣，部手機放返枱中間，閉返眼。',
+  helpSilentShared: '靜音模式：做完就放返部手機喺枱中間，唔好抬頭望人。',
+  // the night countdown (#7): seconds left, and what the holder of a shared phone does when they run out
+  barLeft: (sec) => `仲有 ${sec} 秒`,
+  timeUp: '⏰ 時間到', timeUpShared: '⏰ 時間到 — 部手機擺返中間，閉眼',
+  // two or more of a shared phone's seats awake in one step (U2): one screen
+  coHead: (k) => (k === 'mason' ? '🕯️ 你哋係守夜人' : k === 'werewolf' ? '🐺 你哋係狼人' : '👀 你哋一齊醒'),
+  coWith: (names) => `一齊醒：${names}`,
+  coOthers: (names) => `（另一部機：${names}）`,
+  coBookTitle: '📓 自己嘅記錄：㩒住自己個名嗰格睇（其他人望開）',
+  coBookBack: (name) => `㩒住睇 ${name} 嘅記錄`,
+  coAckSub: '睇完就㩒，部手機放返枱中間，閉返眼',
   nightPeekBack: '📓', nightPeekLabel: '㩒住睇你今晚見過乜',
   nightNothing: '今晚未見過嘢。',
   awakeHead: '👀 你醒咗',
@@ -837,12 +910,28 @@ export const T = {
   readyVote: '🗳️ 我哋夠鐘投票', readyVoteDone: '✓ 我夠鐘投票 — 等緊其他人（㩒一下取消）',
   readyVoteCount: (d, t, timed) => `想投票：${d} / ${t}（全部人都想先會開始${timed ? '，或者時間到' : ''}）`,
   hostSkip: '房主：想即刻投票？㩒右上角 ⋯ →「下一步」。',
+  // the phone in the middle of a shared table (#5, #24): one tap is the table's
+  tableReady: '🗳️ 大家夠鐘投票', tableReadyPart: '🗳️ 呢部機嘅人都夠鐘投票',
+  // it ends the talk for everybody: the shell asks for a second tap, naming the time still on the clock (re-run R2)
+  tableReadyConfirm: (leftMs) => {
+    if (!Number.isFinite(leftMs) || leftMs <= 0) return '全枱都夠鐘？即刻投票';
+    const sec = Math.ceil(leftMs / 1000);
+    return `全枱都夠鐘？仲有 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  },
+  tableRing: '⭕ 全枱同意圈票（冇人死）', tableRingConfirm: '全枱都同意圈票？冇人會死',
+  seatToTable: '📱 想投票：擺返中間，喺枱面㩒「夠鐘投票」',
   // vote
   voteLead: '邊個係狼人？揀一個，確定。全部人投晒就同時公開。',
+  // one phone (re-run R5): the ballots go round one by one
+  voteLeadShared: '邊個係狼人？揀一個，確定，交俾下一位。全部投完先好講，最後一齊公開。',
+  tableVoteBodyShared: '逐個投緊票：全部投完先好講。',
   voteTitle: '投票',
   ringTitle: '⭕ 圈票',
   ringHelp: '懷疑兩隻狼人都喺中間？全部人都按同意，每人就會投下一位，成場冇人死。',
   ringOn: '✓ 我同意圈票（㩒一下取消）', ringOff: '⭕ 我同意圈票',
+  // one phone (#24): agreeing and the ballot go in the same turn
+  ringOnFallback: '✓ 我同意圈票 — 都要揀一個做後備（㩒一下取消）',
+  ringHelpFallback: '想圈票：㩒同意，再照揀一個人做後備。全部人都同意就冇人死；唔成就計後備票。',
   ringCount: (d, t) => `同意圈票：${d} / ${t}（要全部人同意先生效，唔成就照各人揀嘅票計）`,
   ringStuck: '圈票未成立：其他人已經揀咗人。你要自己揀一個人（或者叫其他人改按同意）。',
   // reveal
@@ -859,6 +948,9 @@ export const T = {
   revealWon: '✅ 贏', revealLost: '❌ 輸',
   won: '🎉 你贏咗！', lost: '😿 你輸咗', watching: '🐺 開牌',
   revealDone: '睇完整個結果', revealDoneAck: '✓ 等緊房主…',
+  revealDoneTable: '大家睇完 ✓（一下就得）', revealDoneConfirm: '全枱睇完？去結果頁',
+  // a shared phone that does not hold the whole table: its tap counts only for its own seats
+  revealDoneTablePart: '呢部機嘅人都睇完 ✓', revealDoneConfirmPart: '呢部機嘅人都睇完？',
   revealCount: (d, t) => `睇完：${d} / ${t}（房主㩒就即刻去結果頁）`,
   tableDay: '☀️ 日頭討論', tableDayBody: '夜晚完咗，自由討論。',
   tableVote: '🗳️ 投票', tableVoteBody: '大家揀緊邊個係狼人。',

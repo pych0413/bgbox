@@ -7,13 +7,13 @@
 // narrator and Web Audio are primed there, as the very first thing.
 // ============================================================
 
-import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=20261004005209';
-import { sfx, primeAudio } from '../../core/sfx.js?v=20261004005209';
-import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=20261004005209';
-import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=20261004005209';
+import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=1';
+import { sfx, primeAudio } from '../../core/sfx.js?v=1';
+import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
+import { fits, turnOrderMatters, savedOrderDiffers, presetMatches, narrationChoices } from '../logic.js?v=1';
 
 const ORDER_HINT = '座位次序＝輪流次序，開局前用換位排好';
-import { wantsPreflight } from '../preflight.js?v=20261004005209';
+import { wantsPreflight } from '../preflight.js?v=1';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
 let qrLoading = null;
@@ -417,7 +417,13 @@ export function mountLobby(sh) {
     if (!show) return;
 
     const mode = room.narration?.mode ?? 'voice';
-    for (const b of narrSeg.children) b.classList.toggle('on', b.dataset.mode === mode);
+    // U1 (§7.1): one phone + a night with eyes closed → no 靜音 (nobody could hear their call)
+    const choice = narrationChoices(meta, { singleDevice: !!room.singleDevice });
+    for (const b of narrSeg.children) {
+      const m = b.getAttribute('data-mode');
+      b.classList.toggle('on', m === mode);
+      b.hidden = !choice.modes.includes(m);
+    }
 
     voiceToggle.hidden = mode !== 'voice';
     voiceToggle.textContent = voiceOpen ? '收起語音設定 ▴' : '🗣️ 語音、語速、試聽';
@@ -441,7 +447,8 @@ export function mountLobby(sh) {
     else if (mode === 'voice' && !narrator.hasCantonese()) {
       notes.push('你部機未裝粵語語音，會用第啲語音代替。iPhone：設定 → 輔助使用 → 朗讀內容 → 聲音 → 粵語，下載「善怡」。');
     }
-    if (mode === 'silent' && meta.narration === 'required') notes.push('呢隻遊戲靠旁白推進，靜音嘅話只會顯示文字提示，要自己睇住讀。');
+    if (choice.note) notes.push(choice.note);
+    else if (mode === 'silent' && meta.narration === 'required') notes.push('呢隻遊戲靠旁白推進，靜音嘅話只會顯示文字提示，要自己睇住讀。');
     narrHint.hidden = !notes.length;
     narrHint.textContent = notes.join(' ');
   }
@@ -522,7 +529,8 @@ export function mountLobby(sh) {
 
       boardCard.hidden = !(room.history?.length);
       if (!boardCard.hidden) {
-        board.update({ players: room.players, scoreboard: room.scoreboard, history: room.history, games: sh.gamesById(), me: st.activeSeat ?? mySeats[0] });
+        // #20: a shared phone is read by the whole table — no 「（你）」 row
+        board.update({ players: room.players, scoreboard: room.scoreboard, history: room.history, games: sh.gamesById(), me: mySeats.length > 1 ? null : (st.activeSeat ?? mySeats[0]) });
       }
       paintStart(st);
     },

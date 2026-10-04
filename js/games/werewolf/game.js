@@ -76,6 +76,10 @@ const DEFAULTS = Object.freeze({
   guardStack: 'die', idiotIs: 'god', wolfVote: 'plurality', nightOrder: 'official', pace: 'normal',
   lastWords: 'night1', hunterOrder: 'words', speakOrder: 'dead', selfExplode: 'on', openCard: 'auto',
   spectate: false, speakSecs: 60, wordsSecs: 60, voteSecs: 20,   // 遺言 60 s: the research's (and the official) default
+  // Set by defaults() from env.singleDevice (not a form field): ONE phone lies in the middle of the table, so speeches
+  // and 遺言 hand it to the speaker (a public card), a dead wolf never takes it, and 最後行動 keeps it for the whole window
+  // (DESIGN §7.1). Phones of their own never see any of it.
+  passPhone: false,
 });
 
 /** Host actions for a seat that has stopped responding (engine-kit ACT.ABSENT / ACT.PRESENT; literals until the core has them). */
@@ -91,9 +95,12 @@ export const meta = {
   accent: '#9b87f5',
   players: [MIN_SEATS, MAX_SEATS],   // seats: with a human moderator the 13th seat is the moderator
   minutes: [25, 60],
-  narration: 'required',             // the night is called out; still works in 讀稿 and 靜音
+  narration: 'required',             // the night is called out; 讀稿 and 靜音 work on phones of their own
+  eyesClosed: true,                  // U1: the night needs eyes closed → no 靜音 on one phone (DESIGN §7.1)
+  nightAmbient: true,                // U8 (re-run #7): a whole-table phone plays a neutral noise bed all night, so the
+                                     // reach for the phone at the witch / seer steps is not heard against silence
   paperMode: false,
-  singleDevice: 'partial',           // phone in the middle; wolves hand it round, votes go seat by seat
+  singleDevice: 'partial',           // phone in the middle; wolves share it, speeches and votes go seat by seat
   banks: [],
   css: true,
   blurb: '手機做上帝：夜晚閉眼、天光投票，揪出狼人。',
@@ -139,7 +146,7 @@ function asInt(v) {
 function keyOk(key, v) {
   if (key in ENUMS) return ENUMS[key].includes(String(v));
   if (key in RANGES) { const x = asInt(v); return x >= RANGES[key][0] && x <= RANGES[key][1]; }
-  if (key === 'spectate') return typeof v === 'boolean';
+  if (key === 'spectate' || key === 'passPhone') return typeof v === 'boolean';
   if (key === 'board') return isStr(v) && (v === 'auto' || v === 'custom' || PRESETS.some((p) => p.id === v));
   if (key === 'roles') {   // unknown keys (the form's auto-fill 'villager') are ignored
     return isObj(v) && ['werewolf', ...UNIQUE].every((k) => !(k in v) || (Number.isInteger(asInt(v[k])) && asInt(v[k]) >= 0));
@@ -225,7 +232,7 @@ export function resolve(raw, n) {
 
 const presetText = (id) => S.PRESET_TEXT[id] ?? { name: S.CFG.board.custom, reason: '', tag: '' };
 
-function validate(cfg, n) {
+function validate(cfg, n, env) {
   const warnings = [];
   const bad = (message) => ({ ok: false, message, warnings });
   if (!Number.isInteger(n) || n < MIN_SEATS || n > MAX_SEATS) return bad(S.MSG.badCount(MIN_SEATS, MAX_SEATS));
@@ -250,6 +257,8 @@ function validate(cfg, n) {
   if (e.preset === '7-hard') warnings.push(S.MSG.hard);
   if (e.roles.werewolf * 2 >= e.p) warnings.push(S.MSG.wolvesMany);
   if (e.mod) warnings.push(S.MSG.humanHint);
+  // one phone holds every seat: the human moderator's all-seeing screen is one 換人 away from every player
+  if (e.mod && isObj(env) && env.singleDevice) warnings.push(S.MSG.humanOnePhone);
   if (e.speakSecs > 0 && e.speakSecs < 15) warnings.push(S.MSG.shortTimer);
   if (e.p >= 10) warnings.push(S.MSG.sheriff);
   return { ok: true, message: S.MSG.ok(e.p, e.mod), warnings };
@@ -278,6 +287,8 @@ export const config = {
     // One phone passed round the table: every night step takes longer (a hand-over each time), and a vote
     // clock would make the last people in the queue abstain while the phone is still on its way to them.
     if (env && env.singleDevice) { d.pace = 'slow'; d.voteSecs = 0; }
+    // the hidden one-phone flag follows the room both ways (a second phone joining turns it off again)
+    if (isObj(env)) d.passPhone = !!env.singleDevice;
     const nn = Math.max(MIN_SEATS, Math.min(MAX_SEATS, Number.isInteger(n) ? n : MIN_SEATS));
     // 13 seats can only be 12 players + a human moderator; 6 seats cannot spare a moderator.
     if (nn >= MAX_SEATS) d.moderator = 'human';
@@ -300,7 +311,7 @@ export const config = {
    * Head-count presets with a reason (BACKLOG #8): each `cfg` is a patch over the current config and passes
    * `validate` for this n. The first board is the recommended one (what `defaults(n)` gives).
    */
-  presets(n) {
+  presets(n, env) {
     const nn = Math.max(MIN_SEATS, Math.min(MAX_SEATS, Number.isInteger(n) ? n : MIN_SEATS));
     const human = nn >= MAX_SEATS;
     const p = human ? nn - 1 : nn;
@@ -313,7 +324,8 @@ export const config = {
     }));
     out.push({ id: 'beginner', label: S.PRESET_EXTRA.beginner.label, reason: S.PRESET_EXTRA.beginner.reason, cfg: { pace: 'slow', speakSecs: 0, wordsSecs: 0, voteSecs: 0 } });
     out.push({ id: 'quick', label: S.PRESET_EXTRA.quick.label, reason: S.PRESET_EXTRA.quick.reason, cfg: { pace: 'fast', speakSecs: 30, wordsSecs: 30, voteSecs: 15 } });
-    if (!human && nn >= MIN_SEATS + 1) {
+    // (not on one phone: the moderator needs a phone of their own, validate warns why)
+    if (!human && nn >= MIN_SEATS + 1 && !(isObj(env) && env.singleDevice)) {
       // n seats = n − 1 players: the board follows the recommendation for that head-count
       out.push({ id: 'god', label: S.PRESET_EXTRA.god.label, reason: S.PRESET_EXTRA.god.reason, cfg: { moderator: 'human', board: 'auto' } });
     }
@@ -366,7 +378,8 @@ export const config = {
     f.push({ key: 'speakOrder', label: S.CFG.speakOrder.label, type: 'select', options: optList('speakOrder'), help: S.CFG.speakOrder.help });
     f.push({ key: 'selfExplode', label: S.CFG.selfExplode.label, type: 'select', options: optList('selfExplode'), help: S.CFG.selfExplode.help });
     f.push({ key: 'openCard', label: S.CFG.openCard.label, type: 'select', options: optList('openCard') });
-    f.push({ key: 'spectate', label: S.CFG.spectate.label, type: 'bool', help: S.CFG.spectate.help });
+    // (not on one phone: a dead player's 遺言 is a public screen there, so the engine never shows them every role)
+    if (!c.passPhone) f.push({ key: 'spectate', label: S.CFG.spectate.label, type: 'bool', help: S.CFG.spectate.help });
     f.push({ key: 'speakSecs', label: S.CFG.speakSecs.label, type: 'seconds', min: 0, max: 300, help: S.CFG.speakSecs.help });
     f.push({ key: 'wordsSecs', label: S.CFG.wordsSecs.label, type: 'seconds', min: 0, max: 300, help: S.CFG.wordsSecs.help });
     f.push({ key: 'voteSecs', label: S.CFG.voteSecs.label, type: 'seconds', min: 0, max: 120, help: S.CFG.voteSecs.help });
@@ -488,7 +501,7 @@ function cueText(s) {
   switch (c.k) {
     case 'night':
       if (c.stage === 'tail') return S.cueTail(c.step);
-      return c.step === 'begin' ? S.cueBegin(s.nt.n) : S.cueOpen(c.step, s.nt.n);
+      return c.step === 'begin' ? S.cueBegin(s.nt.n, { pass: !!s.cfg.passPhone }) : S.cueOpen(c.step, s.nt.n);
     case 'dawn':
       return S.cueDawn(c.deaths.map((pid) => ({ who: spk(s, pid), role: revealRole(s, pid) })));
     case 'words': return S.cueWords(spk(s, c.pid), c.secs);
@@ -758,7 +771,7 @@ function panel(s, pid) {
       const lines = [];
       if (s.potion.save) {
         lines.push(atk ? W.victim(nm(s, atk), atk === pid) : W.victimNone);
-        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave);
+        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave(s.cfg.save));
         if (atk) P.tags[atk] = '💊';
       } else lines.push(W.victimHidden);
       // Her pick names the potion it spends, on her button and on a line of her own panel (a tentative pick is
@@ -852,7 +865,21 @@ function nightAct(s, pid, a) {
   const c = s.cur;
   if (!c || c.k !== 'night' || c.stage !== 'run' || c.step === 'begin') return s;
   const P = panel(s, pid);
-  if (!selectAct(s, pid, a, s.nt.sel, P)) return s;
+  // U2 (DESIGN §7.1): wolves awake on ONE shared phone share one screen, so one tap counts for every wolf it lists in
+  // `seats` (the room keeps only seats of the sender's own phone). Only wolves, only in the wolves' step, only from a wolf:
+  // wolves know each other, so nobody learns anything; any other `seats` is ignored.
+  const mates = c.step === 'wolves' && s.role[pid] === 'werewolf' && Array.isArray(a.seats)
+    ? [...new Set(a.seats)].filter((t) => isStr(t) && t !== pid && s.pl.includes(t) && s.role[t] === 'werewolf')
+    : [];
+  const own = {};
+  if ('pick' in a) own.pick = a.pick;
+  if ('lock' in a) own.lock = a.lock;
+  let changed = selectAct(s, pid, own, s.nt.sel, P);
+  for (const t of mates) changed = selectAct(s, t, own, s.nt.sel, panel(s, t)) || changed;
+  if (!changed) return s;
+  // re-run #3c: a tap from ONE shared screen counts for every wolf on it, and the screen cannot tell whose finger it was —
+  // the recap names them as one pick (「一齊揀」), never each wolf as if they had chosen it themselves
+  if (mates.length) s.nt.wolfGroup = [...new Set([...(s.nt.wolfGroup ?? []), pid, ...mates])].sort(bySeat(s));
   if (c.step === 'seer' && P.real && s.nt.sel[pid]?.lock) revealSeer(s, pid);
   return s;
 }
@@ -907,6 +934,8 @@ function commit(s, ctx) {
       }
       s.nt.attacked = target;
       rec.wolves = { picks, target, how };
+      const together = (s.nt.wolfGroup ?? []).filter((w) => ws.includes(w));
+      if (together.length > 1) rec.wolves.shared = together;
       break;
     }
     case 'witch': {
@@ -1065,6 +1094,9 @@ function voteAct(s, pid, a, ctx) {
   if (!('target' in a)) return s;
   if (a.target !== null && !(isStr(a.target) && c.cands.includes(a.target))) return s;
   c.votes[pid] = a.target;
+  // one phone (re-run #5): 🤖 代佢做 at a vote gate casts an abstain the seat never chose — the 票型 says so
+  if (s.cfg.passPhone && a.proxy === true && a.target === null) (c.proxy ??= {})[pid] = true;
+  else if (c.proxy) delete c.proxy[pid];
   if (c.voters.every((p) => p in c.votes)) return finishRun(s, ctx);
   return s;
 }
@@ -1077,7 +1109,7 @@ function resolveVote(s, ctx) {
   const top = t.top.slice().sort(bySeat(s));
   const rec = {
     k: 'vote', d: s.d, round: c.round,
-    votes: c.voters.map((p) => ({ by: p, to: votes[p] })), counts: { ...t.counts },
+    votes: c.voters.map((p) => (c.proxy?.[p] && votes[p] === null ? { by: p, to: null, proxy: true } : { by: p, to: votes[p] })), counts: { ...t.counts },
     outcome: 'none', pid: null, tied: [],
   };
   const say = { k: 'say', kind: 'tally', round: c.round, counts: { ...t.counts }, votes: rec.votes, outcome: 'none', pid: null, tied: [] };
@@ -1278,33 +1310,71 @@ function cue(state) {
   // the two public facts the table reads off the screen get a floor: the dawn result, and the 票型 (longer per ballot)
   const minMs = c.k === 'dawn' ? Math.max(S.DAWN_MIN_MS, S.cueMinMs(text))
     : c.k === 'say' && c.kind === 'tally' ? Math.max(S.tallyMinMs(c.votes.length), S.cueMinMs(text))
-      : S.cueMinMs(text);
+      // one phone (re-run #4): every night's 天黑 line gives the last holder the same time to put the phone back
+      : c.k === 'night' && c.step === 'begin' && c.stage === 'cue' && s.cfg.passPhone ? Math.max(S.BEGIN_PASS_MIN_MS, S.cueMinMs(text))
+        : S.cueMinMs(text);
   return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs };
 }
 
+/**
+ * Who must look at or touch their phone right now (DESIGN §4, §7.1). The one-phone hints (`label`, `step`, `open`, `hold`)
+ * only ever change what a SHARED phone does with the step — a phone of its own ignores them. Everything that would change
+ * a phone of its own (a speech focus, a 最後行動 focus during the opening line, a dead wolf left out) waits for `passPhone`:
+ * the hidden flag defaults() sets when one phone holds every seat.
+ */
 function focus(state) {
   const s = state;
+  const pass = !!s.cfg.passPhone;
   switch (s.phase) {
     case 'deal': {
       const pids = s.pl.filter((p) => !s.ready[p] && !isAbsent(s, p));
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, label: S.FOCUS.deal } : null;
     }
     case 'night': {
       const c = s.cur;
-      if (c.stage !== 'run' || c.step === 'begin') return null;
+      // Only while the window runs, on one phone too: an eyes-closed card during the opening line would cover the 📜 讀稿
+      // narrator's line and 下一步 (the bar sits under the card) until the role itself picked the phone up. The pickup comes
+      // out of the window instead, which the one-phone slow pace pads (DESIGN §7.1: night steps pad their windows).
+      if (c.step === 'begin' || c.stage !== 'run') return null;
       // Everyone who holds this role is "awake" — alive or dead, potions left or not — so a lit
       // screen / a shared-phone hand-over never depends on whether the role can still act.
       const role = { guard: 'guard', wolves: 'werewolf', witch: 'witch', seer: 'seer', hunter: 'hunter' }[c.step];
       let pids = s.pl.filter((p) => s.role[p] === role);
-      if (c.step === 'wolves') pids = pids.filter((p) => !s.nt.sel[p]?.lock);   // a shared phone moves on to the next wolf
+      if (c.step === 'wolves') {
+        pids = pids.filter((p) => !s.nt.sel[p]?.lock);   // a wolf who confirmed is done (a shared phone's combined screen ends)
+        // the living first: a shared phone mounts the first called seat for the combined wolf screen (U2, #8)
+        pids = [...pids.filter((p) => s.alive[p]), ...pids.filter((p) => !s.alive[p])];
+        // one phone in the middle: a dead wolf never takes it (night 2 of the playtest went 空刀 that way, #8) — every
+        // wolf is awake at once on the same screen, so nobody waits for a turn that tells anything
+        if (pass) pids = pids.filter((p) => s.alive[p]);
+      }
       return { pids, anonymous: S.anonymousPrompt(c.step) };
     }
-    case 'final': return s.cur.stage === 'run' ? { pids: [s.cur.pid] } : null;
+    case 'final': {
+      const c = s.cur;
+      if (c.stage !== 'run' && !(pass && c.stage === 'cue')) return null;
+      // one phone: the dead player gets it during the opening line and keeps it for the WHOLE window, confirmed or not (an
+      // early hand-back would time the decision: the panel tells everybody but a hunter to wait the window out); the
+      // window's clock is held while the hand-over card is unanswered — the same for a hunter and anybody else.
+      // A 💤 seat is never handed the phone: its window runs on its own clock (a held clock would wait on nobody).
+      if (pass && isAbsent(s, c.pid)) return null;
+      const out = { pids: [c.pid], label: S.FOCUS.final, step: `final:${s.seq}` };
+      if (pass) out.hold = true;
+      return out;
+    }
+    case 'speech': case 'words': {
+      // #10: on one phone every speaker holds the phone for their own turn — a PUBLIC card 「輪到 X · 發言」, so 我講完 and
+      // their own 💥 自爆 are in their hands (the research's "own speech only" explode) and the table watches the screen
+      const c = s.cur;
+      if (!pass || !c || isAbsent(s, c.pid)) return null;
+      const label = c.k === 'words' ? S.FOCUS.words : c.pk ? S.FOCUS.pk : S.FOCUS.speech;
+      return { pids: [c.pid], open: true, label, step: `${c.k}:${s.seq}`, hold: true };
+    }
     case 'vote': {
       const c = s.cur;
       if (c.stage !== 'run') return null;
       const pids = c.voters.filter((p) => !(p in c.votes));
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, label: c.round === 1 ? S.FOCUS.vote(s.d) : S.FOCUS.votePk(s.d), step: `vote:${s.seq}` } : null;
     }
     default: return null;
   }
@@ -1327,7 +1397,9 @@ function autoAct(state, pid) {
     case 'speech': case 'words':
       return c.stage === 'run' && c.pid === pid ? { type: 'done' } : null;
     case 'vote':
-      return c.stage === 'run' && c.voters.includes(pid) && !(pid in c.votes) ? { type: 'vote', target: null } : null;
+      // one phone: the host's 🤖 代佢做 at a vote gate — the abstain is marked as proxied in the 票型 (re-run #5)
+      if (!(c.stage === 'run' && c.voters.includes(pid) && !(pid in c.votes))) return null;
+      return s.cfg.passPhone ? { type: 'vote', target: null, proxy: true } : { type: 'vote', target: null };
     default: return null;
   }
 }
@@ -1421,7 +1493,8 @@ function seesAllRoles(s, seat) {
   if (s.phase === 'over') return true;
   if (!seat) return false;
   if (s.mod && seat === s.hostPid) return true;
-  return !!s.cfg.spectate && s.pl.includes(seat) && !s.alive[seat];
+  // one phone: a dead seat's screen is the whole table's during its own 遺言 (a public step), so 出局後睇到全場 never applies
+  return !!s.cfg.spectate && !s.cfg.passPhone && s.pl.includes(seat) && !s.alive[seat];
 }
 
 function rosterOf(s, seat) {
@@ -1517,6 +1590,8 @@ function view(state, pid) {
     night: s.phase === 'night' && !isMod,
     say: stageText ?? '',
     board: ROLE_IDS.filter((id) => (s.cfg.roles[id] ?? 0) > 0).map((id) => ({ id, count: s.cfg.roles[id] })),
+    // the 💡 sheet lists only the roles on this board (re-run #2, DESIGN 15.2): public, every seat and the table alike
+    rolesInPlay: ROLE_IDS.filter((id) => (s.cfg.roles[id] ?? 0) > 0).map((id) => ({ id, count: s.cfg.roles[id] })),
     opts: {
       win: s.cfg.win, save: s.cfg.save, open: s.cfg.open, explode: s.cfg.selfExplode, spectate: !!s.cfg.spectate,
       guardStack: s.cfg.guardStack, hasHunter: hasRole(s, 'hunter'), preset: s.cfg.preset, pace: s.cfg.pace,
@@ -1530,7 +1605,7 @@ function view(state, pid) {
   // who left last night (seat order, no cause) and every vote so far with its 票型.
   if (s.lastNight && s.lastNight.n === s.d && DAY_PHASES.has(s.phase)) v.lastNight = { n: s.lastNight.n, deaths: s.lastNight.deaths.slice() };
   v.voteLog = s.rec.filter((r) => r.k === 'vote').map((r) => ({
-    d: r.d, round: r.round, votes: r.votes.map((x) => ({ by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
+    d: r.d, round: r.round, votes: r.votes.map((x) => (x.proxy ? { by: x.by, to: x.to, proxy: true } : { by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
   }));
   // …and the same 票型 as the shell's public fold (RecentFold under the game, closed until tapped), newest first, by day
   if (v.voteLog.length && DAY_PHASES.has(s.phase)) {
@@ -1579,7 +1654,7 @@ function view(state, pid) {
       const say = { kind: c.kind };
       if (c.kind === 'tally') {
         say.round = c.round; say.counts = { ...c.counts }; say.outcome = c.outcome;
-        say.votes = c.votes.map((x) => ({ by: x.by, to: x.to }));
+        say.votes = c.votes.map((x) => (x.proxy ? { by: x.by, to: x.to, proxy: true } : { by: x.by, to: x.to }));
         say.pid = c.pid; say.tied = c.tied.slice();
       } else if (c.kind === 'shot') {
         say.by = c.by; say.pid = c.pid; if (s.cfg.open) say.role = s.role[c.pid];

@@ -1,7 +1,8 @@
 # Playtest console (`pt.mjs`)
 
 One headless Chrome holds one 390x844 "phone" window per seat (mobile metrics, DPR 2). A small daemon keeps the CDP
-sessions alive, and every player drives only its own phone through a CLI, the way a person holds one phone. No packages;
+sessions alive, and every player drives only its own phone through a CLI, the way a person holds one phone. With
+`--shared` there is ONE phone for the whole table instead (一部手機玩, see the last section). No packages;
 Node 22+ (global `WebSocket`) and Chrome or Edge (set `PT_CHROME` to point at another binary).
 
 ```
@@ -12,16 +13,31 @@ node tools/playtest/pt.mjs selftest      # checks the console itself against a l
 ## Orchestrator: set a table up
 
 ```
-node tools/playtest/pt.mjs start t1 --seats p1,p2,p3 [--base URL] [--names 阿聰,阿明,小美]
+node tools/playtest/pt.mjs start t1 --seats p1,p2,p3 [--base URL] [--names 阿聰,阿明,小美] [--shared]
 node tools/playtest/pt.mjs setup t1 --game cheese-thief [--config '{"k":"v"}'] [--narration silent|read|voice]
 ...players play...
 node tools/playtest/pt.mjs eval  t1 p1 "return window.__app.state.room.lastResult"   # final result only
-node tools/playtest/pt.mjs stop  t1
+node tools/playtest/pt.mjs stop  t1 --orchestrator
 ```
 
 `start` opens the seats (the first seat is the host). `setup` has the host open a room, the other seats join it, and the
 host picks the game, config and narration mode. Session names are letters, digits, `-` and `_`. Runtime state lives in
 `tools/playtest/.sessions/` (git-ignored); screenshots go to `<tmp>/bgbox-playtest-shots/<session>/`.
+
+**Players must not be able to end or restart a table.** The avalon re-run died when seat agents ran `stop` and `start`
+(they were "cleaning up"). So `stop`, and `start` on a name that already exists (a running session, or one that left a
+table talk log or a session log behind), refuse unless the command carries **`--orchestrator`**. Give the flag to nobody
+but yourself: the refusal a player gets does not mention it, and `help` leaves it out. The daemon refuses a `stop` that
+does not come through the orchestrator's command as well, so a hand-made request is refused too. `start --orchestrator`
+over a table that is still running refuses as before: stop it first. A new name needs no flag. Every refusal, and why a
+table ended (the orchestrator's stop, or Chrome exiting on its own), is a line in `.sessions/<session>.log`; read it
+when a table dies and nobody knows why.
+
+Pick **`--narration voice`** for games with an eyes-closed night (cheese-thief, werewolf, onuw, avalon's night) and
+`read` or `voice` for the rest. Every phone has a fake text-to-speech (see "The narrator" below), so 🔊 語音 works
+headless and the eyes-closed seats hear the narrator. For an eyes-closed night, 📜 讀稿 needs a person who is not
+playing to read the lines, and the console has none. On a one-phone table the app refuses 🔇 靜音 for eyes-closed games (`setup` then reports
+`"narrationSet": false`).
 
 ## Player commands
 
@@ -33,19 +49,55 @@ Every command is `node tools/playtest/pt.mjs <command> <session> <seat> ...`. Ea
 | `tap <n or "label">` | Tap control `n`, or the first control whose label contains the text. Numbers are re-assigned on every `see`/`tap`, so use the latest list. |
 | `hold <n or "label"> [ms]` | Press and hold (hold-to-peek covers). Prints the screen while the finger is down, then lets go. |
 | `type <n or "label"> <text>` | Focus a text box and replace its content. |
-| `draw <n> "x,y x,y ..."` | Drag a finger across a canvas, with 0-1 coordinates. |
+| `draw <n or canvas> "x,y x,y ..." [--full]` | Drag a finger across a canvas, with 0-1 coordinates. `canvas` finds the canvas whatever its number is this turn. Prints one line (`(drew 3 points on canvas, 340×340 px)`) and a compact screen. |
 | `scroll <dy>` | Scroll the page (px, negative = up). |
 | `key [Enter\|Escape\|Backspace\|Tab]` | Press a key. With a dialog open, Enter accepts and Escape dismisses. |
-| `wait [sec=25]` | Block until this phone's screen changes, then print it. |
+| `wait [sec=25] [--full]` | Block (at most 90 s) until this phone's screen changes or somebody speaks at the table (a player or the narrator), then print a compact screen and what was said meanwhile. |
 | `dialog accept\|dismiss [text]` | Answer a native `confirm()` / `prompt()` (see below). |
 | `reload` | Reload this phone's tab. |
 | `shot` | Save a PNG screenshot of this phone and print its path. |
-| `say <text>` / `hear [n]` | Talk at the table (everyone hears it) / read the last `n` things said. |
+| `say <text>` / `hear [n \| 90s \| 2m]` | Talk at the table (everyone hears it) / read the last `n` **lines** said (default 30, at most 1000), the narrator's lines included (`🔊 旁白：…`). `90s` or `2m` is a time window instead. Older lines that were left out are counted in a first line. A seat id in front is fine (`hear t1 p2 10`: everybody hears the same table). |
+| `show [off]` | `--shared` only, holder only: lay your screen face up for everyone (see the last section). |
 
-Orchestrator only: `start`, `setup`, `stop`, `eval`.
+Orchestrator only: `start`, `setup`, `stop`, `eval`. A player never runs `stop`, and never `start`s over a name that exists.
+
+**Compact screens.** `draw` and `wait` do not repeat the whole screen. They print the usual first line, the shared-phone
+line saying who may do what, and then only what is new to *you* since the last screen your seat was shown (by any command):
+
+```
+(drew 3 points on canvas, 340×340 px)
+== p3 小美 | 📱 shared phone | 🎲 桌遊盒 | scroll 94/245 ==
+--- screen text: 1 of 29 lines are new ---
+1:17
+--- controls --- (27 controls, same as your last screen)
+(compact view: unchanged parts left out — add --full to print everything)
+```
+
+Screen text (and the text behind a public card) shows only the lines that were not on your last screen, with the count.
+The controls are listed in full whenever any of them changed, with their numbers, and as one line when none did. Pass
+`--full` to `draw` or `wait` (anywhere after the seat) for everything, the way `see` prints it. Your first command, a
+screen you were refused, and an open dialog always print in full. `see`, `tap`, `hold`, `type`, `key`, `scroll` and
+`reload` always print the whole screen. A countdown digit counts as a changed line, which is how you read the clock.
 
 Flags on controls in `see`: `disabled`, `selected`, `open`, `above-screen` / `below-screen` (scroll to reach it), `COVERED`
 (something else sits on top of its centre, so a tap would hit that instead).
+
+In the screen text, a picture with a label says it in brackets: a die face reads `[4 點]`, but only while it is
+uncovered. A progress bar says its value (`[⏳ 仲有 8 秒]`) when the app gives it one. A pass gate prints
+`[pass gate: private|switch|anon|public|table]`. A public card (`public` / `table`) also prints the screen behind it
+under `--- behind the card ---`, because that screen stays visible. Its controls are not listed, because the card
+blocks them.
+
+## The narrator (fake text-to-speech)
+
+Headless Chrome has no voice, so every phone gets a fake `speechSynthesis` before the app loads. It offers one
+Cantonese voice (`模擬粵語（playtest）`, zh-HK). Each line "takes" a time based on its length and fires start and end like
+a real engine, so 🔊 語音 runs as it does on a phone and the narrator never stalls.
+
+Every line spoken out loud lands in the table talk as `🔊 旁白：…`. That is how a player with eyes closed hears their
+call: read it with `hear`, or just `wait`, which wakes on every new line. Silent utterances (volume 0, the app's iOS
+priming) are not heard. In multi-phone play, a line spoken by a phone other than the host's is marked
+`🔊 旁白（阿明部機）：…`, because the whole table hears that too.
 
 ## Native dialogs
 
@@ -97,8 +149,10 @@ You are one person at a table with one phone. These keep the playtest honest, so
 1. **One seat, one phone.** Run commands for your own seat only. Never `see`, `tap` or `shot` another seat, even though the
    console would let you.
 2. **Player commands only.** Use the commands in the table above. `start`, `setup`, `stop` and `eval` belong to the
-   orchestrator. Do not read page state in any other way (JS variables, `window.__app`, storage, network traffic, the DOM
-   beyond what `see` prints).
+   orchestrator. **Never stop or restart the session, whatever the reason** (a finished match, a stuck phone, "cleaning
+   up"): a refusal from `stop` or `start` is final, so do not look for a way round it. If the table
+   looks dead, `say` so and keep waiting; the orchestrator decides. Do not read page state in any other way (JS variables,
+   `window.__app`, storage, network traffic, the DOM beyond what `see` prints).
 3. **No back doors.** Do not open DevTools, a CDP connection or another browser, and do not read `tools/playtest/.sessions/`
    or other seats' screenshots and output while the match is running.
 4. **Only a person's information.** What you know comes from your own phone and from what is said out loud at the table
@@ -124,15 +178,60 @@ You are one person at a table with one phone. These keep the playtest honest, so
   after that is showing the console's scroll, not its own.
 - Text inside a folded `<details>` is not on screen and is left out of `see`. The text view flattens grouped layouts
   (a vote tally's bars and voter chips come out as lines of text); use `shot` for layout questions.
-- Headless Chrome has no real vibration, audio or on-screen keyboard.
+- Headless Chrome has no real vibration, audio or on-screen keyboard. Speech is the fake narrator above: its timing is
+  an estimate, not a real voice's. Sound effects, including the one-phone night noise bed, are not heard at all.
+- One phone, one finger: the console runs one command at a time per phone (a `tap`, a `shot`, a look). With `--shared`
+  every seat queues on the same phone, so a command can wait a moment for another seat's command. A `hold` keeps the
+  phone for its whole press. `wait` takes the phone only for each look.
 
 ## Housekeeping
 
-- `stop <session>` closes the session's Chrome and removes its profile (`<tmp>/pt-<session>-…`, about 60 MB). If a run
-  was killed half way, leftover test Chromes carry `pt-<session>-` in their `--user-data-dir`. Stop only those (match that
-  profile name, and the process name `chrome.exe`); do not touch a person's own Chrome.
+- `stop <session> --orchestrator` closes the session's Chrome and removes its profile (`<tmp>/pt-<session>-…`, about
+  60 MB). If a run was killed half way, leftover test Chromes carry `pt-<session>-` in their `--user-data-dir`. Stop only
+  those (match that profile name, and the process name `chrome.exe`); do not touch a person's own Chrome.
+- `.sessions/<session>.log` (UTC) holds one line for the table coming up, each refused `stop` / `start`, the orchestrator's
+  stop, and Chrome exiting. A table that ended without a `stop:` line died on its own. Players must not read this folder.
 - `start` begins with an empty `hear`. A table talk log left by an earlier session of the same name is kept as
   `.sessions/<session>.chat.<UTC time>.jsonl`, so an orchestrator can still read it, but no player hears it.
-- `selftest` starts its own session with two seats on a local page, exercises dialogs, reload, metric drift, an outside
-  `scale` override and page zoom, stops, and checks no Chrome, daemon, session file or profile is left behind. Run it
-  after any change to `pt.mjs`.
+- `selftest` starts its own session with two seats on a local page. It exercises a modal whose card is still fading in
+  (read) with a closed cover inside it (not read), dialogs, the fake narrator (`hear`, and `wait` waking on talk),
+  concurrent commands on one phone, reload, metric drift, an outside `scale` override and
+  page zoom, the compact `draw` / `wait` (and `--full`), `hear` with N, and the refused `stop` / `start` (from the command line
+  and straight at the daemon). Then it stops and checks that no Chrome, daemon, session file or profile is left behind. Run it after any
+  change to `pt.mjs`, together with `node tests/run.mjs playtest` (the referee's rules, the fake narrator, the lock).
+
+## One shared phone (`--shared`)
+
+`node tools/playtest/pt.mjs start <session> --seats p1,p2,p3,p4 --shared` opens ONE phone window for the whole
+table. `setup` makes it a 一部手機玩 room (`app.local`) holding every seat in table order; the first seat is the host.
+Every player still uses their own seat id. A referee follows the app's own one-phone contract (DESIGN §7.1) and
+decides, before every command, what this person may see and touch. Each screen starts with one line saying why.
+
+| where the phone is (what the app shows) | who sees it | who may touch it |
+|---|---|---|
+| **In the middle, face up** (no seat on screen: chip 「📱 枱中間 — 㩒你個名睇自己」), and the lobby and results | everyone | anyone. Table controls such as 大家睇完 count for the whole table. In a name list (the chip's 「邊個要睇自己？」, a 「邊個…？」 sheet), only your own name. |
+| **Held by a seat** (「而家睇：X」) | only X | only X |
+| …during X's public step (`focus.open`: a stroke, a speech) | everyone, read-only | only X |
+| …after X used `show` | everyone, read-only, until it ends (see below) | only X |
+| **Table card** `[pass gate: table]` (「📱 部手機擺返中間」, 「☀️ 天光喇」) | everyone, with the screen behind | anyone, one tap |
+| **Public card** `[pass gate: public]` (「輪到 X · …」) | everyone, with the screen behind | the card: only X |
+| **Private card** `[pass gate: private / switch]` (「交俾 X · 其他人唔好望」) | everyone sees the card, nothing behind it | only X |
+| **Eyes-closed card** `[pass gate: anon]` | only the seats this step calls (a decoy: nobody) | those seats |
+| **At night or in a secret step** | only the seats the step calls, once one of them holds the phone. Everyone an eyes-closed step calls shares one screen (U2); a named step at night goes seat by seat, so only the holder looks. | those seats |
+
+- Everyone else gets 「📱 X 拎緊部手機」 or, at night, 「🌙 你閉緊眼」 with the narrator's last line, and nothing else:
+  no card title, no names. Listen with `hear` / `wait`. When the narrator calls your role, `see` and tap the card.
+- `tap` returns the screen as *you* may see it afterwards. Once you hand the phone on, you see the gate card or nothing.
+- To look at your own screen by day, tap the chip in the middle (「揀名 ⇄」), pick **your own** name and tap your gate.
+  When you are done, put the phone back with 「📱 擺返中間」, so the next person does not have to ask for it.
+- The holder can `show <session> <seat>` to lay their screen face up for everyone; `show … off` takes it back. The
+  show ends by itself as soon as that screen moves on (a new step, a new holder, a header change, a gate, nightfall),
+  so a public screen that turns private never stays face up.
+- **A seat that does not respond (T5).** Under a named card the host's phone shows 「X 唔喺度？」, which opens
+  ⏭ 跳過佢 / 💤 當佢缺席 / 🤖 代佢做. Only the host seat may tap that row, and its actions only after the card has been
+  up for 60 s (set `PT_ESCAPE_AFTER=<sec>` in the environment of `start` to change it). First call the person out loud with `say` and wait.
+  Every tap on that row goes into the table talk, because everybody sees it:
+  「📱 阿聰（房主）喺交接卡「交俾 小美」㩒咗「💤 當佢缺席」」.
+- `wait` waits on what *you* may know: the phone reaching you, a card naming you, a change on a face-up screen, or a
+  new line from the narrator or the table. It prints a compact screen: the line saying why you may or may not touch the
+  phone, then only what is new to you. If it says 「(nothing changed in N s)」, `wait` again.

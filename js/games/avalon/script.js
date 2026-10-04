@@ -140,13 +140,13 @@ export const RULES_SECTIONS = [
       + '10 人：6 好 4 壞，每個任務 3、4、4、5、5 人（第四個要兩張失敗）。',
   },
   {
-    title: '夜晚情報（喺你部電話睇，唔使閉眼）',
+    title: '夜晚情報（喺手機睇，唔使閉眼）',
     body: '梅林：見到邪惡嘅人（莫德雷德除外），但唔知角色。\n'
       + '派西維爾：見到梅林；如果有莫甘娜，就見到兩個人，分唔出邊個先係真梅林。\n'
       + '邪惡（奧伯倫除外）：互相識得，但唔知對方角色。\n'
       + '奧伯倫：乜都唔知，邪惡同伴都唔識佢。\n'
       + '忠臣：冇情報。\n'
-      + '睇身份嗰段時間每個人都有同樣長，冇人可以靠「睇得快唔快」估到邊個有情報。',
+      + '睇身份嗰段時間每個人都一樣長（一部手機玩：每人最少揸住 8 秒先交得），冇人可以靠「睇得快唔快」估到邊個有情報。',
   },
   {
     title: '湖中女神（可選，7 人或以上建議用）',
@@ -157,6 +157,7 @@ export const RULES_SECTIONS = [
   {
     title: '刺殺梅林',
     body: '好人完成三個任務之後，邪惡陣營可以商量，刺客揀一個人。揀中梅林，邪惡贏；揀錯，好人贏。好人同梅林喺呢段時間保持安靜。\n'
+      + '一部手機玩：部手機擺喺中間先俾邪惡開口傾，傾好㩒「傾好喇」，其他人閉埋眼，刺客先拎起部手機揀人。\n'
       + '設定入面可以打開「刺殺前邪惡亮牌」：刺客落手前，所有邪惡玩家嘅角色公開。',
   },
   {
@@ -165,7 +166,7 @@ export const RULES_SECTIONS = [
       + '・睇身份：㩒住張卡先睇到，放手即刻冚返。電話放低、換人、返桌面都會自動冚返。\n'
       + '・身份卡全場都喺畫面下面，唔記得可以隨時㩒住睇返。\n'
       + '・出任務牌：所有隊員嘅畫面一模一樣，好人嗰張「失敗」牌喺度但㩒唔到，咁旁人睇你畫面都估唔到你係邊邊。\n'
-      + '・一部手機玩：「睇身份時間」同「出牌時間」會自動變 0 秒（唔計時），電話傳嚟傳去，每次只畀被叫到嘅人拎。\n'
+      + '・一部手機玩：唔計時，電話逐個交，每次只畀被叫到嘅人拎；睇身份每人最少揸 8 秒、出任務牌最少 4 秒先㩒得，人人一樣，咁就睇唔出邊個有情報。揀隊係公開畫面；投票結果同任務結果擺喺中間大家一齊睇，邊個㩒「繼續」都得。\n'
       + '・有人部電話死咗：主持可以「代佢做」（投贊成、出成功），或者「呢鋪唔計」——揀隊嗰陣隊長傳俾下一位（唔算否決），投票或者出牌就成輪重新嚟過。',
   },
   {
@@ -269,8 +270,8 @@ export const CONFIG = {
     oberonSeenByMerlin: '官方規則係睇到。熄咗＝奧伯倫連梅林都睇唔到（另一種講法）。',
     oberonReadsGoodToLady: '官方規則係顯示邪惡。開咗＝女神驗到奧伯倫會話佢係好人。',
     flipEvil: '華人圈常用玩法：刺客落手前，所有邪惡玩家嘅角色公開。預設唔亮。',
-    revealSecs: '每個人睇同一段時間，唔會因為有人睇完就提早完。0＝冇倒數，每人睇完自己㩒「我睇完」（一部手機玩會自動用 0）。',
-    questSecs: '隊員喺呢段時間內出牌，時間到先公佈結果，咁就睇唔出邊個出得快慢。0＝全部出完即刻公佈（一部手機玩會自動用 0）。',
+    revealSecs: '每個人睇同一段時間，唔會因為有人睇完就提早完。0＝冇倒數，每人睇完自己㩒「我睇完」（一部手機玩會自動用 0，每人最少睇 8 秒）。',
+    questSecs: '隊員喺呢段時間內出牌，時間到先公佈結果，咁就睇唔出邊個出得快慢。0＝全部出完即刻公佈（一部手機玩會自動用 0，每人最少 4 秒）。',
     discussSecs: '0＝唔計時。時間到只係響鬧提醒，唔會自動決定隊伍。',
     assassinSecs: '夠鐘只係提醒：唔會自動揀，刺客幾時揀都得，房主可以加時。0＝唔計時。',
     lady: '官方建議 7 人或以上先用。',
@@ -294,7 +295,7 @@ export const CONFIG = {
     discuss: (s) => `組隊討論 ${s} 秒（只係提醒）`,
     assassin: (s) => `刺殺商量 ${s} 秒（只係提醒，唔會自動揀）`,
     flip: '刺殺前邪惡亮牌',
-    onePhone: '📱 一部手機玩：唔計時，逐個交電話',
+    onePhone: '📱 一部手機玩：逐個交電話，睇身份最少 8 秒、出牌最少 4 秒',
     oberon: (merlin, lady) => `奧伯倫：梅林${merlin ? '睇到' : '睇唔到'}，女神驗到${lady ? '好人' : '邪惡'}`,
   },
   rolesHelp: '忠臣同爪牙自動補夠人數。',
@@ -318,15 +319,32 @@ export const TITLE = {
   over: ['🏰 完咗', ''],
 };
 
+// ---------- a shared phone's hand-over card (focus.label, ≤ 24 characters, DESIGN §7.1) ----------
+
+export const FOCUS = {
+  reveal: '睇身份',
+  pick: '揀隊員',
+  vote: (q) => `任務 ${q} 投票`,
+  voted: '投票結果',
+  quest: (q) => `任務 ${q} 出牌`,
+  result: (q) => `任務 ${q} 結果`,
+  lady: '湖中女神',
+  shot: '刺殺結果',
+};
+
 // ---------- narration (host phone only; public information only) ----------
 
 /** Minimum on-screen time of a cue when nobody speaks it (silent mode). */
 export const cueMinMs = (text) => Math.max(2000, Math.min(9000, text.length * 150));
 
-export function cueReveal({ n, deck, secs }) {
+/** `pass` = one phone passed round the table (cfg.passPhone): nobody has a phone of their own to look at. */
+export function cueReveal({ n, deck, secs, pass = false }) {
+  const head = `新一局阿瓦隆，一共${cnt(n)}個人。今局角色：${deckSpoken(deck)}。`;
+  if (pass && !(secs > 0)) {
+    return `${head}部手機會逐個交：輪到你先㩒住張卡睇你嘅身份同情報，每人最少睇 8 秒，睇完㩒「我睇完」交俾下一位。睇咗唔好露出表情。`;
+  }
   const tail = secs > 0 ? `你哋有 ${secs} 秒。` : '睇完請㩒「我睇完」。';
-  return `新一局阿瓦隆，一共${cnt(n)}個人。今局角色：${deckSpoken(deck)}。`
-    + `大家望住自己部電話，㩒住張卡睇你嘅身份同情報，睇咗唔好露出表情。${tail}`;
+  return `${head}大家望住自己部電話，㩒住張卡睇你嘅身份同情報，睇咗唔好露出表情。${tail}`;
 }
 
 export function cuePick({ q, size, need, leader, rejects, redo = false }) {
@@ -373,9 +391,17 @@ export function cueLadyPeek({ holder, target }) {
   return `${holder}驗咗${target}，結果得${holder}一個人知，${holder}可以講真話，亦可以呃人。${target}而家攞住湖中女神。`;
 }
 
-export function cueAssassinate({ flip }) {
-  return '好人完成咗三個任務，但係梅林仲未安全。邪惡陣營可以商量，刺客請揀一個人。好人同梅林請保持安靜，唔好出聲。'
-    + (flip ? '邪惡陣營嘅角色已經公開。' : '');
+/** `talk` = one phone: evil talks face up first, and the Assassin is called only after the table taps 傾好喇 (#27). */
+export function cueAssassinate({ flip, talk = false }) {
+  const head = talk
+    ? '好人完成咗三個任務，但係梅林仲未安全。邪惡陣營而家可以開口商量，好人同梅林請保持安靜，唔好出聲。傾好就㩒「傾好喇」，刺客先拎起部手機。'
+    : '好人完成咗三個任務，但係梅林仲未安全。邪惡陣營可以商量，刺客請揀一個人。好人同梅林請保持安靜，唔好出聲。';
+  return head + (flip ? '邪惡陣營嘅角色已經公開。' : '');
+}
+
+/** One phone, after the talk: everybody else closes their eyes and the Assassin picks up the phone. */
+export function cueAssassinPick() {
+  return '其他人閉埋眼。刺客請拎起部手機，揀邊個係梅林。';
 }
 
 export function cueShot({ assassin, target, hit, merlin }) {
@@ -406,17 +432,20 @@ export const HINT = {
   voteTable: '大家投緊票，齊人先公開。',
   votedLeader: '記住邊個投反對，再㩒「繼續」。',
   voted: '記住邊個投咩，呢啲係推理嘅線索。',
+  votedTable: '記住邊個投咩，大家睇清楚就㩒「繼續」。',
   votedEnd: '連續五次否決，邪惡贏咗。',
   questMember: '揀一張牌：好人只出得成功，邪惡可以搞破壞。',
   questDone: '出咗牌喇，等公佈結果。',
   questOthers: '隊員秘密出牌，之後只會公佈幾多張失敗。',
   resultLeader: '睇吓有幾多張失敗，諗吓邊個可疑，再㩒繼續。',
   result: '睇吓有幾多張失敗，諗吓隊入面邊個可疑。',
+  resultTable: '睇吓有幾多張失敗，大家睇清楚就㩒「繼續」。',
   ladyHolder: '揀一個人，私下睇佢係好人定邪惡。',
   ladyOthers: '女神持有人揀緊驗邊個。',
   peekHolder: '㩒住睇結果；你可以講真話，亦可以呃人。',
   peekOthers: '只有持有人知結果，佢講嘅未必係真。',
   assassinate: '邪惡傾計，刺客揀邊個係梅林；人人都要㩒，得刺客嗰下先算。',
+  assassinateTalk: '邪惡開口傾，好人唔好出聲；傾好㩒「傾好喇」。',
   shot: '睇吓刺客有冇刺中梅林。',
   over: '完咗！去結果頁睇晒每個人嘅身份。',
 };
@@ -495,6 +524,18 @@ export const RECAP = {
 
 // ---------- phone UI wording ----------
 
+/**
+ * Merlin's note, chosen from who he CANNOT see — public facts only (the deck in play and the Oberon setting), so it says
+ * nothing about any seat: no Mordred and Oberon seen → he sees every evil player (#28).
+ */
+export function merlinNote(blind) {
+  if (!blind || typeof blind !== 'object') return T.card.knowsEvilNote;
+  if (blind.mordred && blind.oberon) return '（莫德雷德同奧伯倫你睇唔到）';
+  if (blind.mordred) return '（莫德雷德你睇唔到）';
+  if (blind.oberon) return '（奧伯倫你睇唔到）';
+  return '（全部邪惡你都見到）';
+}
+
 export const T = {
   deck: '今局角色',
   board: {
@@ -518,6 +559,7 @@ export const T = {
     knowsAllies: '你嘅邪惡同伴',
     knowsAlliesNone: '（冇人認得你，你都唔識其他人）',
     knowsAlliesNote: '（唔知佢哋嘅角色）',
+    knowsAllyNote: '（唔知佢嘅角色）',
     knowsNone: '你冇特別情報',
     knowsNoneNote: '靠觀察、投票同推理',
     knowsAlone: '你唔識任何人',
@@ -533,6 +575,10 @@ export const T = {
     note: '㩒住張卡睇，放手就冚返。每個人嘅卡一樣大、一樣長，有冇情報都要照睇。',
     noteTable: '大家望住自己部電話睇身份。',
     noteTap: '睇完先㩒「我睇完」，部手機會交俾下一位。',
+    // a shared phone (U9: the minimum is counted from the hand-over card, the same for every role)
+    noteTapShared: '人人最少睇 8 秒先㩒得「我睇完」，咁就睇唔出邊個有情報。',
+    noteTableShared: '部手機逐個交，每人輪流睇自己嘅身份。',
+    minWait: (sec) => `仲有 ${sec} 秒先交得`,
   },
   pick: {
     title: (size) => `揀 ${size} 位隊員`,
@@ -540,6 +586,7 @@ export const T = {
     confirm: (size) => `確定 ${size} 位隊員`,
     others: (leader) => `等 ${leader} 揀隊員…`,
     table: (leader) => `${leader} 揀緊隊員，大家可以討論。`,
+    leaderShared: (leader, size) => `${leader} 係隊長：揀 ${size} 個人（可以包括自己），大家傾好先確定。`,
     twoFail: '呢個任務要兩張失敗牌先算失敗。',
     lastChance: '最後一次提議！再被否決，邪惡直接贏。',
     timerLabel: '討論時間',
@@ -568,6 +615,8 @@ export const T = {
       : `連續否決：${after}/5`),
     next: '繼續',
     nextEnd: '睇結果',
+    // a shared phone: the leader holds the table's screen — a short reminder above 繼續 (#4)
+    tableNote: '📢 部手機擺喺中間，大家睇清楚先㩒「繼續」',
     waiting: (leader) => `等 ${leader} 繼續…`,
     yes: '贊成',
     no: '反對',
@@ -586,6 +635,8 @@ export const T = {
     playedWaitTimer: '時間到先公佈結果。',
     notMember: '你唔喺隊入面，等隊員出牌。',
     tableWait: '隊員正喺各自部電話秘密出牌。',
+    tableWaitShared: '部手機逐個交俾隊員秘密出牌。',
+    minWait: (sec) => `仲有 ${sec} 秒先出得牌`,
     progress: (d, t) => `已出牌 ${d}/${t}`,
     timerLabel: '出牌時間',
     twoFail: '呢個任務要兩張失敗先算失敗。',
@@ -626,6 +677,10 @@ export const T = {
     timerLabel: '商量時間',
     anonymous: '刺客請拎起部手機',
     overtime: '⏰ 夠鐘 — 等刺客揀，唔會自動揀',
+    // #27, one phone: evil talks first, face up in the middle
+    talkTitle: '邪惡陣營公開商量',
+    talkSub: '邪惡可以開口傾；好人同梅林唔好出聲。傾好就㩒下面，其他人閉埋眼，刺客先拎部手機。',
+    talkDone: '🗡️ 傾好喇 · 刺客拎部手機',
     extend: '⏱️ 刺殺 ＋60 秒',
   },
   shot: {

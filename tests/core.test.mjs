@@ -11,9 +11,9 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { test, assert, makePlayers, HOST, ACT, Sim } from './lib.mjs';
-import { mulberry32, rint, clone } from '../js/core/engine-kit.js';
+import { mulberry32, rint, clone, needsEyesClosed, wantsNightAmbient } from '../js/core/engine-kit.js';
 import { Session, emptyInk, applyInkBatch, normalizeInk } from '../js/core/session.js?v=1';
-import { Room, PALETTE, LOBBY_GRACE_MS, TIMER_LINGER_MS, GROUP_KEY } from '../js/core/room.js?v=1';
+import { Room, PALETTE, LOBBY_GRACE_MS, TIMER_LINGER_MS, GROUP_KEY, filterFocus } from '../js/core/room.js?v=1';
 import { createBag } from '../js/core/bag.js?v=1';
 import { createApp, compareBuilds } from '../js/core/client.js?v=1';
 import { PROTOCOL, packMessage, makeUnpacker, CHUNK_SIZE, CHUNK_OVER } from '../js/core/transport.js?v=1';
@@ -3235,4 +3235,275 @@ test('room / app: canVoid asks engine.canVoid, so 呢輪作廢 can say why not; 
   await f.host.lobby.selectGame('fake');
   f.host.lobby.start();
   assert.deepEqual(f.host.hostCtl.canVoid(), { ok: false, message: '遊戲已經完咗' });
+});
+
+// ============================================================
+// one phone in the middle (docs/playtest/single/SUMMARY.md, DESIGN §7.1) — the core side
+// ============================================================
+
+test('§7.1 filterFocus: a NAMED focus carries open / step / label / ordered / hold to the devices it names; an anonymous one never does', () => {
+  const named = { pids: ['p2'], open: true, step: 'stroke:3', label: '  畫一筆  ', ordered: true, hold: true, junk: 'x' };
+  assert.deepEqual(filterFocus(named, ['p2', 'p3']), { pids: ['p2'], open: true, step: 'stroke:3', label: '畫一筆', ordered: true, hold: true });
+  assert.equal(filterFocus(named, ['p1']), null, 'a device it does not name learns nothing, hints included');
+  assert.deepEqual(filterFocus({ pids: ['p2', 'p3'], step: 'vote:1' }, ['p3']), { pids: ['p3'], together: true, step: 'vote:1' });
+  assert.deepEqual(filterFocus({ pids: ['p2'], open: 'yes', step: 7, label: '', ordered: 1, hold: 'y' }, ['p2']), { pids: ['p2'] }, 'only the exact types');
+  assert.equal(filterFocus({ pids: ['p2'], step: 'x'.repeat(80) }, ['p2']).step.length, 40);
+  assert.equal(filterFocus({ pids: ['p2'], label: '字'.repeat(40) }, ['p2']).label.length, 24);
+  assert.equal(filterFocus({ pids: ['p2'], label: '字'.repeat(23) + '🎨🎨' }, ['p2']).label, '字'.repeat(23) + '🎨', 'an emoji is never cut in half');
+  // a secret step: the prompt and this device's own seats, nothing that could differ between phones
+  const anon = { pids: ['p2'], anonymous: '狼人請醒', open: true, step: 's', label: 'l', ordered: true, hold: true };
+  assert.deepEqual(filterFocus(anon, ['p2']), { pids: ['p2'], anonymous: '狼人請醒' });
+  assert.deepEqual(filterFocus(anon, ['p5']), { pids: [], anonymous: '狼人請醒' });
+});
+
+test('§7.1 #5 room.act: a whole-table tap keeps only the sender\'s own seats in `seats`, and `table` is a boolean', async () => {
+  const t = setup({ names: ['阿明'] });
+  hello(t.room, 'peer_x', 'dev_x', '甲', '乙');           // p2 + p3 share one phone
+  await t.room.selectGame('fake');
+  assert.equal(t.room.start().ok, true);
+  const seen = [];
+  const dispatch = t.room.session.dispatch.bind(t.room.session);
+  t.room.session.dispatch = (who, act) => { seen.push(act); return dispatch(who, act); };
+  t.room.act('dev_x', 'p2', { type: 'pick', n: 1, seats: ['p2', 'p3', 'p1'], table: true });
+  assert.deepEqual(seen.at(-1), { type: 'pick', n: 1, seats: ['p2', 'p3'], table: true });
+  t.room.act('dev_x', 'p3', { type: 'pick', n: 1, table: 'yes please' });
+  assert.equal(seen.at(-1).table, false, 'anything but true is no claim');
+  t.room.act('dev_host', 'p1', { type: 'pick', n: 2 });
+  assert.equal('table' in seen.at(-1), false, 'a per-seat tap is left alone');
+});
+
+test('§7.1 U10 session.holdClock: the deadline stops while held and moves on by the time held (pause-safe; a new deadline counts from when it was set)', () => {
+  const clock = new FakeClock();
+  let changes = 0;
+  const s = new Session({ game: makeGame({ banks: [] }), players: makePlayers(3), config: { pickMs: 10_000 }, rng: mulberry32(1), bag: null, now: clock.now, timers: clock, onChange: () => { changes++; } }).begin();
+  const d0 = s.state.deadline;
+  clock.advance(4_000);
+  assert.equal(s.holdClock(true), true);
+  assert.equal(s.held, true);
+  assert.equal(s.holdClock(true), false, 'already held');
+  clock.advance(60_000);
+  assert.equal(s.state.phase, 'pick', 'held: the 10 s clock did not run out');
+  assert.equal(s.dispatch('p1', { type: 'pick', n: 2 }), true, 'input keeps working while held');
+  assert.equal(s.holdClock(false), true);
+  assert.equal(s.state.deadline, d0 + 60_000, 'moved on by exactly the time held');
+  clock.advance(5_999);
+  assert.equal(s.state.phase, 'pick');
+  clock.advance(1);
+  assert.equal(s.state.phase, 'reveal', 'the 6 s that were left ran out after the hold');
+  assert.ok(changes > 0);
+
+  // a pause inside a hold is not counted twice
+  const c2 = new FakeClock();
+  const s2 = new Session({ game: makeGame({ banks: [] }), players: makePlayers(3), config: { pickMs: 10_000 }, rng: mulberry32(1), bag: null, now: c2.now, timers: c2 }).begin();
+  const e0 = s2.state.deadline;
+  s2.holdClock(true);
+  c2.advance(1_000);
+  s2.pause();
+  c2.advance(5_000);
+  s2.resume();                      // +5 s from the pause
+  c2.advance(2_000);
+  s2.holdClock(false);              // +3 s held outside the pause
+  assert.equal(s2.state.deadline, e0 + 5_000 + 3_000);
+
+  // a deadline the engine sets during the hold moves only by the time since it was set
+  const c3 = new FakeClock();
+  const g = makeGame({ banks: [] });
+  const act = g.engine.act;
+  g.engine.act = (st, a, ctx) => (a.action.type === 'reset' ? { ...st, deadline: ctx.now + 10_000 } : act(st, a, ctx));
+  const s3 = new Session({ game: g, players: makePlayers(3), config: { pickMs: 10_000 }, rng: mulberry32(1), bag: null, now: c3.now, timers: c3 }).begin();
+  s3.holdClock(true);
+  c3.advance(7_000);
+  s3.dispatch('p1', { type: 'reset' });
+  const set = s3.state.deadline;
+  c3.advance(2_000);
+  s3.holdClock(false);
+  assert.equal(s3.state.deadline, set + 2_000);
+  assert.equal(s3.snapshot().held, undefined, 'never snapshotted');
+});
+
+test('§7.1 U10 room.holdClock / app.hostCtl.holdClock: whole-table rooms only; the room view says clockHeld', async () => {
+  const f = appFixture();
+  const app = f.host;
+  app.local({ names: ['甲', '乙', '丙'] });
+  await settle();
+  await app.lobby.selectGame('fake');
+  assert.equal(app.lobby.start().ok, true);
+  await settle();
+  const d0 = app._room.session.state.deadline;
+  assert.equal(app.hostCtl.holdClock(true), true);
+  await settle();
+  assert.equal(app.state.room.clockHeld, true, 'the room view says so');
+  f.clock.advance(5_000);
+  assert.equal(app.hostCtl.holdClock(false), true);
+  await settle();
+  assert.equal(app.state.room.clockHeld, false);
+  assert.equal(app._room.session.state.deadline, d0 + 5_000);
+
+  // a room with phones of their own: refused (multi-phone play never holds the clock)
+  const t = await started3();
+  assert.equal(t.room.holdClock(true), false);
+  assert.equal(roomOf(t.sent, 'dev_host').clockHeld, false);
+  // and a guest cannot
+  const g = appFixture();
+  await g.host.host({ names: ['房主'] });
+  const c = g.client();
+  await c.join('1352', { names: ['客'] });
+  await settle();
+  assert.equal(c.hostCtl.holdClock(true), false);
+});
+
+test('§7.1 U1: an eyes-closed night on a whole-table phone has no 靜音 — the app refuses it and turns a silent choice into 語音 at select, start and again', async () => {
+  assert.equal(needsEyesClosed({ narration: 'required' }), true);
+  assert.equal(needsEyesClosed({ narration: 'recommended' }), false);
+  assert.equal(needsEyesClosed({ narration: 'recommended', eyesClosed: true }), true, 'onuw opts in');
+  assert.equal(needsEyesClosed({ narration: 'required', eyesClosed: false }), false, 'a game may opt out');
+  assert.equal(needsEyesClosed(null), false);
+
+  const night = makeGame();
+  night.meta = { ...night.meta, narration: 'required' };
+  const f = appFixture({ game: night });
+  const app = f.host;
+  app.local({ names: ['甲', '乙', '丙'] });
+  await settle();
+  app.narration.setMode('silent');                  // the host's own last choice, from another game
+  await app.lobby.selectGame('fake');
+  await settle();
+  assert.equal(app.state.room.narration.mode, 'voice', 'this game on one phone: 語音');
+  assert.equal(app.narration.setMode('silent'), false, '靜音 is refused');
+  assert.equal(app.state.room.narration.mode, 'voice');
+  assert.equal(app.narration.setMode('read'), true, '讀稿 stays (a non-player reads)');
+  const started = app.lobby.start();
+  assert.equal(started.ok, true, started.message);
+  await settle();
+  assert.equal(app.state.room.narration.mode, 'read');
+  f.clock.advance(60_000);
+  await settle();
+
+  // the Room itself only states the rule (a headless Room keeps whatever mode it is given)
+  const one = setup({ games: { night }, code: null, names: ['甲', '乙', '丙'], narrationMode: 'silent' });
+  await one.room.selectGame('night');
+  assert.equal(one.room.singleDevice, true);
+  assert.equal(one.room.narration.mode, 'silent');
+  assert.equal(one.room.silentBarred(), true);
+  assert.equal(one.room.onePhoneNarration(), true);
+  assert.equal(one.room.narration.mode, 'voice');
+  assert.equal(one.room.onePhoneNarration(), false, 'nothing left to change');
+  // a game that does not need eyes closed keeps 靜音
+  const quiet = setup({ code: null, names: ['甲', '乙'], narrationMode: 'silent' });
+  await quiet.room.selectGame('fake');
+  assert.equal(quiet.room.silentBarred(), false);
+  // phones of their own: 靜音 is the table's choice (D1); once the second phone leaves it IS one phone
+  const multi = setup({ games: { night }, names: ['阿明', '乙'], narrationMode: 'silent' });
+  hello(multi.room, 'peer_a', 'dev_a', '阿花');
+  await multi.room.selectGame('night');
+  assert.equal(multi.room.silentBarred(), false);
+  multi.room.receive('peer_a', { t: 'bye' });
+  assert.equal(multi.room.silentBarred(), true);
+});
+
+test('§7.1 #18: on a whole-table phone nobody is listed as idle — every pending seat waits behind the one phone\'s gate', async () => {
+  const g = makeNightGame({ blocking: true });
+  const t = setup({ games: { night: g }, code: null, names: ['甲', '乙', '丙'] });
+  assert.equal((await t.room.selectGame('night')).ok, true);
+  assert.equal(t.room.start().ok, true);
+  t.clock.advance(10 * 60_000);
+  assert.deepEqual(roomOf(t.sent, 'dev_host').idle, []);
+  assert.deepEqual(roomOf(t.sent, 'dev_host').stalled, []);
+});
+
+test('§7.1 app: a shared phone may lie in the middle (activeSeat null); a single-seat phone always shows its seat', async () => {
+  const f = appFixture();
+  const app = f.host;
+  app.local({ names: ['甲', '乙', '丙'] });
+  await settle();
+  assert.equal(app.state.activeSeat, null, 'a shared phone starts in the middle');
+  app.setActiveSeat('p2');
+  assert.equal(app.state.activeSeat, 'p2');
+  app.setActiveSeat(null);
+  assert.equal(app.state.activeSeat, null, 'back to the middle');
+  app.setActiveSeat('p2');
+  assert.equal(app.lobby.removeSeat('p2').ok, true);
+  await settle();
+  assert.equal(app.state.activeSeat, null, 'a seat that left takes the phone to the middle, not to someone else');
+
+  const solo = appFixture();
+  await solo.host.host({ names: ['房主'] });
+  await settle();
+  assert.equal(solo.host.state.activeSeat, 'p1');
+  solo.host.setActiveSeat(null);
+  assert.equal(solo.host.state.activeSeat, 'p1', 'a phone of your own never goes "to the middle"');
+});
+
+test('§7.1 re-run #4 U10: session.heldSince() — every countdown shows deadline − heldSince while held, and carries on from there on release (pause-safe; a new deadline counts from when it was set)', () => {
+  const clock = new FakeClock();
+  const s = new Session({ game: makeGame({ banks: [] }), players: makePlayers(3), config: { pickMs: 10_000 }, rng: mulberry32(1), bag: null, now: clock.now, timers: clock }).begin();
+  assert.equal(s.heldSince(), null, 'not held');
+  const d0 = s.state.deadline;
+  clock.advance(4_000);                                   // 6 s left
+  s.holdClock(true);
+  const at = s.heldSince();
+  assert.equal(d0 - at, 6_000, 'frozen at the 6 s that were left');
+  clock.advance(20_000);
+  assert.equal(s.heldSince(), at, 'stands still while held');
+  s.pause();
+  clock.advance(7_000);
+  assert.equal(d0 - s.heldSince(), 6_000, 'a pause inside the hold changes nothing');
+  s.resume();
+  assert.equal(s.state.deadline - s.heldSince(), 6_000, 'the pause moved the deadline, and the held time with it');
+  clock.advance(3_000);
+  assert.equal(s.state.deadline - s.heldSince(), 6_000);
+  s.holdClock(false);
+  assert.equal(s.heldSince(), null);
+  assert.equal(s.state.deadline - clock.now(), 6_000, 'released: the count carries on from the same 6 s');
+
+  // a deadline the engine sets during the hold: the full time, from when it was set
+  const c3 = new FakeClock();
+  const g = makeGame({ banks: [] });
+  const act = g.engine.act;
+  g.engine.act = (st, a, ctx) => (a.action.type === 'reset' ? { ...st, deadline: ctx.now + 10_000 } : act(st, a, ctx));
+  const s3 = new Session({ game: g, players: makePlayers(3), config: { pickMs: 10_000 }, rng: mulberry32(1), bag: null, now: c3.now, timers: c3 }).begin();
+  s3.holdClock(true);
+  c3.advance(7_000);
+  s3.dispatch('p1', { type: 'reset' });
+  c3.advance(2_000);
+  assert.equal(s3.state.deadline - s3.heldSince(), 10_000);
+  s3.holdClock(false);
+  assert.equal(s3.state.deadline - c3.now(), 10_000);
+});
+
+test('§7.1 re-run #4 U10: the room view publishes clockHeldAt beside clockHeld (null while the clock runs)', async () => {
+  const f = appFixture();
+  const app = f.host;
+  app.local({ names: ['甲', '乙', '丙'] });
+  await settle();
+  await app.lobby.selectGame('fake');
+  assert.equal(app.lobby.start().ok, true);
+  await settle();
+  assert.equal(app.state.room.clockHeldAt, null);
+  const d0 = app._room.session.state.deadline;
+  f.clock.advance(1_000);
+  const left = d0 - f.clock.now();
+  app.hostCtl.holdClock(true);
+  await settle();
+  assert.equal(app.state.room.clockHeld, true);
+  assert.equal(typeof app.state.room.clockHeldAt, 'number');
+  f.clock.advance(5_000);
+  assert.equal(d0 - app.state.room.clockHeldAt, left, 'a countdown reads the same time left as when the hold began');
+  app.hostCtl.holdClock(false);
+  await settle();
+  assert.equal(app.state.room.clockHeldAt, null);
+  assert.equal(app._room.session.state.deadline - f.clock.now(), left);
+});
+
+test('§7.1 re-run #7 U8: engine-kit.wantsNightAmbient — meta.nightAmbient wins; absent, every eyes-closed night gets the bed', () => {
+  assert.equal(wantsNightAmbient({ narration: 'required', eyesClosed: true }), true, 'werewolf, cheese-thief');
+  assert.equal(wantsNightAmbient({ narration: 'recommended', eyesClosed: true, nightAmbient: true }), true, 'onuw');
+  assert.equal(wantsNightAmbient({ narration: 'required' }), true);
+  assert.equal(wantsNightAmbient({ narration: 'required', nightAmbient: false }), false, 'a game may opt out');
+  assert.equal(wantsNightAmbient({ narration: 'optional' }), false);
+  assert.equal(wantsNightAmbient({ narration: 'optional', nightAmbient: true }), true, 'or opt in');
+  assert.equal(wantsNightAmbient(null), false);
+  // the real games: every eyes-closed night has it
+  for (const id of ['werewolf', 'cheese-thief', 'onuw']) assert.equal(wantsNightAmbient(GAMES.find((x) => x.id === id).meta), true, id);
+  for (const id of ['avalon', 'undercover', 'spyfall']) assert.equal(wantsNightAmbient(GAMES.find((x) => x.id === id).meta), false, id);
 });

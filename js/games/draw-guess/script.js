@@ -29,9 +29,15 @@ export function cueChoose({ n, drawer, team }) {
   return `第 ${n} 輪，${who}畫。${drawer}，請揀一個詞。`;
 }
 
-export function cuePlay({ secs, boxes, typed }) {
+export function cuePlay({ secs, boxes, typed, pass = false, drawer = '' }) {
   const len = boxes > 0 ? `答案有 ${boxes} 隻字。` : '';
-  return `開始！限時 ${secs} 秒。${len}${typed ? '打字估，估中咗唔好出聲。' : '估到就大聲講出嚟。'}`;
+  // one phone (#16, re-run N2): the line comes as the word is picked, while the public card still holds the clock — so
+  // no 「開始！」 yet: the phone lies flat in the middle and the clock starts when the drawer taps 開始 on it
+  if (pass && !typed) {
+    const who = drawer || '畫家';
+    return `${who}揀好喇。部手機平放喺枱中間，${who}㩒「開始」就計時，限時 ${secs} 秒。${len}估到就大聲講出嚟。`;
+  }
+  return `開始！${pass ? '部手機擺喺中間。' : ''}限時 ${secs} 秒。${len}${typed ? '打字估，估中咗唔好出聲。' : '估到就大聲講出嚟。'}`;
 }
 
 export function cueCat({ cat }) {

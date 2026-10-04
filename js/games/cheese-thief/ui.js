@@ -79,6 +79,23 @@ export function roleFor(my, n, opts, nameOf = (p) => p) {
  */
 export const RECHECK = '🔁 天光喇：再㩒住睇一次你張身份牌 — 夜晚可能有人畀大盜拉咗做共犯。';
 export const RECHECK_DONE = '✓ 睇咗。記住：身份牌嘅嘢唔好畀人睇到。';
+/**
+ * The same dawn re-check on the phone lying in the middle of a shared table (re-run N4): the seats' own screens are
+ * behind the chip there, so the table screen says it once, for everyone alike (5p+, never whether anything changed).
+ */
+export const RECHECK_TABLE = '🔁 天光喇：大家輪流㩒上面揀名，再睇一次自己張身份牌。';
+
+/**
+ * 大家夠鐘投票 from the middle of a whole-table phone ends the talk for everybody, so it takes a second tap (re-run N2,
+ * DESIGN §7.1 `tableSend(…, { confirm })`); the question names the time still on the clock.
+ */
+export const TABLE_READY = '🗳️ 大家夠鐘投票';
+export const TABLE_READY_PART = '🗳️ 呢部機嘅人都夠鐘投票';
+export function tableReadyConfirm(leftMs) {
+  if (!Number.isFinite(leftMs) || leftMs <= 0) return '全枱傾夠未？';
+  const sec = Math.ceil(leftMs / 1000);
+  return `全枱傾夠未？仲有 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
 
 /** Under every peek (the same for every peeker, so it says nothing): a missed result is kept for the day. */
 export const PEEK_LATER = '睇唔切唔緊要：天光喺 📓 夜晚記錄睇得返。';
@@ -88,8 +105,16 @@ export const ABSENT_MARK = '💤';
 export const ABSENT_SELF = '💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。';
 export const absentLine = (names) => `💤 暫時離開（唔使等）：${names}`;
 
-function readyLead(my, view) {
-  if (my.ready) return '好喇。等其他人準備好，夜晚就會開始 — 部手機放喺面前，唔好鎖機（一鎖就斷線，到你醒都冇嘢睇）。';
+/** One phone in the middle: the countdown when a window ran out, and what the holder does now (#7). */
+export const TIME_UP = '⏰ 時間到';
+export const TIME_UP_SHARED = '⏰ 時間到 — 部手機擺返中間，閉眼';
+
+function readyLead(my, view, shared = false) {
+  if (my.ready) {
+    return shared
+      ? '好喇，交俾下一位。全部人準備好，夜晚就會開始。'
+      : '好喇。等其他人準備好，夜晚就會開始 — 部手機放喺面前，唔好鎖機（一鎖就斷線，到你醒都冇嘢睇）。';
+  }
   if (!my.locked) return '① 㩒住張牌睇你身份　② 搖你嘅骰（搖部機或者㩒掣）';
   if (my.needsChoice && my.chosen == null) return '③ 揀邊粒骰做你嘅醒鐘（先掀開個盅睇住）';
   return '③ 睇清楚晒就㩒「準備好」';
@@ -111,24 +136,40 @@ function makeEnv(api, local, refresh) {
   };
   /** One public line naming the 💤 seats, or '' when nobody is away. */
   const awayText = (view) => (view?.absent?.length ? absentLine(names(view.absent)) : '');
-  return { api, C: api.components, local, refresh, players, nameOf, colorOf, names, markedPlayers, awayText };
+  // §7.1 one phone: a phone holding 2+ seats (the whole table: every seated player). A single-seat phone sees neither.
+  const shared = () => !!api.shared;
+  const whole = () => !!api.wholeTable;
+  /** Who a screen the table reads calls 「你」: nobody on a shared phone (#20) — it is read by everyone at once. */
+  const me = () => (shared() ? null : api.me);
+  /** Act as one of this phone's co-wakers (U2); a shell without sendAs can only act as the seat on screen. */
+  const sendAs = (pid, action) => {
+    if (typeof api.sendAs === 'function') return api.sendAs(pid, action);
+    return pid === api.me ? api.send(action) : false;
+  };
+  return { api, C: api.components, local, refresh, players, nameOf, colorOf, names, markedPlayers, awayText, shared, whole, me, sendAs };
 }
 
-/** The role card, shared by the roll and day screens. `onOpen(open)` fires when its owner lifts it. */
+/**
+ * The role card, shared by the roll and day screens. `onOpen(open)` fires when its owner lifts it.
+ * On a shared phone there is no 🔓 lock (#36): it would live only until the phone changes hands (every seat is mounted
+ * afresh), any holder could undo it, and every hand-over goes through a gate that closes the cover anyway.
+ */
 function makeRoleCard(E, { onOpen } = {}) {
+  const toggle = () => { E.local.roleLocked = !E.local.roleLocked; E.refresh(); };
   const card = E.C.RoleCard({
     role: null,
-    locked: E.local.roleLocked,
-    onLockToggle: () => { E.local.roleLocked = !E.local.roleLocked; E.refresh(); },
+    locked: E.shared() ? false : E.local.roleLocked,
+    onLockToggle: E.shared() ? undefined : toggle,
   });
   return {
     el: card.el,
     update(view) {
+      const locked = !E.shared() && E.local.roleLocked;
       card.update({
         role: roleFor(view.my, view.n, view.opts, E.nameOf),
-        locked: E.local.roleLocked,
-        onLockToggle: () => { E.local.roleLocked = !E.local.roleLocked; E.refresh(); },
-        hint: E.local.roleLocked ? '已鎖定，㩒下面解鎖' : '㩒住先睇到，放手即刻冚返',
+        locked,
+        onLockToggle: E.shared() ? undefined : toggle,
+        hint: locked ? '已鎖定，㩒下面解鎖' : '㩒住先睇到，放手即刻冚返',
         onOpen,
       });
     },
@@ -144,6 +185,19 @@ function cupProps(view, extra = {}) {
 // ============================================================
 // roll: card, cup, (4p) which die, ready
 // ============================================================
+
+/** 「夜晚點玩？」 — one phone each. */
+const OWN_NIGHT_TIP = [
+  '手機會逐個點鐘報時。擲到幾點，就喺嗰個點鐘睜眼 — 到時你部機會自動亮起，話你知邊個同你一齊醒、芝士仲喺唔喺度。',
+  '偷睇骰喺你自己部機做：淨係得你醒嗰陣，㩒個名再㩒大掣就睇到。唔使掂人哋部機 — 夜晚其他人部機係黑嘅。',
+  '每個點鐘（連你瞓緊嗰陣）都喺手機下半部大掣㩒一下，咁就冇人聽得出邊個醒。',
+];
+/** 「夜晚點玩？」 — one phone in the middle (#19: these lines replace the ones above, nothing is added). */
+const SHARED_NIGHT_TIP = [
+  '夜晚部手機擺喺枱中間，全部人閉眼。報到你擲到嗰個點鐘，先拎起部手機㩒交接卡：會見到邊個同你一齊醒、芝士仲喺唔喺度。',
+  '淨係得你醒（貪瞓鼠）：㩒一個名就即刻睇佢粒骰。睇完㩒大掣，部手機擺返中間再閉眼。',
+  '同一個鐘幾個人醒：一齊望同一個畫面；自己粒骰㩒自己個名先睇，其他人望開。',
+];
 
 function buildRoll(E) {
   const { api, C } = E;
@@ -165,9 +219,7 @@ function buildRoll(E) {
   const away = el('p', { class: 'ct-count ct-away', hidden: true });
   const tip = el('details', { class: 'ct-tip' },
     el('summary', { text: '夜晚點玩？' }),
-    el('p', { text: '手機會逐個點鐘報時。擲到幾點，就喺嗰個點鐘睜眼 — 到時你部機會自動亮起，話你知邊個同你一齊醒、芝士仲喺唔喺度。' }),
-    el('p', { text: '偷睇骰喺你自己部機做：淨係得你醒嗰陣，㩒個名再㩒大掣就睇到。唔使掂人哋部機 — 夜晚其他人部機係黑嘅。' }),
-    el('p', { text: '每個點鐘（連你瞓緊嗰陣）都喺手機下半部大掣㩒一下，咁就冇人聽得出邊個醒。' }));
+    ...(E.shared() ? SHARED_NIGHT_TIP : OWN_NIGHT_TIP).map((t) => el('p', { text: t })));
 
   // your dice sit ABOVE your card (as in v1): the number is what you need again and again
   const node = el('div', { class: 'ct-screen ct-roll' }, lead, cup.el, choose, roleCard.el, readyBtn, count, away, tip);
@@ -177,7 +229,7 @@ function buildRoll(E) {
     update(view) {
       const my = view.my;
       dice = my.dice ?? [];
-      setText(lead, readyLead(my, view));
+      setText(lead, readyLead(my, view, E.shared()));
       roleCard.update(view);
       cup.update({
         dice: my.dice, sides: 6, rollSeq: my.rollSeq,
@@ -234,17 +286,59 @@ function makeChips(E) {
   return {
     el: grid,
     /**
-     * Every chip stays tappable and looks the same on every phone: a sleeper's
-     * decoy taps highlight a name exactly like a peek or a follower pick does.
-     * `selected`: pids shown as picked.
+     * On a one-seat phone every chip stays tappable and looks the same on every phone: a sleeper's decoy taps
+     * highlight a name exactly like a peek or a follower pick does. `selected`: pids shown as picked.
+     * `live` (a shared phone only, #36): the pids that may be tapped — nobody there needs a decoy, so the rest are
+     * dimmed and a waker with nothing to pick is not left wondering what the names are for.
      */
-    paint(list, { selected, tap }) {
+    paint(list, { selected, tap, live = null }) {
       ensure(list);
       onTap = tap;
+      grid.classList.toggle('is-dim', !!live && !live.length);
       for (const c of chips) {
-        c.b.disabled = false;
+        c.b.disabled = !!live && !live.includes(c.pid);
         c.b.classList.toggle('on', selected.includes(c.pid));
       }
+    },
+  };
+}
+
+/**
+ * The night countdown: a plain bar (no sound, no Timer — its ticks would tell the room who is awake) drawn from the
+ * step's FIXED length (`view.step.windowMs`, #7), so a screen that mounts half-way through a window — a shared phone,
+ * after its gate — shows the time already gone. The seconds left are written next to it; when they run out on a shared
+ * phone the line says to put the phone back. Every phone's bar is the same (the length is public).
+ */
+function makeBar(E) {
+  const fill = el('i');
+  const bar = el('div', { class: 'ct-bar', role: 'progressbar', 'aria-valuemin': '0' }, fill);
+  const words = el('span', { class: 'ct-bar-text', 'aria-hidden': 'true' });
+  const node = el('div', { class: 'ct-barwrap' }, bar, words);
+  let total = 1;
+  let seen = null;
+  return {
+    el: node,
+    tick(view, ctx) {
+      const dl = view?.deadline;
+      if (dl == null || view.step?.stage !== 'window') {
+        seen = null;
+        bar.classList.add('is-wait');
+        fill.style.transform = 'scaleX(1)';
+        setText(words, '');
+        return;
+      }
+      if (ctx?.paused) return;                 // the host paused: the bar stays where it is
+      const fixed = Number(view.step.windowMs);
+      if (dl !== seen) { seen = dl; total = Math.max(1, fixed > 0 ? fixed : dl - E.api.now()); }
+      const left = Math.max(0, dl - E.api.now());
+      const sec = Math.ceil(left / 1000);
+      const text = sec > 0 ? `仲有 ${sec} 秒` : E.shared() ? TIME_UP_SHARED : TIME_UP;
+      bar.classList.remove('is-wait');
+      fill.style.transform = `scaleX(${Math.min(1, left / total).toFixed(3)})`;
+      setText(words, text);
+      bar.setAttribute('aria-valuemax', String(Math.round(total / 1000)));
+      bar.setAttribute('aria-valuenow', String(sec));
+      bar.setAttribute('aria-valuetext', text);
     },
   };
 }
@@ -274,6 +368,39 @@ function sleepLines(step) {
   }
 }
 
+/**
+ * The awake card of a seat alone on a shared phone (#7): three short lines at most — the window also has to cover
+ * reaching for the phone with eyes closed, so there is no time for a paragraph.
+ */
+function awakeLinesShared(E, view) {
+  const { nameOf, names } = E;
+  const night = view.nightSeat;
+  const step = view.step;
+  const my = view.my;
+  const me = E.api.me;
+  const L = [];
+  L.push(['with', night.with.length ? `👀 同你一齊醒：${names(night.with)}` : '👀 淨係得你醒。']);
+  if (night.thief === me) L.push(['cheese', '🧀 你偷走咗芝士！收好佢。']);
+  else if (night.thief) L.push(['cheese hot', `🧀 ${nameOf(night.thief)} 偷走咗芝士！`]);
+  else L.push(['cheese', night.cheese === 'gone' ? '🧀 芝士已經唔見咗，唔知邊個偷。' : '🧀 芝士仲喺枱上。']);
+  const pk = night.peek;
+  if (night.steal?.can) {
+    const other = my.wake.filter((h) => h !== step.h).map((h) => CLOCK[h]).join('、');
+    L.push(['role', other ? `而家偷，定係等${other}點鐘？㩒大掣＝而家偷。` : '你一定要偷：㩒大掣＝偷。']);
+  } else if (night.steal?.twoWakes && night.cheese === 'gone') {
+    L.push(['note', '你已經偷咗，今次淨係睇下邊個醒。']);
+  } else if (night.recruit) {
+    L.push(['role', `🤝 揀 ${night.recruit.count} 位同你一齊醒嘅人做共犯：㩒名，再㩒大掣。`]);
+  } else if (night.picked) {
+    L.push(['cheese hot', night.picked === me && my.follower ? '🤝 你畀大盜揀咗做共犯！' : `🤝 大盜揀咗 ${nameOf(night.picked)} 做共犯。`]);
+  } else if (pk.mode === 'can') {
+    L.push(['role', '👁 㩒一個名就即刻偷睇佢粒骰（得一次）。']);
+  } else if (pk.done && view.opts?.recap !== false) {
+    L.push(['note', PEEK_LATER]);
+  }
+  return L;
+}
+
 /** The lines while this seat IS awake. Everything here is private to this phone. */
 function awakeLines(E, view) {
   const { nameOf, names } = E;
@@ -284,6 +411,7 @@ function awakeLines(E, view) {
   const L = [];
 
   if (step.k === 'open') {
+    if (E.shared()) return awakeLinesShared(E, view);
     L.push(['head', '👀 你醒咗']);
     L.push(['with', night.with.length ? `同你一齊醒：${names(night.with)}` : '淨係得你醒，其他人都瞓緊。']);
 
@@ -348,34 +476,37 @@ function awakeLines(E, view) {
 /** The big button's label: identical on every phone at every night step. */
 export const ACK_MAIN = '👆 㩒一下';
 const ACK_DECOY = '每一步都㩒，咁就冇人聽得出邊個醒';
-
-/**
- * A shared phone holding more than one of the seats awake right now (focus is filtered
- * per device, so this can only ever be true on a phone passed around): this seat's
- * last tap hands the phone on — the engine's `done` drops it from focus and the shell's
- * pass gate walks to the next awake seat on this phone. A one-seat phone never sees it.
- */
-function sharedWalk(E, view) {
-  if (!view?.nightSeat?.awake) return false;
-  return (view.__ctx?.focus?.pids ?? []).some((p) => p !== E.api.me);
-}
+/** A shared phone: nobody there taps a decoy — the last tap means "seen it", and the phone goes back (#19, #36). */
+export const ACK_SHARED = '睇完就㩒，部手機擺返中間';
 
 /** The small line under the big button: what this seat's tap will do now. */
 function ackSubline(E, view, mode, selected) {
   const night = view.nightSeat;
-  const walk = sharedWalk(E, view);
+  const shared = E.shared() && !!night?.awake;
   if (mode === 'peek') {
+    // a shared phone peeks on the name itself (one tap); the big button then only skips the peek
+    if (shared) return '唔想睇就㩒呢度，部手機擺返中間';
     return selected.length ? `㩒落去就睇 ${E.nameOf(selected[0])} 粒骰（得一次）` : '揀咗名先會睇到；唔想睇就直接㩒';
   }
   if (mode === 'recruit') {
     const c = night.recruit.count;
     return selected.length === c ? `㩒落去就揀 ${E.names(selected)} 做共犯` : `喺上面揀 ${c} 位（${selected.length}/${c}）`;
   }
-  if (night?.awake && night.steal?.can) {
-    return walk ? '㩒落去＝而家偷芝士；想等：㩒個名再㩒（交畀下一位）' : '㩒落去＝而家偷芝士；想等就唔好㩒';
+  if (night?.awake && night.steal?.can) return '㩒落去＝而家偷芝士；想等就唔好㩒';
+  return shared ? ACK_SHARED : ACK_DECOY;
+}
+
+/** The help line under the button. A shared phone never says 「望住自己部機」 (#19). */
+function nightHelp(E, view) {
+  const silent = view.__ctx?.narrationMode === 'silent';
+  if (E.shared()) {
+    return silent
+      ? '靜音模式：睇完就放返部手機喺枱中間，唔好抬頭望人。'
+      : '夜晚唔好講嘢。睇完就㩒大掣，部手機擺返枱中間，閉返眼。';
   }
-  if (walk) return '睇完就㩒：交畀下一位';
-  return ACK_DECOY;
+  return silent
+    ? '靜音模式：唔使閉眼、唔好抬頭、唔使摸手 — 望住自己部機，到你個鐘佢會亮。'
+    : '夜晚唔好講嘢。每一步都照㩒大掣，咁就冇人知邊個醒。';
 }
 
 function buildNight(E) {
@@ -392,8 +523,7 @@ function buildNight(E) {
   const myDiceWrap = el('div', { class: 'ct-mydice' }, myDice.el);
 
   const head = el('div', { class: 'ct-n-head' }, el('span', { class: 'ct-n-side' }), el('div', { class: 'ct-n-mid' }, icon, title), myDiceWrap);
-  const fill = el('i');
-  const bar = el('div', { class: 'ct-bar' }, fill);
+  const bar = makeBar(E);
 
   const lines = el('div', { class: 'ct-lines' });
   const peekFront = el('div', { class: 'ct-peekfront' });
@@ -408,14 +538,12 @@ function buildNight(E) {
   const ackSub = el('span', { class: 'ct-ack-sub' });
   const ack = el('button', { class: 'ct-ack', type: 'button' }, ackLabel, ackSub);
   const help = el('p', { class: 'ct-help' });
-  const node = el('div', { class: 'ct-screen ct-night' }, head, bar, panel, chips.el, ack, help);
+  const node = el('div', { class: 'ct-screen ct-night' }, head, bar.el, panel, chips.el, ack, help);
 
   // local, uncommitted state: who the thumb has picked
   let selected = [];
   let modeKey = '';
   let current = null;       // the view being shown (handlers read it)
-  let bartotal = 1;
-  let barDeadline = null;
 
   /** What a tap on a name means for this seat right now: 'peek', 'recruit' or a decoy. */
   function pickMode(v) {
@@ -438,6 +566,11 @@ function buildNight(E) {
       else selected = [...selected.slice(1), pid];
     } else if (mode === 'peek' && !night.peek.targets.includes(pid)) {
       return;
+    } else if (mode === 'peek' && E.shared()) {
+      // #7: on a shared phone the peek is ONE tap — the two-tap gesture only exists so a peek looks like a sleeper's
+      // decoy on a phone of its own, and nobody taps decoys on the phone in the middle
+      selected = [];
+      api.send({ type: 'peek', target: pid });
     } else {
       // a peek and a sleeper's decoy behave the same: one name lit, tap again to clear
       selected = selected.includes(pid) ? [] : [pid];
@@ -450,19 +583,11 @@ function buildNight(E) {
     if (!v) return;
     const night = v.nightSeat;
     const mode = pickMode(v);
-    const walk = sharedWalk(E, v);
     if (mode === 'peek' && selected.length === 1) { api.send({ type: 'peek', target: selected[0] }); selected = []; paint(); return; }
     if (mode === 'recruit' && selected.length === night.recruit.count) { api.send({ type: 'recruit', targets: selected.slice() }); selected = []; paint(); return; }
-    if (night?.awake && night.steal?.can) {
-      // 4p first wake on a shared phone: a name + the button = "wait", and hand the phone on
-      if (walk && selected.length) { selected = []; paint(); api.send({ type: 'done' }); return; }
-      api.send({ type: 'steal' });
-      return;
-    }
+    if (night?.awake && night.steal?.can) { api.send({ type: 'steal' }); return; }
     // the decoy: a sleeper's name tap is cleared exactly like a sent peek
     if (selected.length) { selected = []; paint(); }
-    // a shared phone with another awake seat on it: this tap hands it on (never while a pick is owed)
-    if (walk && mode !== 'recruit') { api.send({ type: 'done' }); return; }
     api.send({ type: 'ack' });
   }
   ack.addEventListener('click', onAck);
@@ -510,15 +635,19 @@ function buildNight(E) {
       if (wasHidden && typeof panel.scrollTo === 'function') panel.scrollTo({ top: 0 });   // the result is first in the card
     }
 
-    // the grid: every phone shows the same tappable names; only this seat
-    // knows whether a tap is a peek, a follower pick or a decoy
+    // the grid: every one-seat phone shows the same tappable names; only this seat knows whether a tap is a peek,
+    // a follower pick or a decoy. A shared phone lights only the names a tap can use (#36).
     const others = E.players().filter((p) => p.id !== E.api.me);
     const mode = pickMode(view);
     const key = `${step.ix}|${step.stage}|${mode}`;
     if (key !== modeKey) { modeKey = key; selected = []; }
     if (mode === 'recruit') selected = selected.filter((p) => night.recruit.among.includes(p));
     if (mode === 'peek') selected = selected.filter((p) => night.peek.targets.includes(p));
-    chips.paint(others, { selected, tap: tapChip });
+    const live = !E.shared() ? null
+      : mode === 'peek' ? night.peek.targets
+        : mode === 'recruit' ? night.recruit.among
+          : [];
+    chips.paint(others, { selected, tap: tapChip, live });
 
     // the one big button: same colour, size and big label on every phone at
     // every step (a glance across the table cannot tell a steal or a peek from
@@ -527,38 +656,262 @@ function buildNight(E) {
     setText(ackSub, ackSubline(E, view, mode, selected));
     ack.classList.toggle('is-done', !!view.acked);
 
-    const silent = view.__ctx?.narrationMode === 'silent';
-    setText(help, silent
-      ? '靜音模式：唔使閉眼、唔好抬頭、唔使摸手 — 望住自己部機，到你個鐘佢會亮。'
-      : '夜晚唔好講嘢。每一步都照㩒大掣，咁就冇人知邊個醒。');
+    setText(help, nightHelp(E, view));
   }
 
-  // the countdown bar: a plain element, no sound
-  function tick() {
-    const view = current;
-    if (!view) return;
-    const dl = view.deadline;
-    if (dl == null || view.step.stage !== 'window') {
-      barDeadline = null;
-      bar.classList.add('is-wait');
-      fill.style.transform = 'scaleX(1)';
-      return;
-    }
-    if (dl !== barDeadline) { barDeadline = dl; bartotal = Math.max(1, dl - api.now()); }
-    bar.classList.remove('is-wait');
-    const r = Math.max(0, Math.min(1, (dl - api.now()) / bartotal));
-    fill.style.transform = `scaleX(${r.toFixed(3)})`;
-  }
-  const timer = setInterval(tick, 120);
+  const timer = setInterval(() => { if (current) bar.tick(current, current.__ctx); }, 120);
 
   return {
     el: node,
     update(view, ctx) {
       current = { ...view, __ctx: ctx };
       paint();
-      tick();
+      bar.tick(current, ctx);
     },
     destroy() { clearInterval(timer); peekCover.destroy(); myDice.destroy(); node.remove(); },
+  };
+}
+
+// ============================================================
+// night on a shared phone, several of its seats awake in one step (U2): ONE combined screen
+// ============================================================
+//
+// They have their eyes open together and may see each other, so whatever all of them saw is written once, in the
+// third person (who is awake, the cheese, the thief's pick at a 5p theft, who the crew is at the meeting). Whatever
+// only ONE of them knows or may do (their own die; a 4p thief's choice to steal now or wait; a 7p follower who did or
+// did not watch the theft) sits behind that seat's own 「🤫 名」 panel, which looks the same for every co-waker; the
+// others look away while it is open. Every action goes out for the seat it belongs to (api.sendAs); the plain tap
+// acks for all of them at once (`seats`). Nothing here ends the window early — it runs its fixed length.
+
+/** The co-wakers on this screen and their own views (the mounted seat's is `view`). */
+function coList(E, view, ctx) {
+  const co = Array.isArray(ctx?.coWakers) ? ctx.coWakers : [];
+  return co
+    .map((pid) => ({ pid, v: ctx?.views?.[pid] ?? (pid === E.api.me ? view : null) }))
+    .filter((x) => x.v?.nightSeat?.awake);
+}
+
+/** Everybody awake right now, in seat order: these co-wakers plus anyone their views name (seats on other phones). */
+function awakeAll(E, list) {
+  const set = new Set(list.flatMap((x) => [x.pid, ...(x.v.nightSeat.with ?? [])]));
+  return E.players().map((p) => p.id).filter((p) => set.has(p));
+}
+
+/** The lines every co-waker reads together. */
+function coSharedLines(E, step, list) {
+  const { nameOf, names } = E;
+  const L = [];
+  if (step.k === 'open') {
+    L.push(['head', `👀 你哋一齊醒：${names(awakeAll(E, list))}`]);
+    // the theft is written for all only when every one of them saw it (a 4p thief's later wake: only it knows)
+    const seen = list.map((x) => x.v.nightSeat.thief ?? null);
+    const gone = list.some((x) => x.v.nightSeat.cheese === 'gone');
+    if (seen[0] && seen.every((t) => t === seen[0])) L.push(['cheese hot', `🧀 ${nameOf(seen[0])} 偷走咗芝士 — 你哋都睇到！`]);
+    else L.push(['cheese', gone ? '🧀 芝士已經唔見咗。' : '🧀 芝士仲喺枱上。']);
+    const owner = list.find((x) => x.v.nightSeat.recruit);
+    if (owner) {
+      const r = owner.v.nightSeat.recruit;
+      L.push(['role', `🤝 ${nameOf(owner.pid)} 要喺 ${names(r.among)} 入面揀 ${r.count} 位做共犯：㩒名，再㩒大掣。唔揀，時間到會隨機揀。`]);
+    }
+    const picked = list.map((x) => x.v.nightSeat.picked).find(Boolean);
+    if (picked) L.push(['cheese hot', `🤝 大盜揀咗 ${nameOf(picked)} 做共犯。`]);
+    return L;
+  }
+  if (step.k === 'rec-meet') {
+    const thief = list.find((x) => x.v.my?.role === 'thief');
+    if (thief) {
+      L.push(['head', '🤝 認人']);
+      L.push(['with', `大盜：${nameOf(thief.pid)} · 共犯：${names(thief.v.nightSeat.meet?.mates ?? [])}`]);
+    } else {
+      const crew = new Set(list.flatMap((x) => [x.pid, ...(x.v.nightSeat.meet?.mates ?? [])]));
+      L.push(['head', '🤝 你哋係共犯']);
+      L.push(['with', `共犯：${names(E.players().map((p) => p.id).filter((p) => crew.has(p)))}`]);
+      // who the thief is: shared only when every one of them knows the same (7p: only who watched the theft)
+      const known = list.map((x) => x.v.nightSeat.meet?.thief ?? null);
+      if (known[0] && known.every((t) => t === known[0])) L.push(['with', `大盜係 ${nameOf(known[0])}。`]);
+      else L.push(['note', '大盜係邊個：各自㩒自己個名睇。']);
+    }
+    return L;
+  }
+  return L;
+}
+
+/** What only this co-waker knows or may do — shown in its own 「🤫」 panel. */
+function coPrivateLines(E, step, x, n) {
+  const { nameOf } = E;
+  const night = x.v.nightSeat;
+  const my = x.v.my ?? {};
+  const L = [];
+  if (step.k === 'open') {
+    if (night.steal?.can) {
+      const other = (my.wake ?? []).filter((h) => h !== step.h).map((h) => CLOCK[h]).join('、');
+      L.push(['role', other ? `你係大盜：而家偷，定係等${other}點鐘先偷？㩒大掣＝而家偷；想等就㩒「睇完」。` : '你係大盜：一定要偷，㩒大掣＝偷。']);
+    } else if (my.role === 'thief') {
+      L.push(['role', night.cheese === 'gone' ? '你係大盜：芝士係你偷嘅，記住邊個同你一齊醒。' : '你係大盜：記住邊個同你一齊醒。']);
+    } else {
+      L.push(['note', '冇嘢要做：記住邊個同你一齊醒。']);
+    }
+    return L;
+  }
+  if (step.k === 'rec-meet') {
+    if (my.role === 'thief') { L.push(['role', '你係大盜：記住你嘅共犯。']); return L; }
+    const meet = night.meet ?? {};
+    L.push(['with', meet.thief ? (n === 7 ? `大盜係 ${nameOf(meet.thief)}（你夜晚親眼見到佢偷）。` : `大盜係 ${nameOf(meet.thief)}。`) : '你唔知大盜係邊個。']);
+    L.push(['note', my.role === 'fall-mouse' ? '你同時係背鍋鼠：想贏就要畀人投中。' : '你同大盜一隊，夜晚唔可以傳遞骰仔資料。']);
+    return L;
+  }
+  return L;
+}
+
+function buildCoNight(E) {
+  const { api, C } = E;
+  const icon = el('span', { class: 'ct-n-icon' });
+  const title = el('b', { class: 'ct-n-title' });
+  const head = el('div', { class: 'ct-n-head' }, el('span', { class: 'ct-n-side' }), el('div', { class: 'ct-n-mid' }, icon, title), el('span', { class: 'ct-n-side' }));
+  const bar = makeBar(E);
+
+  // --- what they all read together ---
+  const lines = el('div', { class: 'ct-lines' });
+  const chips = makeChips(E);
+  const ownRow = el('div', { class: 'ct-co-own' });
+  const ownTitle = el('p', { class: 'ct-co-ownlabel', text: '🤫 自己嘅嘢：㩒自己個名（其他人望開）' });
+  const ackLabel = el('span', { class: 'ct-ack-main', text: ACK_MAIN });
+  const ackSub = el('span', { class: 'ct-ack-sub' });
+  const ack = el('button', { class: 'ct-ack', type: 'button' }, ackLabel, ackSub);
+  const together = el('div', { class: 'ct-co-shared' }, el('div', { class: 'ct-panel' }, lines), chips.el, ownTitle, ownRow, ack);
+
+  // --- one co-waker's own panel ---
+  const privTitle = el('p', { class: 'ct-co-privtitle' });
+  const privDice = el('div', { class: 'dice-row ct-co-dice' });
+  const privLines = el('div', { class: 'ct-lines' });
+  const privAckSub = el('span', { class: 'ct-ack-sub' });
+  const privAck = el('button', { class: 'ct-ack', type: 'button' }, el('span', { class: 'ct-ack-main', text: ACK_MAIN }), privAckSub);
+  const privBack = el('button', { class: 'btn btn-ghost ct-co-back', type: 'button', text: '↩ 睇完（交返大家）' });
+  const own = el('div', { class: 'ct-co-priv' }, privTitle, el('div', { class: 'ct-panel' }, privDice, privLines), privAck, privBack);
+  setHidden(own, true);
+
+  const help = el('p', { class: 'ct-help' });
+  const node = el('div', { class: 'ct-screen ct-night ct-co' }, head, bar.el, together, own, help);
+
+  let current = null;
+  let selected = [];
+  let openSeat = null;      // the co-waker whose own panel is open
+  let stepKey = '';
+
+  const listNow = () => (current ? coList(E, current, current.__ctx) : []);
+  const ownerNow = () => listNow().find((x) => x.v.nightSeat.recruit) ?? null;
+
+  function tapChip(pid) {
+    const owner = ownerNow();
+    if (!owner) return;
+    const r = owner.v.nightSeat.recruit;
+    if (!r.among.includes(pid)) return;
+    if (selected.includes(pid)) selected = selected.filter((x) => x !== pid);
+    else if (selected.length < r.count) selected = [...selected, pid];
+    else selected = [...selected.slice(1), pid];
+    paint();
+  }
+
+  ack.addEventListener('click', () => {
+    const list = listNow();
+    const owner = ownerNow();
+    if (owner && selected.length === owner.v.nightSeat.recruit.count) {
+      E.sendAs(owner.pid, { type: 'recruit', targets: selected.slice() });
+      selected = [];
+      paint();
+      return;
+    }
+    // "we have all seen it": one tap acks for every co-waker (never ends the window)
+    api.send({ type: 'ack', seats: list.map((x) => x.pid) });
+  });
+
+  privAck.addEventListener('click', () => {
+    const x = listNow().find((y) => y.pid === openSeat);
+    if (!x) return;
+    E.sendAs(x.pid, x.v.nightSeat.steal?.can ? { type: 'steal' } : { type: 'ack' });
+  });
+  privBack.addEventListener('click', () => { openSeat = null; paint(); });
+
+  let ownKey = '';
+  function paintOwnRow(list) {
+    const k = sig(list.map((x) => x.pid));
+    if (k === ownKey) return;
+    ownKey = k;
+    ownRow.replaceChildren(...list.map((x) => el('button', {
+      class: 'btn btn-ghost btn-sm ct-co-me', type: 'button', style: { '--seat': E.colorOf(x.pid) },
+      onclick: () => { openSeat = x.pid; paint(); },
+    }, el('span', { class: 'dot' }), `🤫 ${E.nameOf(x.pid)}`)));
+  }
+
+  function paint() {
+    const view = current;
+    const step = view.step;
+    const list = listNow();
+    const n = view.n;
+
+    const [ic, tt] = stepHead(step);
+    setText(icon, ic);
+    setText(title, tt);
+
+    const k = `${step.ix}|${step.stage}|${sig(list.map((x) => x.pid))}`;
+    if (k !== stepKey) { stepKey = k; selected = []; openSeat = null; }
+    if (openSeat && !list.some((x) => x.pid === openSeat)) openSeat = null;
+
+    // together
+    const ls = coSharedLines(E, step, list);
+    const lk = sig(ls);
+    if (lines.dataset.key !== lk) {
+      lines.dataset.key = lk;
+      lines.replaceChildren(...ls.map(([cls, text]) => el('p', { class: `ct-line ${cls}`, text })));
+    }
+    const owner = ownerNow();
+    const others = E.players().filter((p) => p.id !== owner?.pid);
+    if (owner) selected = selected.filter((p) => owner.v.nightSeat.recruit.among.includes(p));
+    setHidden(chips.el, !owner);
+    chips.paint(others, { selected, tap: tapChip, live: owner ? owner.v.nightSeat.recruit.among : [] });
+    paintOwnRow(list);
+    if (owner) {
+      const c = owner.v.nightSeat.recruit.count;
+      setText(ackSub, selected.length === c ? `㩒落去就揀 ${E.names(selected)} 做共犯` : `喺上面揀 ${c} 位（${selected.length}/${c}）`);
+    } else setText(ackSub, ACK_SHARED);
+    ack.classList.toggle('is-done', list.length > 0 && list.every((x) => !!x.v.acked));
+
+    // one seat's own panel
+    const x = list.find((y) => y.pid === openSeat) ?? null;
+    setHidden(together, !!x);
+    setHidden(own, !x);
+    if (x) {
+      setText(privTitle, `🤫 淨係 ${E.nameOf(x.pid)} 睇 — 其他人望開`);
+      const dk = sig(x.v.my?.dice ?? null);
+      if (privDice.dataset.key !== dk) {
+        privDice.dataset.key = dk;
+        privDice.replaceChildren(el('span', { class: 'ct-co-dicelabel', text: '🎲 你粒骰' }), ...(x.v.my?.dice ?? []).map((d) => C.dieFace(d, 6)));
+      }
+      const pl = coPrivateLines(E, step, x, n);
+      const pk = sig(pl);
+      if (privLines.dataset.key !== pk) {
+        privLines.dataset.key = pk;
+        privLines.replaceChildren(...pl.map(([cls, text]) => el('p', { class: `ct-line ${cls}`, text })));
+      }
+      setText(privAckSub, x.v.nightSeat.steal?.can ? '㩒落去＝而家偷芝士；想等就㩒「睇完」' : '㩒一下，再㩒「睇完」');
+      privAck.classList.toggle('is-done', !!x.v.acked);
+    }
+
+    setText(help, view.__ctx?.narrationMode === 'silent'
+      ? '靜音模式：睇完就放返部手機喺枱中間，唔好抬頭望人。'
+      : '夜晚唔好講嘢。睇完㩒大掣，部手機擺返枱中間，閉返眼。');
+  }
+
+  const timer = setInterval(() => { if (current) bar.tick(current, current.__ctx); }, 120);
+
+  return {
+    el: node,
+    update(view, ctx) {
+      current = { ...view, __ctx: ctx };
+      paint();
+      bar.tick(current, ctx);
+    },
+    destroy() { clearInterval(timer); node.remove(); },
   };
 }
 
@@ -658,9 +1011,14 @@ function buildDay(E) {
       }
 
       mine = !!view.dayReady?.mine;
+      // a shared phone (#5): 夠鐘投票 is one table decision, made on the screen in the middle — a seat's own screen
+      // only says where it is
+      setHidden(readyBtn, E.shared());
       readyBtn.classList.toggle('btn-locked', mine);
       setText(readyBtn, mine ? '✓ 我夠鐘投票 — 等緊其他人（㩒一下取消）' : '🗳️ 我哋夠鐘投票');
-      setText(count, `想投票：${view.dayReady.done} / ${view.dayReady.total}（全部人都想先會開始${view.deadline != null ? '，或者時間到' : ''}）`);
+      setText(count, E.shared()
+        ? '📱 想投票：擺返中間，喺枱面㩒「夠鐘投票」'
+        : `想投票：${view.dayReady.done} / ${view.dayReady.total}（全部人都想先會開始${view.deadline != null ? '，或者時間到' : ''}）`);
       setText(away, E.awayText(view));
       setHidden(away, !away.textContent);
     },
@@ -712,8 +1070,8 @@ function roleLabel(role) {
 }
 
 function buildReveal(E) {
-  const { api, C } = E;
-  const panel = C.VotePanel({ players: [], candidates: [], me: api.me, progress: { done: 0, total: 0 }, reveal: { counts: {}, top: [] } });
+  const { C } = E;
+  const panel = C.VotePanel({ players: [], candidates: [], me: E.me(), progress: { done: 0, total: 0 }, reveal: { counts: {}, top: [] } });
   const cards = el('div', { class: 'ct-revealed' });
   const wait = el('p', { class: 'ct-count', text: '等陣就睇結果…' });
   const node = el('div', { class: 'ct-screen ct-reveal' }, el('div', { class: 'ct-banner', text: '🎯 開牌！' }), panel.el, cards, wait);
@@ -722,7 +1080,7 @@ function buildReveal(E) {
     update(view) {
       const players = E.players();
       panel.update({
-        players, candidates: players.map((p) => p.id), me: api.me,
+        players, candidates: players.map((p) => p.id), me: E.me(),
         reveal: view.reveal, title: '得票',
       });
       const ks = sig(view.revealed);
@@ -738,7 +1096,6 @@ function buildReveal(E) {
 }
 
 function buildOver(E) {
-  const { api } = E;
   const banner = el('div', { class: 'ct-banner big' });
   const sum = el('p', { class: 'ct-lead strong' });
   const facts = el('p', { class: 'ct-lead' });
@@ -749,7 +1106,8 @@ function buildOver(E) {
   return {
     el: node,
     update(view) {
-      const me = api.me;
+      // a shared phone is read by the whole table: no 「你贏咗」 and no 「（你）」 there (#20)
+      const me = E.me();
       const won = me ? view.winners.includes(me) : null;
       setText(banner, won == null ? '🧀 完咗' : won ? '🎉 你贏咗！' : '😿 你輸咗');
       node.classList.toggle('won', !!won);
@@ -787,32 +1145,34 @@ function buildTable(E) {
   const { api, C } = E;
   const title = el('h2', { class: 'ct-table-title' });
   const body = el('p', { class: 'ct-lead' });
-  const fill = el('i');
-  const bar = el('div', { class: 'ct-bar', hidden: true }, fill);
+  const bar = makeBar(E);
+  setHidden(bar.el, true);
   const count = el('p', { class: 'ct-count' });
   const away = el('p', { class: 'ct-count ct-away', hidden: true });
   const timerSlot = el('div', { class: 'ct-timer', hidden: true });
+  // the dawn re-check, said once to the whole table (re-run N4)
+  const recheck = el('p', { class: 'ct-recheck ct-table-recheck', hidden: true, text: RECHECK_TABLE });
+  // §7.1 #5: the phone in the middle of a shared table — 夠鐘投票 is one table decision for every seat on it; on a
+  // whole-table phone it ends the talk for everybody, so the shell asks for a second tap (re-run N2)
+  const readyBtn = el('button', { class: 'btn btn-primary btn-lg ct-table-ready', type: 'button' });
+  setHidden(readyBtn, true);
+  readyBtn.addEventListener('click', () => {
+    const dl = current?.phase === 'day' ? current.deadline : null;
+    const now = typeof api.clockNow === 'function' ? api.clockNow() : api.now();
+    api.tableSend?.({ type: 'day-ready', on: true }, { confirm: tableReadyConfirm(dl != null ? dl - now : NaN), node: readyBtn });
+  });
   let timer = null;
-  let total = 1, dlSeen = null;
-  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar, timerSlot, count, away);
+  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar.el, timerSlot, recheck, readyBtn, count, away);
   let current = null;
 
-  function tick() {
-    const v = current;
-    if (!v || v.phase !== 'night') return;
-    const dl = v.deadline;
-    if (dl == null || v.step.stage !== 'window') { bar.classList.add('is-wait'); fill.style.transform = 'scaleX(1)'; return; }
-    if (dl !== dlSeen) { dlSeen = dl; total = Math.max(1, dl - api.now()); }
-    bar.classList.remove('is-wait');
-    fill.style.transform = `scaleX(${Math.max(0, Math.min(1, (dl - api.now()) / total)).toFixed(3)})`;
-  }
-  const iv = setInterval(tick, 120);
+  const iv = setInterval(() => { if (current?.phase === 'night') bar.tick(current, current.__ctx); }, 120);
 
   return {
     el: node,
     update(view, ctx) {
-      current = view;
-      setHidden(bar, view.phase !== 'night');
+      current = { ...view, __ctx: ctx };
+      setHidden(bar.el, view.phase !== 'night');
+      const table = E.shared() && view.phase === 'day';
       switch (view.phase) {
         case 'roll':
           setText(title, '🎲 搖骰・睇牌');
@@ -820,15 +1180,17 @@ function buildTable(E) {
           setText(count, `已準備 ${view.ready.done} / ${view.ready.total}`);
           break;
         case 'night': {
+          // no tap counter at night: on a shared phone only the awake seats tap, so 「n / m」 would count them
           setText(title, `🌙 ${view.subtitle}`);
           setText(body, '夜晚入面。邊個醒、做咗乜，只有佢自己知。');
-          setText(count, `已㩒掣 ${view.acks.done} / ${view.acks.total}`);
+          setText(count, '');
           break;
         }
         case 'day':
           setText(title, '☀️ 日頭討論');
           setText(body, '芝士唔見咗！自由討論。');
-          setText(count, `想投票：${view.dayReady.done} / ${view.dayReady.total}`);
+          // the whole table on this phone: one tap is everybody's, so no n / m waiting list (#5)
+          setText(count, table && E.whole() ? '' : `想投票：${view.dayReady.done} / ${view.dayReady.total}`);
           break;
         case 'vote':
           setText(title, '🗳️ 投票');
@@ -837,6 +1199,15 @@ function buildTable(E) {
           break;
         default: break;
       }
+      setHidden(count, !count.textContent);
+      // 5p+ can have followers: the phone in the middle reminds every seat to re-peek (4p never has one)
+      setHidden(recheck, !(table && view.n >= 5));
+      setHidden(readyBtn, !table);
+      if (table) {
+        if (!readyBtn.classList.contains('armed')) setText(readyBtn, E.whole() ? TABLE_READY : TABLE_READY_PART);
+        // U5: locked while the 「擺返中間」 card is still up
+        readyBtn.disabled = !!ctx?.tableLocked;
+      }
       setText(away, view.phase === 'night' ? '' : E.awayText(view));
       setHidden(away, !away.textContent);
       if (view.deadline != null && view.phase === 'day') {
@@ -844,7 +1215,7 @@ function buildTable(E) {
         if (!timer) { timer = C.Timer(props); timerSlot.replaceChildren(timer.el); } else timer.update(props);
         setHidden(timerSlot, false);
       } else if (timer) { timer.destroy(); timer = null; timerSlot.replaceChildren(); setHidden(timerSlot, true); }
-      tick();
+      if (view.phase === 'night') bar.tick(current, ctx);
     },
     destroy() { clearInterval(iv); timer?.destroy(); node.remove(); },
   };
@@ -873,13 +1244,16 @@ export function mount(root, api) {
     lastView = view;
     lastCtx = ctx;
     const seat = !!view.seat && !!view.my;
-    const k = `${seat ? 'seat' : 'table'}:${view.phase}`;
+    // U2: several of this shared phone's seats awake in one step share ONE screen
+    const co = seat && view.phase === 'night' && coList(E, view, ctx).length >= 2;
+    const k = `${seat ? 'seat' : 'table'}:${view.phase}${co ? ':co' : ''}`;
     if (k !== key) {
       screen?.destroy();
       key = k;
-      const build = seat || view.phase === 'reveal' || view.phase === 'over'
-        ? (SEAT_SCREENS[view.phase] ?? buildTable)
-        : buildTable;
+      const build = co ? buildCoNight
+        : seat || view.phase === 'reveal' || view.phase === 'over'
+          ? (SEAT_SCREENS[view.phase] ?? buildTable)
+          : buildTable;
       screen = build(E);
       wrap.replaceChildren(screen.el);
     }

@@ -64,9 +64,12 @@ head-count-aware by itself). `env.singleDevice === true` turns `passPhone` on. T
 
 Validation: `n` must be 3–9 (the composition is fixed by the rules: 1 + 1 + n−2); every field must be in range
 (numeric strings from a `<select>` are accepted); `preset` / `levelMode` / `speakOrder` one of their values; bools are booleans.
-`defaults`, `validate` and `presets` take the optional `env` ({ singleDevice }) as their last argument; 9upper only reads it in
-`defaults` (→ `passPhone`), and has no `config.presets` of its own (its 玩法 select is the preset mechanism). A `speakOrder` the
-host picked is kept when a second phone joins and `singleDevice` flips.
+`defaults`, `validate` and `presets` take the optional `env` ({ singleDevice }) as their last argument; 9upper reads it in
+`defaults` (→ `passPhone`) and in `validate`: **with `env.singleDevice` and `passPhone` off, the setup is refused** (one-phone
+playtest #12: 「一部手機玩要開「一部手機輪流睇」，唔係淨係第一個人睇到張卡。」 — the together window would only let the first
+玩家 read). It has no `config.presets` of its own (its 玩法 select is the preset mechanism). A `speakOrder` the
+host picked is kept when a second phone joins and `singleDevice` flips. With `passPhone` on, the 發言次序 help says the 諗樣
+ticks the speakers off (「…講完由諗樣㩒「✅ 講完」。」 / 「…講完話一聲，諗樣㩒佢個名。」).
 Warnings (non-blocking): `readSecs` < 9 「睇卡時間短過官方嘅 9 秒…」; total rounds > 20 「一共 24 輪，會玩好耐。」;
 `callouts` 2 at n = 3 「3 個人玩，出兩張收皮啦一定會中老實人。」; `antiStreak` at n ≤ 4 「…唔會生效…」; `speakOrder: 'free'`
 with `speakSecs` > 0 「「自己決定」次序冇人輪緊，解釋時限唔會生效。」.
@@ -157,16 +160,30 @@ The host has two tools for a seat that stops answering (the shell's ⋯ menu / s
   - A scored round (`reveal`) is never voided: `engine.canVoid` says 「呢輪已經計咗分，㩒「下一輪」就得」.
 - **💤 唔喺度** (`@absent { pid }`, back with `@present { pid }`): public; the seat is not waited on for the rest of the game.
   The 諗樣 → the round is void and the seat moves on (their turn is dropped). Before the read (`level`, `term`) → the cards are
-  dealt again without them. Pass-the-phone read → their peek is passed over. Explaining → their turn is skipped (⏭, listed
+  dealt again without them. Pass-the-phone read, before their look → the round is dealt again without them (same 諗樣,
+  `how: 'away'`: they may have held the only look at the truth, and a redeal whoever they were leaks nothing — re-run #2
+  N2); during or after their look → it counts as read and the round stands. Explaining → their turn is skipped (⏭, listed
   as 💤 唔喺度, never ✅ 已講; back in time, they get it once at the end). 揀人 → their card stands (they can still be picked).
   From the next deal on: no card and no turn as 諗樣 (dropped when it comes up). Their own actions are ignored until
   `@present`. Refused (state unchanged) when fewer than 3 seats would be left.
   **Never automatic on a role:** voiding only when the absent seat is the 老實人 would tell the table who it was, and keeping
   the round only when it is a 9upper would tell the 諗樣 the same. The host, who cannot see roles, may still void.
 
+- **🤖 代佢做 on one phone** (`passPhone`, re-run #2 N1/N2) never plays a part nobody is there to play:
+  - the **諗樣** (`level`, `term`, `explain`, `judge`) → `{ type: 'step-down' }`: the round is void as `stuck` (the seat
+    moves on, their turn goes to the end of this lap once, as above) — never a known term started, speakers who spoke
+    marked ⏭, a second lap and a random pick that scores for somebody who is not there;
+  - a **reader** who has not started → `{ type: 'later' }`: no window runs behind the gate; their look goes to the end of the
+    queue and is offered again once everybody else has read (back by then: they read like anyone). 代佢做 again on that
+    second offer → the round is dealt again, same 諗樣 (`how: 'unread'`), whoever they were.
+  Phones of their own (no passPhone): unchanged.
+
 Every phone shows why a deal is fresh, in `level` / `term`: 「🗑️ 上一鋪作廢：新題目、重新派身份」 · 「🗑️ 上一鋪作廢：阿明 遲啲先做諗樣，
-呢鋪由 小美 做」 · 「💤 阿明 唔喺度：呢鋪由 小美 做諗樣」. A 💤 sits next to the name in the score strip. The results list every
-void (「🗑️ 第 2 輪作廢（「深水埗」）…」, 「💤 第 5 輪：阿明 唔喺度，冇做諗樣」). Rules text: the 📖 section 「有人唔喺度」.
+呢鋪由 小美 做」 · 「💤 阿明 唔喺度：呢輪重新嚟過，由 小美 做諗樣，少咗一輪」 · 「🗑️ 上一鋪作廢：阿明 冇睇到張卡，新題目、重新派身份」 ·
+「💤 阿明 唔喺度：新題目、重新派身份」. The first cue of the fresh deal says it too (re-run #2 N3; in 語音 nobody reads the
+screen): 「大熊唔喺度，呢輪重新嚟過，由阿聰做諗樣，一共 3 輪。題目係…」 · 「呢輪重新嚟過：大熊遲啲先做諗樣，而家由阿聰做。…」 ·
+「阿明冇睇到張卡，呢輪重新派過，都係阿聰做諗樣。…」 (`S.redoSpoken`). A 💤 sits next to the name in the score strip. The results list every
+void (「🗑️ 第 2 輪作廢（「深水埗」）…」, 「💤 第 5 輪：阿明 唔喺度，冇做諗樣」, 「…阿明 冇睇到張卡，重新派過…」). Rules text: the 📖 section 「有人唔喺度」.
 
 ### 3.3 `read` — the 9-second peek
 
@@ -189,6 +206,9 @@ Each phone notes whether its card was opened during the window (`Cover` `onOpen`
 whole window without an open is not told 「你睇過真正解釋喇」 afterwards; the reminder card says
 「你冇打開到張卡，問到就答「張卡冇寫」。」 / 「唔好話俾人知你冇睇到。」 instead (same three-line shape,
 private to that phone). A phone that (re)mounted after the start of the window cannot know and shows the usual line.
+On a shared phone (re-run #2 N5) the record lives at module scope (`READ_LOG`, keyed by round key, term, readers and
+seat), so it survives the remount at every hand-over; and a shared phone that does not know (a reload, a look nobody
+took) never claims a read: 「照你記得張卡寫乜講；唔肯定就答「張卡冇寫」。」 / 「用自己嘅講法講，唔好照讀。」.
 
 Cue `r{n}:read`: 「開始睇卡！大家一齊數 9 秒。」 (rulebook: everybody counts the 9 seconds together).
 When the window ends every card closes at the same instant → `explain` (`@next` from the host skips the rest).
@@ -198,7 +218,8 @@ When the window ends every card closes at the same instant → `explain` (`@next
 their card opens for exactly `readSecs`, the clock closes it → next reader. There is **no 我睇完 button**: every
 reader holds the phone for the same time, so a slow read cannot point at the 老實人 (research "anti-tell":
 "exactly the same duration"). Others see 「阿B 睇緊卡…（已睇 1/4）」. A seat's card (and, for the 老實人, the text)
-exists only from the start of its own window. After the last reader → `explain`.
+exists only from the start of its own window. After the last reader → `explain`. The gate's label counts the looks taken
+(「睇卡 k/n」, k = looks done + 1), so a look offered again at the end (`later`, §3.2a) still reads 4/4.
 Cue `r{n}:read`: 「部手機由阿B開始逐個傳，每人睇 9 秒，夠鐘自動冚返。」
 
 ### 3.4 `explain` — the 諗樣 runs the questioning, the order depends on `speakOrder`
@@ -214,10 +235,11 @@ time — the rulebook allows the accusation before everybody has spoken) and the
 | on the floor | `turn.pid` = current speaker (🎤 講緊) | same, dealt by the phone | nobody (`turn.pid` = `null`), no clock |
 | announcement | the list only | a banner 「🎤 輪到 阿B」 / 「🎤 輪到你講！」 (soft `turn` chime on that phone) + 「下一位：阿C」 (last: 「之後就到諗樣揀人」); list rows numbered `1.` … | none; note 「大家自己傾好邊個先講；講完㩒「我講完」。」 |
 | speaker | big 「我講完」 | big 「我講完」 | every 玩家 not yet ticked off sees 「我講完」 (ticks themselves) |
-| 諗樣 | each waiting name is `👉 叫佢講` (`call`), a skipped one `⏭ 跳過咗 · 叫返佢`; 「下一位」 skips the speaker | no `call`; 「下一位」 skips the speaker; note 「電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「下一位」跳過，佢最尾會再輪到。…」 | each waiting name is `👆 講完喇` (ticks that 玩家 off); no 「下一位」 |
+| 諗樣 | each waiting name is `👉 叫佢講` (`call`), a skipped one `⏭ 跳過咗 · 叫返佢`; 「下一位」 skips the speaker (one phone: 「✅ 講完 · 下一位」 + 「⏭ 佢唔喺度，跳過」, below) | no `call`; 「下一位」 skips the speaker; note 「電話隨機派人，次序同邊個係老實人冇關。人唔喺度就㩒「下一位」跳過，佢最尾會再輪到。…」 (one phone: 「…就㩒「⏭ 跳過」…」) | each waiting name is `👆 講完喇` (ticks that 玩家 off); no 「下一位」 |
 | leaves `explain` | the last speaker ends | the last speaker ends | the last 玩家 is ticked off |
 
-Cues. `judge`: `r{n}:explain` 「睇卡完。收起電話，由阿B開始解釋「{term}」。阿明可以叫人、追問，但唔可以問人係咩身份。」
+Cues (with `passPhone` they start 「睇卡完。部手機交返俾阿明，…」 instead of 「收起電話」, 系統派 adds 「講完由阿明㩒「講完」。」 and
+自己決定 says 「講完話一聲，阿明會剔你個名。」 instead of 「講完㩒「我講完」」 — #19). `judge`: `r{n}:explain` 「睇卡完。收起電話，由阿B開始解釋「{term}」。阿明可以叫人、追問，但唔可以問人係咩身份。」
 `system`: `r{n}:explain` 「睇卡完。收起電話，今輪由電話隨機派人，第一位係阿B，解釋「{term}」。阿明可以追問，但唔可以問人係咩身份。」,
 then one short line per turn, id `r{n}:explain:{k}` (k = `turnNo`, turns ended so far): 「輪到阿C。」 / 「最後一位，輪到阿D。」
 (「最後一位」 = nobody, not even a skipped player, is left after them)
@@ -231,7 +253,17 @@ Turns. `judge` / `system`: a turn ends when the speaker (or the 諗樣) taps, or
 The UI sends `done` with the turn number it saw (`turn.no` = `round.turnNo`, which counts every ended turn and call): a
 我講完 and a 下一位 tapped at the same moment end one turn, not two (the engine ignores a `done` whose `turn` is stale).
 
-**Skips (#23).** A turn ended FOR the speaker — the 諗樣's 下一位, or the host's ⏭ 下一步 — is a skip, not a 我講完: the
+**One phone (`passPhone`, one-phone playtest #11).** The 諗樣 holds the phone through the explaining and the speakers
+cannot reach their 我講完, so the 諗樣's button reads 「✅ 講完 · 下一位」 and ends the turn as the speaker's own 講完 (✅ 已講,
+no come-back); a separate small 「⏭ 佢唔喺度，跳過」 sends `done` with `skip: true`, the skip below. `blocking` names nobody in
+`explain` (the 諗樣 ends every turn, so no speaker is ever listed as 冇反應), and 代佢做 for the 諗樣 steps down (§3.2a). In
+諗樣揀 the natural way on is to tap the next name: 👉 叫佢講 then marks the speaker who had the floor for 8 s or more
+(`FLOOR_MS`) as ✅ 已講 (under that they were only up by the queue and go back to ⏳, as before), and a ✅ player stays
+callable for a follow-up (「✅ 已講 · 再問佢」, the ✅ stays; re-run #2 N4). A
+玩家 who takes the phone with 換人 (the shell keeps a hand-picked seat until the step changes, §7.1 #9) still has 我講完 and
+the 「㩒住睇返我係咩」 card on their own screen.
+
+**Skips (#23).** A turn ended FOR the speaker — the 諗樣's 下一位 (one phone: ⏭ only), or the host's ⏭ 下一步 — is a skip, not a 我講完: the
 row shows `⏭ 跳過咗` (`round.skipped`, public as `turn.skipped`). Once nobody new is waiting, each skipped player gets the
 floor back **once** (`round.back`), in the order they were skipped; skipped again after that, they stay skipped and the
 round moves on. In 諗樣揀 the 諗樣 can also call a skipped player back at any time (`call`). A speaking clock that runs
@@ -295,7 +327,12 @@ Everyone gets the same screen. Two beats (CSS delay): 「阿明 揀咗 阿B…�
 ```
 
 Buttons: the 諗樣 sees 「下一輪」 (last round: 「睇總結」); everyone else sees 「等阿明開下一輪」. `@next`
-from the host works as well; a stalled 諗樣 is auto-acted.
+from the host works as well; a stalled 諗樣 is auto-acted. **One phone** (`passPhone`, #1/#5): `focus` is `null`, so the
+shell puts the phone in the middle behind its 「📱 部手機擺返中間」 card and shows the table view — the reveal for everybody.
+The table screen (`api.atTable`) has 「大家睇完 ✓ · 下一輪（一下就得）」 (`api.tableSend({ type: 'next' })`), disabled while the
+card is up (`ctx.tableLocked`, U5) and offered only when the 諗樣 sits on that phone (or is 💤); the engine takes
+`{ type: 'next', seats, table: true }` whose `seats` include the 諗樣 as the 諗樣's own tap. No screen of a shared phone
+says 「你」 (`api.shared`: no 「（你）」, no `.me` chip, the 系統派 banner names the speaker, no 「輪到你」 chime — #20).
 
 Cue `r{n}:reveal`: 「老實人係阿B。阿明估中咗，阿明同阿B各得 2 分。真正解釋係：{explain}」 (wrong pick:
 「…阿明揀咗阿C，但阿C係 9upper，阿C呃到諗樣，得 2 分。」). Each callout adds a sentence.
@@ -325,18 +362,24 @@ Every reason sums back to the final score (tested). Reasons: 做諗樣估中 · 
 
 ## 4. Single-device play
 
-`meta.singleDevice = 'full'`. Turn on 「一部手機輪流睇」 (`passPhone`; the shell's `env.singleDevice` does it
-automatically once passed). The phone moves like this:
+`meta.singleDevice = 'full'`. 「一部手機輪流睇」 (`passPhone`) is on whenever `env.singleDevice` (defaults), and a one-phone
+room cannot turn it off (validate, #12). The phone moves like this (DESIGN §7.1):
 
-1. `level` / `term` / `explain` / `judge` / `reveal`: `focus.pids = [judge]` — the shell hands the phone to the 諗樣
-   behind a PassGate. In `term` the 諗樣 shows the term to the table.
-2. `read`: `focus.pids = [reader]`, one reader at a time from the 諗樣's left. PassGate 「交俾 阿B ・ 其他人唔好望」 →
-   「開始睇卡（9 秒）」 → the card for exactly 9 s → the clock closes it and focus moves to the next reader, whose gate
-   appears. After the last reader the phone goes back to the 諗樣.
-3. The together window does not work on one phone (one window for N people) — that is why pass mode exists.
-   Without `passPhone`, a device holding several seats would only let its first seat read.
-4. `rePeek` and the role-reminder card need a private seat switch; on one phone they are only used if somebody
-   switches seat by hand (the shell's own gate). The 諗樣's phone never shows anything about roles.
+1. `level` / `term` / `explain` / `judge`: `focus = { pids: [judge], open: true, label }` (揀難度 / 睇題目 / 解釋 / 揀老實人)
+   — the 諗樣 never sees anything secret, so a shared phone shows the shell's **public** card 「輪到 阿明 · 睇題目 · 大家一齊睇」
+   (#4), not 「其他人唔好望」. The steps share one focus signature, so the 諗樣 keeps the phone from `level` to `judge`.
+   With a speaking clock (`speakSecs` > 0, not 自己決定) `explain` also carries `hold: true`: on a whole-table phone the first
+   speaker's clock waits for the 諗樣's card (U10).
+2. `read`: `focus = { pids: [reader], label: '睇卡 2/4' }`, one reader at a time from the 諗樣's left. The private gate
+   「交俾 阿B · 其他人唔好望 · 睇卡 2/4」 → 「開始睇卡（9 秒）」 → the card for exactly 9 s → the clock closes it and focus moves
+   to the next reader, whose gate appears. After the last reader the phone goes back to the 諗樣 (the public card).
+3. `explain`: the 諗樣 ticks the speakers off with 「✅ 講完 · 下一位」; 「⏭ 佢唔喺度，跳過」 is the skip (§3.4, #11). A 玩家
+   who wants their role card (or `rePeek`) takes the phone with 換人: the shell keeps a hand-picked seat until the focus
+   signature changes (#9), so it is not bounced back; they hand it back with 換人 or 📱 擺返中間.
+4. `reveal`: `focus = null` → the phone goes to the middle behind the table card; the table screen shows the reveal and
+   「大家睇完 ✓ · 下一輪（一下就得）」, one tap for the table (`tableSend`, §3.8).
+5. The together window does not work on one phone (one window for N people) — that is why pass mode exists.
+   The 諗樣's screen never shows anything about roles. No shared screen says 「你」 (#20).
 
 No paper mode.
 
@@ -349,15 +392,16 @@ State (JSON; **PRIVATE** = never in any view before `reveal`):
 ```
 phase, deadline, timerLabel, cfg (normalised, preset applied, laps resolved), players [{id,name,seat,color}],
 order [pid…], totalRounds (= judges.length), roundNo, judges [pid…] (the whole schedule), judgeLaps [lap…] (parallel),
-moved {pid: lap} (a stuck 諗樣's turn already moved this lap), voids [{n, judge, term, how, kept?}] (how: redeal / stuck /
-absent / skip), absent [pid…] (💤, public), lastHonest (public after its reveal),
+moved {pid: lap} (a stuck 諗樣's turn already moved this lap), voids [{n, judge, term, how, kept?, pid?}] (how: redeal / stuck /
+absent / skip / unread / away; `pid` = the reader for unread / away), absent [pid…] (💤, public), lastHonest (public after its reveal),
 scores {pid: n}, stats {pid: {judged, caught, fooled, callHit, callMiss}},
 history [round summaries incl. parts[] = why each point moved — after reveal only], cueAck,
 round: {
   n, key (n, or `${n}v${voids}` after a void: cue ids and the UI's per-round memory), judge,
   explainers [pid…] (speaking queue — by cfg.speakOrder: rotation from a random start / random permutation / seat order; seats marked 💤 at the deal are left out), readers [pid…] (seat order from the judge's left),
-  honest (PRIVATE), term {term, explain (PRIVATE), cat, level, src, hint}, levelWanted, swaps, knows [pid…] (我識呢條, public), redo {how, judge, kept}|null (public),
-  reader, readStarted, readDone [pid…] (pass mode), speaker (null in 自己決定), spoken [pid…], skipped [pid…] (turn ended
+  honest (PRIVATE), term {term, explain (PRIVATE), cat, level, src, hint}, levelWanted, swaps, knows [pid…] (我識呢條, public), redo {how, judge, kept, pid?}|null (public),
+  reader, readStarted, readDone [pid…] (pass mode), later [pid…] (pass mode: readers passed over once by 代佢做), speaker
+  (null in 自己決定), floorAt (when the speaker got the floor), spoken [pid…], skipped [pid…] (turn ended
   for them), back [pid…] (already had their one come-back), turnNo, called [pid…], pick, reveal
 }
 ```
@@ -375,13 +419,15 @@ round: {
 | `{type:'away', turn?}` | the speaker (`free`: a 玩家 not yet ticked) | `explain` | what 代佢做 sends for a 玩家 whose phone is gone: the turn ends as a **skip** (⏭ 跳過咗, back once), never as their own 我講完. A seat can only ever skip itself |
 | `{type:'start'}` | judge | `term` | → `read` |
 | `{type:'peek'}` | the current reader | `read`, `passPhone` | starts that reader's `readSecs` window (once) |
-| `{type:'done', turn?}` | current speaker or judge | `explain`, `judge` / `system` | speaker → spoken (sent by the 諗樣: also → skipped); next waiting in queue, else a skipped player once; none left → `judge`. Optional `turn` (number) must equal `round.turnNo`, else ignored |
+| `{type:'later'}` | the current reader, not started | `read`, `passPhone` | what 代佢做 sends for a reader who is not there: first time → to the end of the queue (offered again); second time → `voidRound('unread')` (§3.2a) |
+| `{type:'step-down'}` | judge | `level`, `term`, `explain`, `judge`, `passPhone` | what 代佢做 sends for a 諗樣 who is not there: `voidRound('stuck')`. Not in `legalActions` |
+| `{type:'done', turn?, skip?}` | current speaker or judge | `explain`, `judge` / `system` | speaker → spoken (sent by the 諗樣: also → skipped — with `passPhone` only when `skip: true`, else it is the speaker's 講完, #11); next waiting in queue, else a skipped player once; none left → `judge`. Optional `turn` (number) must equal `round.turnNo`, else ignored |
 | `{type:'done', target?}` | a 玩家 (self) or the judge (`target`) | `explain`, `free` | ticks that 玩家 off (a 玩家's `target` is ignored); already ticked / not a 玩家 / judge without `target` → unchanged; all ticked → `judge` (a host-skipped 玩家 is back on the list once first) |
-| `{type:'call', target}` | judge | `explain`, `judge` mode only | target is a 玩家, not speaking, not spoken (or skipped) → current speaker (fresh turn timer). Refused in `system` and `free` |
+| `{type:'call', target}` | judge | `explain`, `judge` mode only | target is a 玩家, not speaking, not spoken (or skipped; with `passPhone` also spoken, for a follow-up) → current speaker (fresh turn timer). With `passPhone` the speaker who had the floor ≥ `FLOOR_MS` becomes ✅ 已講. Refused in `system` and `free` |
 | `{type:'decide'}` | judge | `explain` | → `judge` |
 | `{type:'callout', target}` | judge | `explain`, `judge` | target is a 玩家, not yet called, `called.length < callouts`; nobody is muted |
 | `{type:'pick', target}` | judge | `judge` | target is a 玩家 → scores settle → `reveal` |
-| `{type:'next'}` | judge (any present seat while the judge is 💤) | `reveal` | next round, or `over` after the last |
+| `{type:'next', seats?, table?}` | judge (any present seat while the judge is 💤) | `reveal` | next round, or `over` after the last. A whole-table tap (`table: true`, §7.1) counts for every seat in `seats` (the room keeps only the sending phone's own seats): accepted when they include the judge |
 | `@void-round {pid?}` | host | any but `reveal` / `over` | 呢輪作廢 (§3.2a): same 諗樣 (a 玩家 stuck) or the next one with lap bookkeeping (the 諗樣 stuck: `level`, `term`, `judge`, or `pid` = the 諗樣) |
 | `@absent {pid}` / `@present {pid}` | host | any but `over` | 💤 (§3.2a); refused below 3 seats at the table |
 | `@cue-done {id}` | host | any | acknowledges the cue if `id` matches |
@@ -412,13 +458,18 @@ myRole, reveal, hint`.
 
 ### `focus`
 
-`level|term|explain|judge|reveal` → `{ pids: [judge] }` (in `free` too: on one shared phone the 諗樣 holds it and ticks names); `reveal` with the 諗樣 marked 💤 → null (anybody presses 下一輪; a shared phone's gate never asks for a seat that is away); `read` together → all 玩家 at the table; pass → `[reader]`; `over` → null.
+`level|term|explain|judge|reveal` → `{ pids: [judge], open: true, label }` (labels 揀難度 / 睇題目 / 解釋 / 揀老實人 / 揭曉; in
+`free` too: on one shared phone the 諗樣 holds it and ticks names; `explain` adds `hold: true` with a speaking clock outside
+自己決定); `reveal` with `passPhone`, or with the 諗樣 marked 💤 → null (the table reads it together and taps 下一輪 once; a
+shared phone's gate never asks for a seat that is away); `read` together → `{ pids: all 玩家 at the table }`; pass →
+`{ pids: [reader], label: '睇卡 k/n' }`; `over` → null. Single-seat phones ignore `open` / `label` / `hold` (§7.1).
 
 ### `blocking(state, pid)` — is the table really waiting on this seat?
 
 The room's stall check (代佢做 / 💤) asks this, not `focus`: the 諗樣 in `level`, `term`, `judge`, `reveal` · the reader whose turn it is
-in a pass-the-phone read (not yet started) · the speaker on the floor in `explain` (諗樣揀 / 系統派) · nobody in the shared read window
-(it has a clock) or in 自己決定 (the 諗樣 can tick anybody off) · never a seat marked 💤.
+in a pass-the-phone read (not yet started) · the speaker on the floor in `explain` (諗樣揀 / 系統派; not with `passPhone`, where the
+諗樣 ends every turn, #11) · nobody in the shared read window (it has a clock) or in 自己決定 (the 諗樣 can tick anybody off) · never a
+seat marked 💤.
 
 ### `canVoid(state)`
 
@@ -426,7 +477,9 @@ in a pass-the-phone read (not yet started) · the speaker on the floor in `expla
 
 ### `autoAct(state, pid)`
 
-`level` judge → random level · `term` judge → `start` · `read` (pass) reader → `peek` · `explain` judge → `done` (a skip) and the
+With `passPhone` (one phone, re-run #2): the judge in `level` / `term` / `explain` / `judge` → `step-down`, and the reader
+whose turn it is (not started) → `later` (§3.2a). Otherwise: `level` judge → random level · `term` judge → `start` ·
+`explain` judge → `done` (a skip) and the
 speaker → `away` (a skip: ⏭ 跳過咗, never ✅ 已講 — round-1 leftover, 2026-10-04) (`free`: a 玩家 not yet ticked → `away`, the judge →
 `done` of the first 玩家 still waiting, a ticked 玩家 → null) · `judge` judge → random pick · `reveal` judge → `next` ·
 a seat marked 💤 → null · otherwise null.
@@ -504,6 +557,23 @@ Tests named `rule: …` pin a research rule. Covered in `tests/9upper.test.mjs`:
   and returns (leak sweep at every step, history = rounds played, at most one 諗樣 turn per seat per lap). UI: 我識呢條 →
   the 諗樣's flagged 換題, the fresh-deal line, ⏭ after 代佢做, 💤 in the list and the scores, 下一輪 for others, no card for a
   seat that was away at the deal.
+- One phone (DESIGN §7.1): `validate` refuses passPhone off in a one-phone room (#12); focus — the reader's private gate with
+  `睇卡 k/n`, the 諗樣's public steps (`open`, labels), `hold` on a clocked explain, `null` at the reveal; the reveal's
+  `next` as a table tap (`seats` + `table: true`, must include the 諗樣; a lone seat or `seats` without `table` is refused;
+  phones of their own unchanged); #11 the 諗樣's `done` = ✅ 已講 with passPhone, `skip: true` = ⏭, no second lap, `blocking`
+  names nobody, 代佢做 sends the skip; #19 the explain cues (no 「收起電話」 / 「我講完」 with passPhone), the 系統派 hint, the rules
+  section. UI on a shared phone: 「✅ 講完 · 下一位」 + 「⏭ 佢唔喺度，跳過」, no 「（你）」 / 「輪到你講」 / turn chime on any
+  screen through random games, the table reveal's 「大家睇完 ✓ · 下一輪（一下就得）」 (locked behind the card, `tableSend`,
+  hidden when the 諗樣 is on another phone), the table's term note. Through the REAL play screen (`play.js` + this UI, one
+  whole-table phone): the 諗樣's public cards, a private gate per reader with 睇卡 k/n, ✅ 講完, 換人 to a 玩家 holds (no
+  bounce), 📱 擺返中間 calls the 諗樣 again, the reveal in the middle behind the table card and one `tableSend` to the next
+  round's public card.
+- One-phone re-run #2: N1 代佢做 on the 諗樣 steps down in every 諗樣 step (fresh deal, next 諗樣, turn kept once per lap, no
+  score), phones of their own unchanged, not a legal action; N2 代佢做 on a reader → no window, offered again at the end,
+  second time a redeal whoever they were; 💤 on a reader before their look → redeal without them, after it the round stands;
+  N3 the fresh deal's first cue (absent 諗樣, 揀難度 mode); N7 the short 換題 cue; N4 叫佢講 marks ✅ after `FLOOR_MS`, not
+  before, and a ✅ player is callable; N8 the reveal hint; UI: 「✅ 已講 · 再問佢」, spent 收皮啦 chips hidden, the 老實人's
+  card after a remount (opened / never opened / unknown on a shared phone; a phone of your own unchanged).
 
 ## 7. 貼心 touches
 
