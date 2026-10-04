@@ -83,6 +83,12 @@
 .g9-timer .c-timer { padding: .25rem 0; }
 .g9-swap { align-self: center; }
 .g9-swap.armed { border-color: var(--danger); color: #ff9b86; }
+/* 「我識呢條」: the players' flag lights the 諗樣's 換題 button; the same plain button on every 玩家's phone */
+.g9-swap.flagged { border-color: var(--accent); color: var(--text); font-weight: 700; }
+.g9-know { align-self: center; }
+.g9-know.on { border-color: var(--accent); color: var(--text); }
+/* why this is a fresh deal (呢輪作廢 / 💤), public */
+.g9-redo { margin: 0; padding: .5rem .75rem; border-radius: 10px; background: var(--surface-2); color: var(--text); font-size: .875rem; text-align: center; }
 
 /* ---------- explaining order ---------- */
 
@@ -98,6 +104,7 @@
 .g9-speaker.now .g9-speaker-state { color: var(--text); font-weight: 700; }
 .g9-speaker.done { opacity: .6; }
 .g9-speaker.skipped { border-style: dashed; }
+.g9-speaker.away { opacity: .5; border-style: dashed; }
 .g9-speaker.skipped .g9-speaker-state { color: var(--cheese-2, var(--accent)); font-weight: 700; }
 .g9-speaker-call { flex: none; }
 .g9-speaker.callable { width: 100%; font: inherit; color: var(--text); text-align: left; cursor: pointer; }

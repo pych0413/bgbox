@@ -397,10 +397,16 @@ per call).
 3. **Candidates** = the guess, and the guess with at most one leading filler (係唔係, 是不是, 係咪, 我估, 我猜, 估, 猜, 係, 是)
    and at most one trailing filler (呀 啊 嗎 吗 呢 喇 啦 囉 咯 咩 嘅) removed. Stripping only adds matches.
 4. Any candidate equals an answer → **right**. No tokenising: 「老虎獅子」 never matches.
-5. Else **close** if, against any answer of length L: (i) L ≥ 3 and edit distance 1; (ii) L = 2 and the guess shares a character in
-   the same place or is reversed; (iii) L ≥ 3 and ≥ 60% of its characters are present, length within one (scrambled);
-   (iv) the guess contains the answer, or is a ≥ 2-character piece of it. **near** if it is in the entry's own `near` list
-   (the bank has none today). Else **wrong**.
+5. Else **close** if, against any answer of length L: (i) L ≥ 3 and edit distance 1; (ii) L = 2 and the guess is the answer
+   reversed; (iii) L ≥ 3 and ≥ 60% of its characters are present, length within one (scrambled); (iv) the guess contains the
+   answer, or is a ≥ 2-character piece of it. A hit under (i)–(iii) or the "piece" half of (iv) counts only if the guess shares
+   at least one character with that answer that the hint mask has **not** revealed yet: the engine passes the revealed
+   characters (`maskView(t).cells`) as `analyse(text, entry, strictness, revealed)`. **near** if it is in the entry's own
+   `near` list (the bank has none today). Else **wrong**.
+   *User decision 2026-10-04 (D9, research "Voting & resolution A").* A 2-character guess that shares one character in the same
+   place (恐龍 for 魚龍) is no longer close: hidden, it handed out half the word 14 s before the hint did; revealed (X筆 once 筆
+   shows), it only steered the table wrong. The same "says nothing new" test drops a piece made only of revealed characters
+   (守株 once 守 and 株 show).
 6. Because (iv) catches any message that contains the answer, **a `wrong` guess — the only kind shown to the table as text —
    never contains the answer in any script** (property-tested against the whole bank).
 
@@ -424,7 +430,10 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 - One phone: typed never survives `defaults(…, { singleDevice })` for any n or prev, the warning names it, no typed
   preset; paper / canvas presets; the topics field's `bank` + `matches` (#11).
 - Judge: normalisation; right answers (word, alt, script, width, filler, ambiguous groups); lists of answers never match and never
-  count as wrong; close / near / wrong rules; strictness; the "wrong never contains the answer" property over the bank.
+  count as wrong; close / near / wrong rules; strictness; the "wrong never contains the answer" property over the bank;
+  D9: no 好接近 from a same-place character on 2-character words (before or after the reveal), nor from revealed characters
+  alone at any length, while the reversed answer, a guess containing the answer and `near` still work; the engine passes the
+  revealed cells (typed turn, before and after the 50 % hint).
 - Queue: everybody draws exactly `cycles` times, the first drawer can be any seat; three distinct words per turn (easy/medium/
   hard), never repeated in a game; tier and category filters, nearest-tier borrowing; empty / missing / throwing bank → fallback words.
 - Choose: only the drawer, bad indexes, one re-roll, clock restart, timeout → medium; unpicked offers released.

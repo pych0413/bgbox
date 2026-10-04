@@ -10,6 +10,8 @@
 //                field; the sheet then lists every role of the game instead. A game where
 //                cards change hands may name the heading itself with `view.hintRoleLabel`
 //                (e.g. 「你派到嘅角色」), so the sheet never claims to know the card you hold now.
+//                `view.hintRoleText` (「做乜：… 點贏：…」 or { what, win }) replaces the generic rules
+//                text with this table's own rule for the card (狼人殺's win condition) — logic.roleFor.
 //   📖           the full rules
 //
 // The sheet follows the live view while open (a new phase updates the hint),

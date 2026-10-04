@@ -35,6 +35,7 @@ import { el, toast, confirmTap, installConfirmShim } from './dom.js?v=1';
 import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=1';
 import * as sfxMod from '../core/sfx.js?v=1';
 import { createTableTimer } from './timer.js?v=1';
+import { createNightDim } from './night.js?v=1';
 import { createStatus } from './status.js?v=1';
 import { openSettings, applyTextSize } from './settings.js?v=1';
 import { openPreflight } from './preflight.js?v=1';
@@ -83,10 +84,8 @@ export async function startShell(app, root, opts = {}) {
   const loading = new Map();    // game id → Promise
   const soundButtons = new Set();
   const host = el('main', { class: 'screen-host' });
-  // Eyes-closed screen (BACKLOG #4): near-black, fades only, never a white flash.
-  const nightDim = el('div', { class: 'night-dim', 'aria-hidden': 'true' },
-    el('span', { class: 'nd-title', text: '閉 眼' }),
-    el('span', { class: 'nd-hint', text: '🌙 可以將螢幕調暗啲' }));
+  // The night overlay (BACKLOG #4, D1): near-black / a soft dim / opaque, fades only, never a white flash.
+  const nightDim = createNightDim();
   const netbarEl = document.getElementById('netbar') ?? el('div', { class: 'netbar hidden', id: 'netbar', role: 'alert' });
 
   // ---------- sound: the user's toggle, plus the night-time silence on top ----------
@@ -157,17 +156,18 @@ export async function startShell(app, root, opts = {}) {
         paintSoundButtons();
         if (!userMuted) { primeAudio(); sfx('tap'); }   // the tap itself unlocks iOS audio
       },
-      /** A step that must be silent on this phone (eyes-closed night). */
       /**
-       * `opaque`: a shared phone (several seats) — nobody taps a decoy through the dark there, and the
-       * view underneath belongs to whoever held the phone last, so it is covered completely.
+       * Night on this phone: dimmed and silent (logic.nightChrome decides, play.js calls). `level`: 'dark'
+       * (eyes-closed, between this seat's steps) · 'soft' (靜音, D1: the same readable dim on every phone, the
+       * awake seat included) · 'opaque' (a shared phone — the view underneath belongs to whoever held it last, so
+       * it is covered completely and swallows taps). `words`: the overlay's title + hint (one per mode, never
+       * per seat). `opaque: true` is the old spelling of level 'opaque'.
        */
-      night(on, { opaque = false } = {}) {
-        nightDim.classList.toggle('opaque', !!on && !!opaque);
+      night(on, { level, words = null, opaque = false } = {}) {
+        nightDim.set({ on: !!on, level: level ?? (opaque ? 'opaque' : 'dark'), words });
         if (nightMuted === !!on) return;
         nightMuted = !!on;
         applyMute();
-        nightDim.classList.toggle('on', nightMuted);
         document.body.classList.toggle('is-night', nightMuted);
       },
     },
@@ -380,7 +380,7 @@ export async function startShell(app, root, opts = {}) {
 
   applyTextSize();
   root.replaceChildren(host);
-  document.body.append(nightDim, status.el);
+  document.body.append(nightDim.el, status.el);
   if (!netbarEl.isConnected) document.body.append(netbarEl);
 
   // deep link ?r=1352 → join screen with the code filled in

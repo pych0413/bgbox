@@ -326,7 +326,18 @@ const nowOf = (ctx) => (typeof ctx?.now === 'function' ? ctx.now() : (ctx?.now ?
 const isStr = (x) => typeof x === 'string';
 const nm = (s, pid) => s.names[pid] ?? '?';
 const prog = (done, total) => ({ done, total });
-const countTrue = (o) => Object.values(o).filter(Boolean).length;
+/** Host actions for a seat that stopped responding (engine-kit ACT.ABSENT / ACT.PRESENT, D4). */
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
+/** The host marked this seat 💤 (public): the deal, 夠鐘投票, the vote, the circle and 睇完 do not wait for it. */
+const isAbsent = (s, pid) => !!s.absent?.[pid];
+/** Every seat the table still waits for has done it (absent seats are not waited for). */
+const allPresent = (s, done) => s.order.every((p) => done(p) || isAbsent(s, p));
+/** A progress count over the seats the table waits for. */
+const presentProg = (s, done) => {
+  const present = s.order.filter((p) => !isAbsent(s, p));
+  return prog(present.filter(done).length, present.length);
+};
 const stepOf = (s) => s.steps[s.ix] ?? null;
 const cueIdOf = (s) => `on${s.gid}:night:${s.ix}:${stepOf(s).k}`;
 const dealCueId = (s) => `on${s.gid}:deal`;
@@ -490,6 +501,7 @@ function setup({ players, config: cfg, rng, now, hostPid, carry }) {
     dayReady: {}, extends: 0,
     votes: {}, ringAgree: {}, voteCue: true,
     revealDone: {}, revealCue: true,
+    absent: {},                                         // public: seats the host marked 💤 (D4)
     final: null, report: null, outcome: null, voided: false,
     deadline: null, timerLabel: null,
   };
@@ -500,7 +512,7 @@ function setup({ players, config: cfg, rng, now, hostPid, carry }) {
 function dealAct(s, pid, a, ctx) {
   if (a.type !== 'ready' || s.ready[pid]) return s;
   s.ready[pid] = true;
-  if (s.order.every((p) => s.ready[p])) startNight(s, ctx);
+  if (allPresent(s, (p) => s.ready[p])) startNight(s, ctx);
   return s;
 }
 
@@ -712,20 +724,22 @@ function startDay(s, ctx) {
   return s;
 }
 
-function startVote(s) {
+function startVote(s, ctx = {}) {
   s.phase = 'vote';
   s.deadline = null;
   s.timerLabel = null;
   s.votes = {};
   s.ringAgree = {};
   s.voteCue = true;
+  // every seat marked 💤: nobody is left to vote, so the (empty) vote is revealed at once instead of waiting forever
+  if (allPresent(s, () => false)) return toReveal(s, ctx);
   return s;
 }
 
-function dayAct(s, pid, a) {
+function dayAct(s, pid, a, ctx) {
   if (a.type === 'ready-vote') {
     s.dayReady[pid] = a.on !== false;
-    if (s.order.every((p) => s.dayReady[p])) return startVote(s);
+    if (allPresent(s, (p) => s.dayReady[p])) return startVote(s, ctx);
     return s;
   }
   if (a.type === 'extend') {
@@ -738,30 +752,69 @@ function dayAct(s, pid, a) {
 }
 
 function voteAct(s, pid, a, ctx) {
+  if (isAbsent(s, pid)) return s;                  // 💤 casts no vote and takes no part in the circle
   if (a.type === 'vote') {
     if (!validPlayer(s, pid, a.target)) return s;
     s.votes[pid] = a.target;
     delete s.ringAgree[pid];                       // choosing a person is leaving the circle
-    if (s.order.every((p) => s.votes[p] !== undefined)) return toReveal(s, ctx);
-    return s;
+    return voteDone(s, ctx);
   }
   if (a.type === 'ring' && s.cfg.ringVote) {
     // Agreeing never touches a ballot: if the circle falls through, everybody's own vote stands.
     if (a.on === false) { delete s.ringAgree[pid]; return s; }
     s.ringAgree[pid] = true;
-    if (s.order.every((p) => s.ringAgree[p])) {
-      // everybody agreed to point one seat clockwise: every player ends on exactly one vote
-      s.order.forEach((p, i) => { s.votes[p] = s.order[(i + 1) % s.n]; });
-      return toReveal(s, ctx);
-    }
+    return voteDone(s, ctx);
   }
   return s;
 }
 
-/** Everybody has voted or agreed, but not everybody agreed: those who only agreed must pick somebody. */
+/**
+ * The vote is over when every PRESENT seat has voted (a ballot cast before a seat was marked 💤 still counts), or
+ * when every present seat agreed to the circle: each of them then points one seat clockwise and every other ballot
+ * is set aside, so every player ends on at most one vote and nobody dies — what the circle is for.
+ */
+function voteDone(s, ctx) {
+  // (with nobody present nobody agreed to anything: the ballots cast before leaving stand, as without the circle)
+  if (s.cfg.ringVote && s.order.some((p) => !isAbsent(s, p)) && allPresent(s, (p) => s.ringAgree[p])) {
+    s.order.forEach((p, i) => {
+      if (isAbsent(s, p)) delete s.votes[p];
+      else s.votes[p] = s.order[(i + 1) % s.n];
+    });
+    return toReveal(s, ctx);
+  }
+  if (allPresent(s, (p) => s.votes[p] !== undefined)) return toReveal(s, ctx);
+  return s;
+}
+
+/** Every present seat has voted or agreed, but not everybody agreed: those who only agreed must pick somebody. */
 function ringStuck(s) {
-  return s.order.every((p) => s.votes[p] !== undefined || s.ringAgree[p])
-    && s.order.some((p) => s.ringAgree[p] && s.votes[p] === undefined);
+  return allPresent(s, (p) => s.votes[p] !== undefined || s.ringAgree[p])
+    && s.order.some((p) => !isAbsent(s, p) && s.ringAgree[p] && s.votes[p] === undefined);
+}
+
+/**
+ * 💤 The host marks a seat absent (D4): for the rest of this game nothing waits for it — not the deal's 記住喇, not
+ * 夠鐘投票, not the vote or the circle (it casts no vote; one cast before it left still counts), not 睇完. It is still
+ * a player: its card can be robbed or swapped, it can be voted for and it wins or loses with its final card. The night
+ * runs on fixed windows whoever is awake, so absence changes nothing there. Public: every view lists it.
+ */
+function absentAct(s, pid, ctx) {
+  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAbsent(s, pid)) return s;
+  (s.absent ||= {})[pid] = true;
+  switch (s.phase) {
+    case 'deal': return allPresent(s, (p) => s.ready[p]) ? startNight(s, ctx) : s;
+    case 'day': return allPresent(s, (p) => s.dayReady[p]) ? startVote(s, ctx) : s;
+    case 'vote': delete s.ringAgree[pid]; return voteDone(s, ctx);
+    case 'reveal': return allPresent(s, (p) => s.revealDone[p]) ? toOver(s) : s;
+    default: return s;
+  }
+}
+
+/** The seat is back: from now on the table waits for it again. */
+function presentAct(s, pid) {
+  if (s.phase === 'over' || !isStr(pid) || !isAbsent(s, pid)) return s;
+  delete s.absent[pid];
+  return s;
 }
 
 // ---------- phase: reveal ----------
@@ -848,7 +901,7 @@ function toReveal(s, ctx) {
 function revealAct(s, pid, a) {
   if (a.type !== 'done' || s.revealDone[pid]) return s;
   s.revealDone[pid] = true;
-  if (pid === s.host || s.order.every((p) => s.revealDone[p])) return toOver(s);
+  if (pid === s.host || allPresent(s, (p) => s.revealDone[p])) return toOver(s);
   return s;
 }
 
@@ -905,6 +958,8 @@ function hostAct(s, a, ctx) {
   switch (a.type) {
     case ACT.VOID_ROUND:
       return VOIDABLE.includes(s.phase) ? toVoid(s) : s;
+    case ABSENT: return absentAct(s, a.pid, ctx);
+    case PRESENT: return presentAct(s, a.pid);
     case ACT.CUE_DONE:
       if (s.phase === 'deal' && a.id === dealCueId(s)) s.dealCue = false;
       else if (s.phase === 'night' && s.stage === 'cue' && a.id === cueIdOf(s)) return enterWindow(s, ctx);
@@ -918,7 +973,7 @@ function hostAct(s, a, ctx) {
           for (const p of s.order) s.ready[p] = true;
           return startNight(s, ctx);
         case 'night': return s.stage === 'cue' ? enterWindow(s, ctx) : finishWindow(s, ctx);
-        case 'day': return startVote(s);
+        case 'day': return startVote(s, ctx);
         case 'reveal':
           if (s.revealCue) { s.revealCue = false; return s; }
           return toOver(s);
@@ -939,7 +994,7 @@ function act(state, msg, ctx) {
   switch (s.phase) {
     case 'deal': return dealAct(s, pid, a, ctx ?? {});
     case 'night': return nightAct(s, pid, a, ctx ?? {});
-    case 'day': return dayAct(s, pid, a);
+    case 'day': return dayAct(s, pid, a, ctx ?? {});
     case 'vote': return voteAct(s, pid, a, ctx ?? {});
     case 'reveal': return revealAct(s, pid, a);
     default: return s;
@@ -952,7 +1007,7 @@ function advance(state, ctx) {
   if (nowOf(ctx) < s.deadline) return s;
   switch (s.phase) {
     case 'night': return s.stage === 'window' ? finishWindow(s, ctx ?? {}) : s;
-    case 'day': return startVote(s);
+    case 'day': return startVote(s, ctx ?? {});
     case 'reveal': return toOver(s);
     default: return s;
   }
@@ -989,7 +1044,7 @@ function cue(s) {
 function focus(s) {
   switch (s.phase) {
     case 'deal': {
-      const pids = s.order.filter((p) => !s.ready[p]);
+      const pids = s.order.filter((p) => !s.ready[p] && !isAbsent(s, p));
       return pids.length ? { pids } : null;
     }
     case 'night': {
@@ -1000,8 +1055,9 @@ function focus(s) {
     }
     case 'vote': {
       // seats that have neither voted nor agreed to the circle; once only agreers are left, they have to choose
-      const undecided = s.order.filter((p) => s.votes[p] === undefined && !s.ringAgree[p]);
-      const pids = undecided.length ? undecided : s.order.filter((p) => s.votes[p] === undefined);
+      const open = s.order.filter((p) => s.votes[p] === undefined && !isAbsent(s, p));
+      const undecided = open.filter((p) => !s.ringAgree[p]);
+      const pids = undecided.length ? undecided : open;
       return pids.length ? { pids } : null;
     }
     default: return null;
@@ -1041,6 +1097,7 @@ function legalActions(s, pid) {
       if ((!s.host || pid === s.host) && s.deadline != null && s.extends < MAX_EXTENDS) out.push({ type: 'extend' });
       break;
     case 'vote':
+      if (isAbsent(s, pid)) break;                 // 💤 casts no vote
       for (const t of others) if (s.votes[pid] !== t) out.push({ type: 'vote', target: t });
       if (s.cfg.ringVote) out.push({ type: 'ring', on: !s.ringAgree[pid] });
       break;
@@ -1067,7 +1124,7 @@ function autoAct(s, pid, ctx) {
       return s.acked.includes(pid) ? null : { type: 'ack' };
     }
     case 'day': return s.dayReady[pid] ? null : { type: 'ready-vote', on: true };
-    case 'vote': return s.votes[pid] === undefined ? { type: 'vote', target: others[rnd(others.length)] } : null;
+    case 'vote': return s.votes[pid] === undefined && !isAbsent(s, pid) ? { type: 'vote', target: others[rnd(others.length)] } : null;
     case 'reveal': return s.revealDone[pid] ? null : { type: 'done' };
     default: return null;
   }
@@ -1079,10 +1136,10 @@ function result(s) { return s.phase === 'over' ? s.outcome : null; }
  * Is the game WAITING on this seat (so a dead phone stalls the table)? Only where nothing else moves the game:
  * the deal (everybody must tap 記住喇) and the vote (the seats `focus` still asks). Every night window, the day
  * and the reveal run on deadlines — and at night every seat has the decoy, so "has a legal action" would flag
- * (and tell the host about) exactly the seats that are awake.
+ * (and tell the host about) exactly the seats that are awake. Never a seat the host marked 💤.
  */
 function blocking(s, pid) {
-  if (!isStr(pid) || !s.order.includes(pid)) return false;
+  if (!isStr(pid) || !s.order.includes(pid) || isAbsent(s, pid)) return false;
   switch (s.phase) {
     case 'deal': return !s.ready[pid];
     case 'vote': return (focus(s)?.pids ?? []).includes(pid);
@@ -1148,10 +1205,12 @@ function buildView(s, pid) {
     opts: { loneWolf: s.cfg.loneWolf, ringVote: s.cfg.ringVote, pace: s.cfg.pace },
   };
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
+  // public: the seats the host marked 💤 (every count below is of the seats the table still waits for)
+  v.absent = s.order.filter((p) => isAbsent(s, p));
 
   switch (s.phase) {
     case 'deal':
-      v.ready = prog(countTrue(s.ready), s.n);
+      v.ready = presentProg(s, (p) => s.ready[p]);
       if (seat) v.my = { dealt: s.orig[seat], ready: !!s.ready[seat] };
       break;
     case 'night': {
@@ -1164,13 +1223,14 @@ function buildView(s, pid) {
       break;
     }
     case 'day':
-      v.dayReady = { ...prog(countTrue(s.dayReady), s.n), mine: seat ? !!s.dayReady[seat] : false };
+      v.dayReady = { ...presentProg(s, (p) => s.dayReady[p]), mine: seat ? !!s.dayReady[seat] : false };
       v.canExtend = !!seat && (!s.host || seat === s.host) && s.extends < MAX_EXTENDS;
       if (seat) v.my = { dealt: s.orig[seat], notes: [{ k: 'dealt', role: s.orig[seat] }, ...clonePlain(s.notes[seat])] };
       break;
     case 'vote':
-      v.progress = prog(Object.keys(s.votes).length, s.n);
-      v.ring = { on: s.cfg.ringVote, ...prog(countTrue(s.ringAgree), s.n), mine: seat ? !!s.ringAgree[seat] : false, stuck: ringStuck(s) };
+      // a ballot cast before its seat left still counts, so that seat stays in the total
+      v.progress = prog(Object.keys(s.votes).length, s.order.filter((p) => !isAbsent(s, p) || s.votes[p] !== undefined).length);
+      v.ring = { on: s.cfg.ringVote, ...presentProg(s, (p) => s.ringAgree[p]), mine: seat ? !!s.ringAgree[seat] : false, stuck: ringStuck(s) };
       if (seat) {
         v.candidates = s.order.filter((p) => p !== seat);
         if (s.votes[seat] !== undefined) v.myVote = s.votes[seat];
@@ -1184,13 +1244,14 @@ function buildView(s, pid) {
         break;
       }
       v.reveal = publicReveal(s);
-      v.revealDone = { ...prog(countTrue(s.revealDone), s.n), mine: seat ? !!s.revealDone[seat] : false };
+      v.revealDone = { ...presentProg(s, (p) => s.revealDone[p]), mine: seat ? !!s.revealDone[seat] : false };
       if (seat) v.my = { dealt: s.orig[seat] };
       break;
     default: break;
   }
   // every seat view that carries the dealt role names it so on the 💡 sheet (cards change hands at night); the table has none
   if (v.my?.dealt) v.hintRoleLabel = S.HINT_ROLE_LABEL;
+  if (seat && v.my && isAbsent(s, seat)) v.my.absent = true;
   v.hint = hintFor(s, seat, v);
   return v;
 }
@@ -1219,6 +1280,7 @@ function hintFor(s, seat, v) {
     }
     case 'day': return H.day;
     case 'vote':
+      if (isAbsent(s, seat) && v.myVote === undefined) return H.vote.absent;
       if (v.ring.stuck && v.ring.mine) return H.vote.stuck;
       if (v.myVote !== undefined) return H.vote.voted;
       return v.ring.mine ? H.vote.ring : H.vote.pick;

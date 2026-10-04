@@ -20,7 +20,9 @@ const TAP = { revealSecs: 0, questSecs: 0 };
 // ---------- helpers ----------
 
 const ids = (n) => makePlayers(n).map((p) => p.id);
-const cfgFor = (n, patch = {}) => config.defaults(n, { ...TAP, ...patch });
+// the patch is the table's own choice (with the setup mark), not a setup saved by an older build
+const REV = { cfgRev: config.defaults(5).cfgRev };
+const cfgFor = (n, patch = {}) => config.defaults(n, { ...REV, ...TAP, ...patch });
 
 /** A tap-mode game (nobody waits for a clock) with the given settings. */
 function mk(n, { seed = 1, ...patch } = {}) {
@@ -28,7 +30,7 @@ function mk(n, { seed = 1, ...patch } = {}) {
 }
 /** A timed game (the real defaults). */
 function mkTimed(n, seed = 1, patch = {}) {
-  return new Sim(game, { n, seed, config: config.defaults(n, patch) });
+  return new Sim(game, { n, seed, config: config.defaults(n, { ...REV, ...patch }) });
 }
 
 const st = (sim) => sim.state;
@@ -1685,6 +1687,211 @@ test('avalon: assassination timer is only a nudge — nothing happens when it ru
   assert.equal(phase(sim), 'shot');
 });
 
+test('avalon: D8 — a 120 s soft assassination clock by default; at 0 nothing picks; the host can add 60 s', () => {
+  for (let n = 5; n <= 10; n++) {
+    const d = config.defaults(n);
+    assert.equal(d.assassinSecs, 120, `n=${n}`);
+    const v = config.validate(d, n);
+    assert.ok(v.ok);
+    assert.deepEqual(v.warnings, []);
+    assert.ok(config.summary(d, n).some((l) => l.includes('刺殺商量 120 秒') && l.includes('唔會自動揀')));
+  }
+  // a setup saved before the change (old default 0, no mark) moves over once; a table that picks 0 later keeps it
+  const old = config.defaults(7, { assassinSecs: 0, discussSecs: 30 });
+  assert.equal(old.assassinSecs, 120);
+  assert.equal(old.discussSecs, 30);
+  assert.equal(config.defaults(7, { ...old, assassinSecs: 0 }).assassinSecs, 0);
+  assert.equal(config.defaults(7, { assassinSecs: 45 }).assassinSecs, 45, 'a chosen clock stays');
+
+  const sim = mkTimed(6, 3);
+  toAssassinate(sim);
+  const t0 = sim.now;
+  assert.equal(st(sim).deadline, t0 + 120000);
+  assert.equal(sim.view('p1').timerLabel, '商量時間');
+  assert.deepEqual(engine.hostActions(sim.state), [{ label: '⏱️ 刺殺 ＋60 秒', action: { type: 'extend' } }]);
+  // the clock runs out: nothing happens — no shot, no auto pick, the clock stays on 0:00
+  const before = JSON.stringify(sim.state);
+  sim.now = t0 + 500000;
+  assert.equal(sim.advance(), false);
+  assert.equal(JSON.stringify(sim.state), before);
+  assert.equal(phase(sim), 'assassinate');
+  // the host adds time: from now, not from the old deadline
+  assert.equal(sim.host({ type: 'extend' }), true);
+  assert.equal(st(sim).deadline, sim.now + 60000);
+  assert.equal(sim.host({ type: 'extend' }), true);
+  assert.equal(st(sim).deadline, sim.now + 120000, 'stacks on a running clock');
+  for (let k = 0; k < 10; k++) sim.host({ type: 'extend' });
+  assert.equal(st(sim).extends, 5, 'at most five times');
+  assert.deepEqual(engine.hostActions(sim.state), []);
+  no(sim, 'p2', { type: 'extend' }, '— a seat cannot');
+  // the Assassin can pick any time
+  const a = seatOf(sim, 'assassin');
+  ok(sim, a, { type: 'assassinate', target: ids(6).find((p) => p !== a) });
+  assert.equal(phase(sim), 'shot');
+  assert.deepEqual(engine.hostActions(sim.state), []);
+  assert.equal(sim.host({ type: 'extend' }), false, 'only on the assassination clock');
+  // no clock at all (0): nothing to extend
+  const off = mk(6, { seed: 3, assassinSecs: 0 });
+  toAssassinate(off);
+  assert.equal(st(off).deadline, null);
+  assert.deepEqual(engine.hostActions(off.state), []);
+});
+
+test('avalon: D8 — the results keep who played which quest card (a documented deviation from the research)', () => {
+  const sim = mk(5, { seed: 2 });
+  revealAll(sim);
+  forceQuest(sim, false);
+  cont(sim);
+  forceQuest(sim, false);
+  cont(sim);
+  forceQuest(sim, false);
+  cont(sim);
+  assert.equal(phase(sim), 'over');
+  const res = sim.result();
+  const played = res.lines.filter((l) => l.startsWith('　出牌：'));
+  assert.equal(played.length, 3);
+  for (const l of played) assert.ok(/失敗/.test(l) && /成功|失敗/.test(l), l);
+  assert.ok(sim.view('p1').end.quests.every((q) => q.played && Object.keys(q.played).length === q.team.length));
+});
+
+// ---------- D4: 💤 a seat that has left the table ----------
+
+const AWAY = (pid) => ({ type: ACT.ABSENT ?? '@absent', pid });
+const BACK = (pid) => ({ type: ACT.PRESENT ?? '@present', pid });
+
+test('avalon: D4 — 💤 a seat does not vote: the vote is not waited on and the majority is over the seats at the table', () => {
+  const sim = mk(7, { seed: 4 });
+  revealAll(sim);
+  pickTeam(sim);
+  const away = ids(7).find((p) => p !== leader(sim));
+  assert.equal(sim.host(AWAY(away)), true);
+  assert.deepEqual(sim.view(null).absent, [away]);
+  assert.equal(sim.view('p1').vote.progress.total, 6);
+  assert.equal(engine.blocking(sim.state, away), false);
+  assert.deepEqual(sim.legal(away), []);
+  no(sim, away, { type: 'vote', vote: 'reject' }, '— a seat that is away');
+  const others = ids(7).filter((p) => p !== away);
+  // 3 approve, 3 reject of 6 at the table: a tie rejects (4 of 6 needed), whatever the absent seat would have said
+  others.forEach((p, i) => sim.act(p, { type: 'vote', vote: i < 3 ? 'approve' : 'reject' }));
+  assert.equal(phase(sim), 'voted', 'six votes are all the votes');
+  const r = sim.view('p1').voted;
+  assert.deepEqual([r.approves, r.rejects, r.approved, r.needed], [3, 3, false, 4]);
+  assert.deepEqual(r.absent, [away]);
+  assert.equal(away in r.votes, false);
+  assert.equal(sim.view(null).history.at(-1).absent[0], away);
+  // a ballot cast before going away is dropped (it was never public)
+  cont(sim);
+  pickTeam(sim);
+  const late = ids(7).filter((p) => p !== away);
+  sim.act(late[0], { type: 'vote', vote: 'approve' });
+  assert.equal(sim.host(AWAY(late[0])), true);
+  assert.equal(late[0] in sim.state.votes, false);
+  for (const p of late.slice(1)) sim.act(p, { type: 'vote', vote: 'approve' });
+  assert.equal(phase(sim), 'voted');
+  assert.deepEqual([sim.view(null).voted.approves, sim.view(null).voted.needed], [5, 3]);
+  // back: votes again from the next proposal on (and an open vote waits for them)
+  assert.equal(sim.host(BACK(late[0])), true);
+  assert.deepEqual(sim.view(null).absent, [away]);
+  const res = sim.runRandom({ onStep: checkLeaks }).result;
+  assert.ok(res.lines.some((l) => l.includes('💤 冇投')), 'the recap names who did not vote');
+  assert.ok(res.lines.some((l) => l.startsWith('💤 中途唔喺度')));
+});
+
+test('avalon: D4 — 💤 a quest member plays Success (the dead-phone rule); the leader token and the Lady skip the seat', () => {
+  const sim = mk(7, { seed: 6, lady: 'on' });
+  revealAll(sim);
+  const lead = leader(sim);
+  // the leader goes: the token moves on — not a rejection, not a new proposal, a fresh cue
+  const cue0 = sim.cue()?.id;
+  assert.equal(sim.host(AWAY(lead)), true);
+  assert.notEqual(leader(sim), lead);
+  assert.equal(st(sim).rejects, 0);
+  assert.equal(st(sim).proposalNo, 1);
+  if (cue0) assert.notEqual(sim.cue()?.id, cue0);
+  // put the absent seat on the team: its card is Success at once, recorded as a system card
+  const size = TEAM_SIZE[7][0];
+  const team = [lead, ...ids(7).filter((p) => p !== lead).slice(0, size - 1)];
+  ok(sim, leader(sim), { type: 'pick', team });
+  voteAll(sim, 'approve');
+  cont(sim);
+  assert.equal(st(sim).cards[lead], 'success');
+  assert.deepEqual(st(sim).auto, [lead]);
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), false, '呢鋪唔計 with only the system card in: nothing to throw away');
+  assert.deepEqual(st(sim).voids, []);
+  for (const p of team) if (p !== lead) sim.act(p, { type: 'quest', card: 'success' });
+  assert.equal(phase(sim), 'quest-result');
+  // the leader goes on the result screen: anybody at the table may go on
+  const L = leader(sim);
+  assert.deepEqual(sim.focus(), { pids: [L] });
+  sim.host(AWAY(L));
+  assert.equal(sim.focus(), null, 'focus never names a seat that is away (a shared phone would ask for them)');
+  const other = ids(7).find((p) => p !== L && p !== lead);
+  assert.ok(sim.legal(other).some((a) => a.type === 'continue'));
+  ok(sim, other, { type: 'continue' });
+  // over the game, the token never stops on a seat that is away
+  sim.runRandom({ onStep: (x) => {
+    checkLeaks(x);
+    if (x.state.phase === 'pick') assert.ok(![lead, L].includes(leader(x)), 'an absent leader');
+    if (x.state.phase === 'lady') assert.ok(![lead, L].includes(x.state.lady.step.holder), 'an absent Lady holder');
+  } });
+});
+
+test('avalon: D4 — 💤 the Assassin: the next evil seat at the table takes the shot (screens unchanged); no evil left → good wins', () => {
+  const sim = mk(7, { seed: 8 });
+  toAssassinate(sim);
+  const a = seatOf(sim, 'assassin');
+  const shapes = () => new Set(ids(7).map((p) => JSON.stringify(Object.keys(sim.view(p).assassinate).sort())));
+  assert.equal(sim.host(AWAY(a)), true);
+  assert.equal(phase(sim), 'assassinate');
+  const evil = evils(sim).filter((p) => p !== a);
+  const shooter = ids(7).filter((p) => evil.includes(p)).find((p) => sim.view(p).assassinate.canShoot);
+  assert.ok(shooter, 'another evil seat now shoots');
+  assert.equal(ids(7).filter((p) => sim.view(p).assassinate.canShoot).length, 1);
+  assert.equal(shapes().size, 1);
+  assert.deepEqual(sim.focus().pids, [shooter]);
+  assert.equal(sim.focus().anonymous, '刺客請拎起部手機');
+  const target = goods(sim)[0];
+  ok(sim, shooter, { type: 'assassinate', target });
+  assert.equal(st(sim).shot.assassin, shooter);
+  // every evil seat gone before the shot: nobody can point at Merlin → good wins
+  const g = mk(7, { seed: 8 });
+  toAssassinate(g);
+  for (const p of evils(g)) g.host(AWAY(p));
+  assert.equal(phase(g), 'over');
+  assert.equal(g.result().summary, '好人贏 — 邪惡陣營冇人喺度刺殺');
+  assert.ok(g.result().winners.every((p) => !isEvil(g, p)));
+});
+
+test('avalon: D4 — 💤 is refused below 3 seats at the table; the tap reveal does not wait for a seat that is away', () => {
+  const sim = mk(5, { seed: 1 });
+  assert.equal(sim.host(AWAY('p1')), true);
+  assert.equal(sim.host(AWAY('p2')), true);
+  assert.equal(sim.host(AWAY('p3')), false, 'only 2 would be left');
+  assert.equal(sim.host(AWAY('ghost')), false);
+  assert.equal(sim.host(AWAY('p1')), false, 'already away');
+  for (const p of ['p3', 'p4', 'p5']) sim.act(p, { type: 'seen' });
+  assert.equal(phase(sim), 'pick', 'the reveal does not wait for the two that are away');
+  assert.ok(!['p1', 'p2'].includes(leader(sim)));
+});
+
+test('avalon: D4 — fuzz: random 💤 and returns never stall a game and never leak', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const n = 5 + (seed % 6);
+    const sim = mk(n, { seed, lady: seed % 2 ? 'on' : 'off', flipEvil: seed % 3 === 0 });
+    const rng = mulberry32(seed * 7);
+    let k = 0;
+    sim.runRandom({ onStep: (x) => {
+      checkLeaks(x);
+      if (x.state.phase === 'over' || (k++ % 5) !== 0) return;
+      const pid = ids(n)[Math.floor(rng() * n)];
+      x.host(rng() < 0.6 ? AWAY(pid) : BACK(pid));
+      const s = x.state;
+      if (s.phase === 'pick') assert.ok(!s.absent.includes(leader(x)), 'an absent leader picks');
+      if (s.phase === 'vote') assert.equal(x.view(null).vote.progress.total, n - s.absent.length);
+    } });
+  }
+});
+
 test('avalon: the discussion timer before a team is a nudge too, and the leader can still pick after it', () => {
   const sim = mk(6, { seed: 3, discussSecs: 90 });
   revealAll(sim);
@@ -1773,7 +1980,7 @@ test('avalon: during a fuzzed game every secret step starts with a tap for every
 
 test('avalon: views are built field by field and carry no private state', () => {
   const sim = mkTimed(8, 3);
-  const topCommon = ['board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'subtitle', 'timerLabel', 'title', 'track'];
+  const topCommon = ['absent', 'board', 'deadline', 'deck', 'hint', 'history', 'lady', 'leader', 'me', 'n', 'opts', 'order', 'phase', 'proposalNo', 'quests', 'subtitle', 'timerLabel', 'title', 'track'];
   const seatV = Object.keys(sim.view('p2')).sort();
   assert.deepEqual(seatV, [...topCommon, 'mine'].sort());
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topCommon.slice().sort());
@@ -3215,4 +3422,51 @@ test('avalon: through the Room — the host alone gets the one-phone clocks, the
     if (g < 3) assert.equal(room.again().ok, true);
   }
   for (let i = 1; i < firstLeaders.length; i++) assert.notEqual(firstLeaders[i], firstLeaders[i - 1], `game ${i + 1} has a new first leader`);
+});
+
+test('avalon: UI — D8 夠鐘 line on every phone (one shape), D4 💤 on the roster, 💤 冇投 on the votes, 繼續 for anybody when the leader is away', async () => {
+  await withFakeDom(async (ui, comps) => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = () => 0;   // the UI's own timers (sounds, the wake-up at 0:00) never fire here
+    try {
+      const sim = mkTimed(6, 3);
+      toAssassinate(sim);
+      const seats = mountAll(ui, comps, sim, [], []);
+      pushViews(sim, seats);
+      const overtime = (pid) => findAll(seats[pid].root, (n) => hasCls(n, 'av-overtime') && visible(n));
+      for (const p of ids(6)) assert.equal(overtime(p).length, 0, 'the clock is still running');
+      sim.now = st(sim).deadline + 1000;   // run out: nothing happens, every phone says so the same way
+      pushViews(sim, seats);
+      assert.equal(phase(sim), 'assassinate');
+      for (const p of [...ids(6), 'table']) assert.equal(overtime(p).length, 1, `${p} sees 夠鐘`);
+      const body = (pid) => findAll(seats[pid].root, (x) => hasCls(x, 'av-body'))[0];
+      assert.equal(new Set(ids(6).map((p) => shape(body(p)))).size, 1, 'the assassination screen differs in shape between seats');
+      for (const seat of Object.values(seats)) seat.handle.destroy();
+
+      // 💤: roster tag, the vote record, and 繼續 for anybody while the leader is away
+      const g = mk(6, { seed: 4, lady: 'off' });
+      revealAll(g);
+      pickTeam(g);
+      const away = ids(6).find((p) => p !== leader(g));
+      g.host({ type: ACT.ABSENT ?? '@absent', pid: away });
+      for (const p of ids(6)) if (p !== away) g.act(p, { type: 'vote', vote: 'approve' });
+      assert.equal(phase(g), 'voted');
+      const gs = mountAll(ui, comps, g, [], []);
+      pushViews(g, gs);
+      const someone = ids(6).find((p) => p !== away && p !== leader(g));
+      assert.match(gs[someone].root.textContent, new RegExp(`💤 冇投：${g.players.find((p) => p.id === away).name}`));
+      assert.ok(findAll(gs[someone].root, (n) => hasCls(n, 'av-seat-tag') && n.textContent === '💤').length === 1);
+      const contBtn = (pid) => findAll(gs[pid].root, (n) => n.attrs['data-act'] === 'continue' && visible(n))[0];
+      assert.equal(contBtn(someone), undefined, 'only the leader while the leader is here');
+      g.host({ type: ACT.ABSENT ?? '@absent', pid: leader(g) });
+      pushViews(g, gs);
+      assert.ok(contBtn(someone), 'the leader is away: anybody at the table goes on');
+      assert.equal(contBtn('table'), undefined);
+      click(contBtn(someone));
+      assert.equal(phase(g), 'quest');
+      for (const seat of Object.values(gs)) seat.handle.destroy();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
 });

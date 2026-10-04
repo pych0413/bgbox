@@ -696,7 +696,7 @@ export function awakeLines(step, night) {
 
 /**
  * What the Doppelgänger's copy means for her, said only behind the cover: act now (and how), wake later, or nothing.
- * Kept short: it sits under the copy note (which already names the role) in a fixed 5:2 cover that a finger holds
+ * Kept short: it sits under the copy note (which already names the role) in a fixed 2:1 cover that a finger holds
  * open, so it cannot scroll on a phone — copy note + this line must fit in about four lines at 360–414 px.
  */
 export function doppelLine(step, night) {
@@ -709,12 +709,15 @@ export function doppelLine(step, night) {
 
 /**
  * Behind the night screen's 📓 cover, the same cover on every phone at every step (playtest #11): everything this seat
- * learned tonight so far, then — for a Doppelgänger in her own step — what her copy means. [text, cls] pairs.
+ * learned tonight so far, NEWEST FIRST — the cover is a fixed box a finger holds open and cannot scroll, so when three
+ * or more notes do not all fit (a Doppelgänger who became a lone wolf: copy, wolves, the centre card) it is the oldest
+ * that runs off the bottom, never what she just learned. For a Doppelgänger in her own step, what her copy means sits
+ * right under the newest note (her copy). [text, cls] pairs.
  */
 export function nightBook(step, night, nm) {
-  const out = (night?.seen ?? []).map((n) => [noteLine(n, nm), '']).filter(([t]) => t);
+  const out = (night?.seen ?? []).map((n) => [noteLine(n, nm), '']).filter(([t]) => t).reverse();
   const d = doppelLine(step, night);
-  if (d) out.push([d, 'do']);
+  if (d) out.splice(Math.min(1, out.length), 0, [d, 'do']);
   if (!out.length) out.push([T.nightNothing, 'none']);
   return out;
 }
@@ -750,6 +753,8 @@ export const HINT = {
     voted: '投咗喇：等其他人，全部投完一齊公開。',
     ring: '你同意咗圈票：等其他人決定。',
     stuck: '圈票唔成：你要自己揀一個人。',
+    // the host marked this seat 💤 (D4)
+    absent: '房主當咗你暫時離開：今次唔使投，返嚟就同房主講聲。',
   },
   reveal: '睇下邊個死咗、點解；睇完㩒「睇完整個結果」。',
   revealDone: '等房主去結果頁。',
@@ -859,4 +864,8 @@ export const T = {
   tableVote: '🗳️ 投票', tableVoteBody: '大家揀緊邊個係狼人。',
   tableDeal: '🃏 派牌', tableDealBody: '大家睇緊自己張牌。',
   votedCount: (d, t) => `已投 ${d} / ${t}`,
+  // 💤 seats the host marked absent (D4): public, the same on every phone
+  absentMark: '💤',
+  absentLine: (names) => `💤 暫時離開（唔使等）：${names}`,
+  absentSelf: '💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。',
 };

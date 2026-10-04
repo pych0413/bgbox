@@ -24,7 +24,9 @@ const ACCENT = '#a78bfa';
 /** Why a vote put nobody out (engine `elim.reason`). */
 const NO_OUT = { nobody: '冇人投票', nomajority: '冇人過半數', alltied: '全部人同票', pktie: 'PK 再平票', tie: '平票' };
 const BANNER = { civilians: ['is-civ', '🧑 平民贏！'], infiltrators: ['is-inf', '🕵️ 臥底方贏！'], blank: ['is-inf', '⬜ 白板贏！'] };
-const LOCKOUT_MS = 1500;           // 繼續 stays dead this long after a result appears, so a stray tap cannot skip it
+const LOCKOUT_MS = 1500;           // 睇完 stays dead this long after a result appears, so a stray tap cannot skip it
+const RETRY_MS = 4000;             // a tap the host never confirmed comes back as a button after this long
+const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
 /** Nobody here holds a role, only a word: the card's own words (RoleCard says 角色牌). */
 const CARD_TEXT = {
   lock: '🔓 鎖定詞語卡',
@@ -59,6 +61,14 @@ export function mount(root, api) {
   const nameOf = (id) => byId(id)?.name ?? '?';
   const namesOf = (ids) => ids.map(nameOf).join('、');
   const meId = () => view?.me?.id ?? api.me ?? null;
+  /** 💤 = the host marked the seat absent (public): never waited on, no clue turn, no vote. */
+  const away = (id) => !!view?.absent?.includes(id);
+  /** The other seats this same phone holds (a passed-round phone): one tap counts for all of them. */
+  const deviceMates = () => {
+    const dev = byId(meId())?.deviceId;
+    return dev ? players().filter((p) => p.deviceId === dev && p.id !== meId()).map((p) => p.id) : [];
+  };
+  const withMates = (action) => { const m = deviceMates(); return m.length ? { ...action, seats: m } : action; };
 
   /** More than one seat on this phone? Then it is passed around, and every public control goes to whoever holds it. */
   function sharedDevice() {
@@ -207,18 +217,20 @@ export function mount(root, api) {
           note.textContent = '';
         } else {
           placeCard(slot);
-          if (readyShown !== me.ready) {
-            readyShown = me.ready;
-            action.replaceChildren(me.ready ? el('p', { class: 'uc-done' }, '✓ 你已經記住咗') : button('記住喇 ✓', remember));
+          const state = away(me.id) ? 'away' : me.ready;
+          if (readyShown !== state) {
+            readyShown = state;
+            action.replaceChildren(state === 'away' ? el('p', { class: 'uc-note' }, AWAY)
+              : me.ready ? el('p', { class: 'uc-done' }, '✓ 你已經記住咗') : button('記住喇 ✓', remember));
           }
           lead.hidden = me.ready;
           note.textContent = me.ready
             ? '想再睇一次？㩒 🔓 解鎖，睇完記得再鎖返。'
             : '記住之後張卡會自動鎖住，唔怕隔離個人㩒到。';
         }
-        const waiting = v.seats.filter((s) => !v.deal.ready.includes(s.id)).map((s) => s.id);
+        const waiting = v.seats.filter((s) => !v.deal.ready.includes(s.id) && !away(s.id)).map((s) => s.id);
         status.textContent = waiting.length
-          ? `已有 ${v.deal.ready.length} / ${v.deal.total} 人記住咗 · 等緊：${namesOf(waiting)}`
+          ? `已有 ${v.deal.ready.filter((id) => !away(id)).length} / ${v.deal.total} 人記住咗 · 等緊：${namesOf(waiting)}`
           : '大家都記住喇，即刻開始！';
       },
       destroy() {},
@@ -250,9 +262,12 @@ export function mount(root, api) {
         hint.textContent = sp.kind === 'pk'
           ? '平票嘅人再講多一句：點解你唔係臥底？'
           : '一人一句。唔可以講出個詞，或者入面任何一個字。';
+        // an absent seat's clue turn is skipped (D4): 💤 instead of ✓
         order.replaceChildren(...sp.order.map((id, i) => el('li', {
-          class: `uc-order-item${i < sp.turn ? ' is-done' : ''}${i === sp.turn ? ' is-now' : ''}${isMe(id) ? ' is-me' : ''}`,
-        }, dot(id), el('span', { class: 'uc-order-name' }, nameOf(id)), i < sp.turn ? el('span', { class: 'uc-order-tick' }, '✓') : null)));
+          class: `uc-order-item${i < sp.turn ? ' is-done' : ''}${i === sp.turn ? ' is-now' : ''}${isMe(id) ? ' is-me' : ''}${away(id) ? ' is-away' : ''}`,
+        }, dot(id), el('span', { class: 'uc-order-name' }, nameOf(id)),
+        away(id) && i >= sp.turn ? el('span', { class: 'uc-order-tick' }, '💤')
+          : i < sp.turn ? el('span', { class: 'uc-order-tick' }, sp.spoke.includes(id) ? '✓' : '💤') : null)));
 
         if (actionStep !== sp.id) {
           actionStep = sp.id;
@@ -266,26 +281,46 @@ export function mount(root, api) {
     };
   }
 
-  // ---- discuss ----
+  // ---- discuss: the vote opens when a majority of the alive seats has tapped 開始投票 (D2) ----
   function discussScreen() {
     const timer = timerSlot();
     const action = el('div', { class: 'uc-action' });
+    const status = el('p', { class: 'uc-status uc-want' });
     const box = el('section', { class: 'uc-screen' },
       el('h2', { class: 'uc-title', text: '自由討論' }),
       el('p', { class: 'uc-lead', text: '大家都講完喇。邊個最似臥底？傾夠就開始投票。' }),
-      timer.el, action);
-    let built = false;
+      timer.el, action, status);
+    let shown = null;
+    let pending = false;               // tapped, not yet confirmed by the host
+    let retry = null;
     return {
       el: box,
       update(v, c) {
         timer.update(v, c);
-        if (built) return;
-        built = true;
-        action.replaceChildren(v.me
-          ? button('開始投票 🗳️', () => api.send({ type: 'start-vote' }))
-          : el('p', { class: 'uc-note' }, '等大家開始投票。'));
+        const d = v.discuss;
+        const me = v.me;
+        const mine = !!me && d.want.includes(me.id);
+        if (mine) pending = false;
+        const state = !me ? 'table' : away(me.id) ? 'away' : !me.alive ? 'dead' : mine || pending ? 'asked' : 'ask';
+        if (state !== shown) {
+          shown = state;
+          action.replaceChildren(
+            state === 'table' ? el('p', { class: 'uc-note' }, '等大家開始投票。')
+              : state === 'away' ? el('p', { class: 'uc-note' }, AWAY)
+                : state === 'dead' ? el('p', { class: 'uc-note' }, '你已經出局，由未出局嘅人決定幾時投票。')
+                  : state === 'asked' ? el('p', { class: 'uc-done' }, '✓ 你想開始投票')
+                    : button('開始投票 🗳️', () => {
+                      pending = true;
+                      api.send(withMates({ type: 'start-vote' }));
+                      clearTimeout(retry);
+                      retry = setTimeout(() => { pending = false; render(); }, RETRY_MS);
+                      render();
+                    }));
+        }
+        // every phone shows the same count: 「想開始投票 2 / 3」 (more than half of the alive seats at the table)
+        status.textContent = `想開始投票 ${d.want.length} / ${d.need}${d.want.length ? ` · ${namesOf(d.want)}` : ''}`;
       },
-      destroy() { timer.destroy(); },
+      destroy() { timer.destroy(); clearTimeout(retry); },
     };
   }
 
@@ -316,6 +351,7 @@ export function mount(root, api) {
             candidates: me.targets,
             me: me.id,
             myVote: me.myVote,
+            secretChoice: true,              // D6: your phone says 已投 ✓, never whom — a glance learns nothing
             allowAbstain: !!v.flags.abstain,
             progress: { done: vt.done.length, total: vt.total },
             reveal: null,
@@ -325,6 +361,7 @@ export function mount(root, api) {
           panelSlot.hidden = false;
         } else {
           if (!me) lead.textContent = '大家投緊票。';
+          else if (away(me.id)) lead.textContent = AWAY;
           else if (me.alive) lead.textContent = '你喺 PK 入面，今次唔使投，等其他人決定。';
           else lead.textContent = '你已經出局，唔使投票，睇住大家投。';
           panel?.destroy();
@@ -354,17 +391,41 @@ export function mount(root, api) {
     let input = null;
     let submit = null;
     let guessMode = null;             // 'write' | 'wait' | 'done' | null
-    let unlocked = false;             // the lockout on 繼續 is over
+    let unlocked = false;             // the lockout on 睇完 is over
     let waiting = false;
     let canContinue = false;
-    const proceed = button('繼續 ▸', () => api.send({ type: 'continue' }));
+    let mineSeen = false;
+    let pending = false;              // 睇完 tapped, not yet confirmed by the host
+    let retry = null;
+    // D3: the result stays until every present seat has tapped 睇完 (the host's 下一步 can force it)
+    const proceed = button('睇完 ✓', () => {
+      pending = true;
+      api.send(withMates({ type: 'continue' }));
+      clearTimeout(retry);
+      retry = setTimeout(() => { pending = false; paintProceed(); }, RETRY_MS);
+      paintProceed();
+    });
     proceed.disabled = true;
-    action.append(proceed);
+    const doneNote = el('p', { class: 'uc-done' }, '✓ 睇完 · 等緊其他人');
+    doneNote.hidden = true;
+    const seenLine = el('p', { class: 'uc-status uc-seen' });
+    action.append(proceed, doneNote, seenLine);
     const unlockTimer = setTimeout(() => { unlocked = true; paintProceed(); }, LOCKOUT_MS);
 
     function paintProceed() {
-      proceed.hidden = waiting || !canContinue;
+      const done = mineSeen || pending;
+      proceed.hidden = waiting || !canContinue || done;
       proceed.disabled = !unlocked;
+      doneNote.hidden = waiting || !canContinue || !done;
+    }
+
+    /** 「睇完 3 / 5 · 等緊：阿明、小美」 — the same on every phone. */
+    function paintSeen(v) {
+      const s = v.elim.seen;
+      seenLine.hidden = waiting || !s;
+      if (!s || waiting) return;
+      const left = v.seats.map((x) => x.id).filter((id) => !s.who.includes(id) && !away(id));
+      seenLine.textContent = `睇完 ${s.who.length} / ${s.total}${left.length ? ` · 等緊：${namesOf(left)}` : ''}`;
     }
 
     function paintVerdict(e, v) {
@@ -444,11 +505,15 @@ export function mount(root, api) {
         paintGuess(e, v);
         timer.update(v, c);
         waiting = !!e.guess?.pending;
-        canContinue = !!v.me;
+        canContinue = !!v.me && !away(v.me.id);
+        mineSeen = !!v.me && !!e.seen?.who.includes(v.me.id);
+        if (mineSeen) pending = false;
         paintProceed();
+        paintSeen(v);
       },
       destroy() {
         clearTimeout(unlockTimer);
+        clearTimeout(retry);
         timer.destroy();
         panel?.destroy();
       },
@@ -523,11 +588,13 @@ export function mount(root, api) {
       if (speaking?.pid === s.id) cls.push('is-turn');
       if (speaking?.spoke.includes(s.id)) cls.push('is-spoke');
       if (isMe(s.id)) cls.push('is-me');
+      if (away(s.id)) cls.push('is-away');
       const role = !s.alive ? outs.get(s.id) : null;
       return el('span', { class: cls.join(' '), role: 'listitem', style: { '--seat': p?.color ?? ACCENT } },
         el('i', { class: 'uc-dot' }),
         el('span', {}, p?.name ?? '?'),
-        role ? el('em', {}, ROLE[role].emoji) : null);
+        role ? el('em', {}, ROLE[role].emoji) : null,
+        away(s.id) ? el('em', { title: '唔喺度' }, '💤') : null);
     }));
   }
 

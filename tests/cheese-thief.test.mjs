@@ -2477,3 +2477,223 @@ test('cheese-thief ui: every night screen has the same silent "your dice" cover 
     for (const s of Object.values(seats)) s.handle.destroy();
   });
 });
+
+// ============================================================
+// decisions 2026-10-04: D4 absent seats, D6 secret own vote, the missed-peek line
+// ============================================================
+
+const ABSENT = (pid) => ({ type: ACT.ABSENT ?? '@absent', pid });
+const PRESENT = (pid) => ({ type: ACT.PRESENT ?? '@present', pid });
+
+test('cheese-thief: @absent at the roll — the night does not wait; an absent seat that never rolled gets its die; @present counts it again (D4)', () => {
+  for (const n of [4, 5, 8]) {
+    const sim = new Sim(game, { n, seed: 9 + n });
+    const all = ids(n);
+    for (const p of all.slice(0, n - 2)) sim.act(p, { type: 'ready' });
+    assert.equal(sim.state.phase, 'roll');
+    const [a, b] = all.slice(n - 2);
+    assert.ok(sim.host(ABSENT(a)));
+    assert.deepEqual(view(sim, all[0]).ready, { done: n - 2, total: n - 1 }, 'the count is of the seats the night waits for');
+    assert.deepEqual(sim.focus().pids, [b]);
+    assert.equal(engine.blocking(sim.state, a), false);
+    assert.equal(engine.blocking(sim.state, b), true);
+    assert.equal(sim.host(ABSENT(a)), false, 'already absent');
+    assert.ok(sim.host(PRESENT(a)));
+    assert.equal(engine.blocking(sim.state, a), true, 'back: waited on again');
+    assert.equal(sim.host(PRESENT(a)), false, 'already present');
+    sim.host(ABSENT(a));
+    sim.act(b, { type: 'ready' });                                 // the last present seat: night, with a's die rolled for it
+    assert.equal(sim.state.phase, 'night', `n=${n}`);
+    assert.ok(Array.isArray(sim.state.dice[a]) && sim.state.locked[a] && sim.state.wake[a].length >= 1);
+    if (n === 4 && sim.state.role[a] !== 'thief') assert.ok(sim.state.dice[a].includes(sim.state.pick4[a]));
+  }
+  // what never changes: unknown seats, a missing pid, a seat sending it, anything after the end
+  const sim = new Sim(game, { n: 5, seed: 3 });
+  for (const bad of [ABSENT('nobody'), ABSENT(null), { type: ACT.ABSENT ?? '@absent' }, PRESENT('p1')]) assert.equal(sim.host(bad), false, JSON.stringify(bad));
+  assert.equal(sim.act('p1', ABSENT('p2')), false);
+  const done = scenario(5);
+  playOut(done, {});
+  assert.equal(done.host(ABSENT('p2')), false, 'over');
+});
+
+test('cheese-thief: @absent by day and at the vote — 夠鐘投票 and the vote count present seats; no vote from an absent seat; it can still be caught (D4)', () => {
+  const sim = scenario(5, { thief: 'p5', config: { ...config.defaults(5), discussSec: 0 } });
+  finishNight(sim);
+  for (const p of ['p1', 'p2', 'p3']) sim.act(p, { type: 'day-ready', on: true });
+  assert.deepEqual(view(sim, 'p1').dayReady, { done: 3, total: 5, mine: true });
+  assert.ok(sim.host(ABSENT('p5')));
+  assert.deepEqual(view(sim, 'p1').dayReady, { done: 3, total: 4, mine: true });
+  assert.equal(engine.blocking(sim.state, 'p5'), false);
+  assert.equal(engine.blocking(sim.state, 'p4'), true);
+  sim.act('p4', { type: 'day-ready', on: true });
+  assert.equal(sim.state.phase, 'vote', 'the absent seat did not hold up 夠鐘投票');
+  // the vote: p5 casts nothing, is still a candidate, and is never waited for
+  assert.equal(sim.act('p5', { type: 'vote', target: 'p1' }), false);
+  assert.deepEqual(sim.legal('p5'), []);
+  assert.equal(engine.autoAct(sim.state, 'p5', sim.ctx()), null);
+  assert.ok(view(sim, 'p1').candidates.includes('p5'));
+  assert.equal(view(sim, 'p1').progress.total, 4);
+  assert.equal(view(sim, 'p5').hint, HINT.absent);
+  assert.deepEqual(sim.focus().pids, ['p1', 'p2', 'p3', 'p4']);
+  for (const p of ['p1', 'p2', 'p3', 'p4']) sim.act(p, { type: 'vote', target: 'p5' });
+  assert.equal(sim.state.phase, 'reveal');
+  assert.deepEqual(sim.state.final.top, ['p5']);
+  sim.advance();
+  assert.equal(sim.result().mode, 'caught', 'an absent thief is caught like anybody');
+
+  // a vote cast before the seat left still counts; marking the last missing voter closes the vote
+  const v2 = scenario(5, { thief: 'p1' });
+  toVote(v2);
+  v2.act('p2', { type: 'vote', target: 'p1' });
+  v2.host(ABSENT('p2'));
+  assert.equal(v2.state.votes.p2, 'p1', 'its ballot stands');
+  assert.equal(view(v2, 'p1').progress.total, 5, 'and stays in the count');
+  for (const p of ['p1', 'p3', 'p4']) v2.act(p, { type: 'vote', target: 'p2' });
+  assert.equal(v2.state.phase, 'vote', 'p5 is still present');
+  assert.ok(v2.host(ABSENT('p5')));
+  assert.equal(v2.state.phase, 'reveal', 'nobody left to wait for');
+  assert.equal(v2.state.votes.p5, undefined);
+
+  // @present at the vote: it is waited for again
+  const v3 = scenario(5);
+  toVote(v3);
+  v3.host(ABSENT('p3'));
+  for (const p of ['p1', 'p2', 'p4']) v3.act(p, { type: 'vote', target: 'p3' });
+  v3.host(PRESENT('p3'));
+  v3.act('p5', { type: 'vote', target: 'p3' });
+  assert.equal(v3.state.phase, 'vote', 'p3 is back and has not voted');
+  v3.act('p3', { type: 'vote', target: 'p1' });
+  assert.equal(v3.state.phase, 'reveal');
+});
+
+test('cheese-thief: engine.blocking — the roll, 夠鐘投票 and the vote; never at night, so a stall banner never points at who is awake (D4)', () => {
+  const sim = scenario(5, { dice: { p1: 2, p2: 2, p3: 3, p4: 4, p5: 5 } });
+  for (let guard = 0; guard < 200 && sim.state.phase === 'night'; guard++) {
+    for (const p of ids(5)) assert.equal(engine.blocking(sim.state, p), false, `night ${st(sim).k}/${sim.state.stage}: ${p}`);
+    if (sim.state.stage === 'cue') sim.cueDone(); else sim.advance();
+  }
+  assert.equal(sim.state.phase, 'day');
+  for (const p of ids(5)) assert.equal(engine.blocking(sim.state, p), true);
+  sim.act('p1', { type: 'day-ready', on: true });
+  assert.equal(engine.blocking(sim.state, 'p1'), false);
+  assert.equal(engine.blocking(sim.state, 'nobody'), false);
+});
+
+test('cheese-thief: absent seats are public — every phone and the table list the same 💤 seats (D4)', () => {
+  const sim = scenario(6);
+  sim.host(ABSENT('p4'));
+  sim.host(ABSENT('p2'));
+  const lists = [...ids(6), null].map((p) => JSON.stringify(view(sim, p).absent));
+  assert.equal(new Set(lists).size, 1);
+  assert.deepEqual(JSON.parse(lists[0]), ['p2', 'p4'], 'seat order');
+  assert.equal(view(sim, 'p4').my.absent, true);
+  assert.equal(view(sim, 'p3').my.absent, undefined);
+  // the night is untouched: the same hours, the same windows
+  const plain = scenario(6);
+  assert.deepEqual(sim.state.steps, plain.state.steps);
+});
+
+test('cheese-thief: fuzz — the host marks random seats absent and back; every game still ends with a consistent verdict (D4)', () => {
+  let marks = 0;
+  for (const n of COUNTS) {
+    for (let seed = 1; seed <= 30; seed++) {
+      const sim = new Sim(game, { n, seed: seed * 13 + n, config: { ...config.defaults(n), discussSec: seed % 2 ? 0 : 120 } });
+      const rng = mulberry32(seed * 5 + n);
+      const { result } = sim.runRandom({
+        onStep: (x) => {
+          const s = x.state;
+          if (s.phase !== 'over' && rng() < 0.05) {
+            const p = s.order[Math.floor(rng() * s.n)];
+            x.host(s.absent?.[p] ? PRESENT(p) : ABSENT(p));
+            marks++;
+          }
+          const t = x.state;
+          for (const p of t.order) if (t.absent?.[p]) assert.equal(engine.blocking(t, p), false);
+          if (t.phase === 'vote') assert.ok(t.order.some((p) => t.votes[p] === undefined && !t.absent?.[p]), 'the vote closes once every present seat has voted');
+          if (x.steps % 7 === 0) leakCheck(x);
+        },
+      });
+      assert.ok(result, `n=${n} seed=${seed}`);
+      const s = sim.state;
+      for (const p of Object.keys(s.votes)) assert.notEqual(s.votes[p], p);
+    }
+  }
+  assert.ok(marks > 100, `the host marked seats ${marks} times`);
+});
+
+test('cheese-thief ui: your own vote is secret on your phone (D6); absent candidates carry 💤; an absent seat gets a 💤 line, not a ballot (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario(5);
+    toVote(sim);
+    sim.host(ABSENT('p3'));
+    const seats = mountAll(ui, sim, []);
+    const made = [];
+    const base = seats.comps.VotePanel;
+    seats.comps.VotePanel = (p) => { const x = base(p); made.push(x); return x; };
+    pushViews(sim, seats);
+    const ballots = made.filter((x) => !x.props.reveal);
+    assert.equal(ballots.length, 5, 'one ballot screen per seat');
+    for (const x of ballots) {
+      assert.equal(x.props.secretChoice, true);
+      const p3 = x.props.players.find((p) => p.id === 'p3');
+      assert.ok(p3.name.endsWith('💤'), p3.name);
+      assert.ok(!x.props.players.find((p) => p.id === 'p2').name.includes('💤'));
+    }
+    const text = (k) => seats[k].root.textContent;
+    const ui3 = await import('../js/games/cheese-thief/ui.js');
+    assert.ok(text('p3').includes(ui3.ABSENT_SELF));
+    const panel3 = findAll(seats.p3.root, (n) => hasCls(n, 'c-votepanel'))[0];
+    assert.equal(panel3.hidden, true, 'no ballot for the absent seat');
+    for (const k of ['p1', 'p3', 'table']) assert.ok(text(k).includes(ui3.absentLine('玩家3')), `${k}: the public 💤 line`);
+    for (const s of Object.values(seats)) s.handle.destroy();
+  });
+});
+
+test('cheese-thief ui: a lone peeker is told 「睇唔切唔緊要：天光喺 📓 夜晚記錄睇得返」, before and after the peek; nobody else, and not without a 📓', async () => {
+  await withFakeDom(async (ui) => {
+    const { PEEK_LATER } = ui;
+    assert.ok(PEEK_LATER.includes('睇唔切唔緊要') && PEEK_LATER.includes('📓'));
+    const run = (recap) => {
+      const sim = scenario(6, { thief: 'p1', dice: { p1: 3, p2: 2, p3: 3, p4: 4, p5: 5, p6: 6 }, config: { ...config.defaults(6), recap } });
+      const sent = [];
+      const seats = mountAll(ui, sim, sent);
+      openHour(sim, 2);                                            // p2 alone at two o'clock
+      pushViews(sim, seats);
+      const lines = (k) => findAll(seats[k].root, (n) => hasCls(n, 'ct-lines'))[0].textContent;
+      assert.equal(lines('p2').includes(PEEK_LATER), recap, `recap=${recap}: before the peek`);
+      for (const o of ['p1', 'p3', 'p4', 'p5', 'p6']) assert.ok(!lines(o).includes(PEEK_LATER), `${o} is asleep`);
+      click(findAll(seats.p2.root, (n) => hasCls(n, 'ct-chip')).find((c) => c.textContent === '玩家4'));
+      click(findAll(seats.p2.root, (n) => hasCls(n, 'ct-ack'))[0]);
+      pushViews(sim, seats);
+      assert.equal(lines('p2').includes(PEEK_LATER), recap, `recap=${recap}: after the peek`);
+      // the thief awake at three with p3: no peek, no line
+      openHour(sim, 3);
+      pushViews(sim, seats);
+      for (const k of ['p1', 'p3']) assert.ok(!lines(k).includes(PEEK_LATER), `${k} awake together`);
+      for (const s of Object.values(seats)) s.handle.destroy();
+    };
+    run(true);
+    run(false);
+  });
+});
+
+test('cheese-thief ui: with seats marked 💤 and back through whole random games, every screen still renders for every seat, idempotently (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    for (const [n, seed] of [[4, 2], [6, 5], [8, 7]]) {
+      const sim = new Sim(game, { n, seed, config: { ...config.defaults(n), discussSec: 0 } });
+      const seats = mountAll(ui, sim, []);
+      const rng = mulberry32(seed * 101);
+      sim.runRandom({
+        onStep: (x) => {
+          if (x.state.phase !== 'over' && rng() < 0.05) {
+            const p = x.state.order[Math.floor(rng() * x.state.n)];
+            x.host(x.state.absent?.[p] ? PRESENT(p) : ABSENT(p));
+          }
+          if (x.steps % 3 === 0) pushViews(x, seats);
+        },
+      });
+      pushViews(sim, seats);
+      for (const s of Object.values(seats)) s.handle.destroy();
+    }
+  });
+});

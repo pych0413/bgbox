@@ -76,10 +76,29 @@ export function roleCardText(roleId, { hasWitch, hasGuard, win } = {}) {
   if (!r) return '';
   const side = r.team === 'wolf' ? 'wolf' : 'good';
   const base = WIN_BY[side][win] ? roleText(r.what, WIN_BY[side][win]) : r.text;
-  if (roleId === 'werewolf') return `${base} 第一晚你會知邊個係隊友。`;
-  if (roleId === 'guard' && hasWitch) return `${base} 你同女巫又守又救同一個人，個人會死。`;
-  if (roleId === 'witch' && hasGuard) return `${base} 同守衛又守又救同一個人，個人會死。`;
-  return base;
+  const extra = boardExtra(roleId, { hasWitch, hasGuard });
+  return extra ? `${base} ${extra}` : base;
+}
+
+/** The line this board adds to a role (public facts only: the board and the role itself). */
+function boardExtra(roleId, { hasWitch, hasGuard } = {}) {
+  if (roleId === 'werewolf') return '第一晚你會知邊個係隊友。';
+  if (roleId === 'guard' && hasWitch) return '你同女巫又守又救同一個人，個人會死。';
+  if (roleId === 'witch' && hasGuard) return '同守衛又守又救同一個人，個人會死。';
+  return '';
+}
+
+/**
+ * The 💡 sheet's role box for THIS table (view.hintRoleText → { what, win }): the same words as the role card, with the
+ * board's extra line under 做乜 and only this table's rule under 點贏. Built from the role, the board and the win rule —
+ * so every seat holding the same card gets exactly the same text, and nothing in it depends on a hidden fact.
+ */
+export function roleHintText(roleId, { hasWitch, hasGuard, win } = {}) {
+  const r = ROLES[roleId];
+  if (!r) return null;
+  const side = r.team === 'wolf' ? 'wolf' : 'good';
+  const extra = boardExtra(roleId, { hasWitch, hasGuard });
+  return { what: extra ? `${r.what} ${extra}` : r.what, win: WIN_BY[side][win] ?? r.win };
 }
 
 // ---------- rules (the shell's 規則 sheet) ----------
@@ -561,6 +580,13 @@ export function cueMinMs(text) {
  */
 export const DAWN_MIN_MS = 8000;
 
+/**
+ * The 票型 (who voted whom) is read ballot by ballot and argued over: it stays up 4 s plus 0.8 s per voter, at most 15 s
+ * (decision D7). The text's own reading time still counts when it is longer.
+ */
+export const TALLY_MIN_MS = Object.freeze({ base: 4000, perVoter: 800, max: 15000 });
+export const tallyMinMs = (voters) => Math.min(TALLY_MIN_MS.max, TALLY_MIN_MS.base + TALLY_MIN_MS.perVoter * Math.max(0, Math.floor(Number(voters) || 0)));
+
 // ---------- private night panels (what ONE phone shows; decoys use the same slots) ----------
 
 export const PANEL = {
@@ -691,6 +717,7 @@ export const HINT = {
     voted: '投咗喇，等其他人；投晒之前仲可以改。',
     cannotFlip: '你翻咗牌，冇投票權，睇住大家投。',
     cannotPk: '你係 PK 嘅人，今次唔投，等結果。',
+    absent: '房主當咗你暫時離開：今次唔使投，返嚟就同房主講聲。',
     watchVote: '大家投緊票，等結果。',
     pk: '平票：PK 嘅人逐個發言，之後其他人再投一次。',
     dead: '你已經出局：可以睇，但唔好出聲。',
@@ -742,6 +769,8 @@ export const UI = {
     voteNo: '你冇票（白痴翻咗牌），睇住大家投。',
     voteNoPk: '你係 PK 嘅人，今次唔可以投。',
     voteDead: '你已經出局，唔可以投。',
+    // the host marked this seat 💤 (D4): it casts no ballot until the host marks it back
+    voteAbsent: '💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。',
     votePick: '揀一個你覺得係狼人嘅人，或者棄權。',
     shotHead: '最後行動',
     shotWho: (who) => `${who} 出局，最後行動時間`,
@@ -788,6 +817,7 @@ export const UI = {
     alive: (a, t) => `生存 ${a}/${t}`,
     dead: '💀',
     flipped: '🤡',
+    absent: '💤',
     me: '（你）',
   },
   god: {

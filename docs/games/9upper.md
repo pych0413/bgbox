@@ -33,7 +33,7 @@ Config (all keys optional; `defaults(n, prev, env)` fills them):
 
 | key | type | default | meaning |
 |---|---|---|---|
-| `preset` | select | `'official'` | `official` 官方玩法 · `newbie` 新手 · `quick` 快玩 · `custom` 自訂 (see below) |
+| `preset` | select | `'quick'` | `quick` 快玩 · `official` 官方玩法 · `newbie` 新手 · `custom` 自訂 (see below). **快玩 is the default for every head-count** (decision D5, 2026-10-04: travel nights; at 4 players 官方玩法 is 12 rounds); 官方玩法 is the next option of the same select |
 | `levelMode` | select | `'mix'` | `'mix'` 每輪隨機 (rulebook: shuffled pile, top card) · `'judge'` 諗樣每輪自己揀 · `'1'` `'2'` `'3'` 固定難度 |
 | `laps` | int 0–3 | `0` | each seat is 諗樣 this many times. `0` = rulebook table: 3–4 players → 3, 5–7 → 2, 8–9 → 1 |
 | `callouts` | int 0–2 | `1` | 收皮啦 the 諗樣 may play per round (rulebook: once per round; 2 = house reading; 0 = off) |
@@ -53,12 +53,14 @@ are kept for when the host switches to 自訂). The preset field's help is the r
 |---|---|---|---|---|
 | `official` 官方玩法 | mix | 0 (table) | 1 | 跟說明書：5 人每人做 2 次諗樣（共 10 輪），難度隨機，每輪 1 張收皮啦。 |
 | `newbie` 新手（第一次玩） | `'1'` | 1 | 1 | 第一次玩：全部 ⭐ 簡單題（說明書建議第一局咁玩），每人做 1 次諗樣（共 5 輪）。 |
-| `quick` 快玩 | mix | 1 | 1 | 快玩：每人做 1 次諗樣（共 5 輪），難度隨機。 |
+| `quick` 快玩 (default) | mix | 1 | 1 | 快玩：每人做 1 次諗樣（共 5 輪），難度隨機。 |
 | `custom` 自訂 | raw | raw | raw | 自己揀難度、輪數同收皮啦張數。 |
 
-Resulting rounds (official) = `n × laps`: n=3 → 9, 4 → 12, 5 → 10, 6 → 12, 7 → 14, 8 → 8, 9 → 9.
+Resulting rounds (official) = `n × laps`: n=3 → 9, 4 → 12, 5 → 10, 6 → 12, 7 → 14, 8 → 8, 9 → 9. 快玩 (the default) = `n`.
 `defaults(n, prev, env)` keeps the user's last choices (`prev`), sanitised; nothing depends on `n` (laps `0` is
-head-count-aware by itself). `env.singleDevice === true` turns `passPhone` on.
+head-count-aware by itself). `env.singleDevice === true` turns `passPhone` on. The returned setup carries `presetRev: 2`
+(not a form field, dropped by the engine): a setup saved before 2026-10-04 (no mark) that still holds the old default
+`official` moves to `quick` once; a host who picks 官方玩法 afterwards keeps it.
 
 Validation: `n` must be 3–9 (the composition is fixed by the rules: 1 + 1 + n−2); every field must be in range
 (numeric strings from a `<select>` are accepted); `preset` / `levelMode` / `speakOrder` one of their values; bools are booleans.
@@ -69,7 +71,7 @@ Warnings (non-blocking): `readSecs` < 9 「睇卡時間短過官方嘅 9 秒…�
 `callouts` 2 at n = 3 「3 個人玩，出兩張收皮啦一定會中老實人。」; `antiStreak` at n ≤ 4 「…唔會生效…」; `speakOrder: 'free'`
 with `speakSecs` > 0 「「自己決定」次序冇人輪緊，解釋時限唔會生效。」.
 The recommended setup never warns.
-Summary lines (lobby): `5 人：1 諗樣 + 1 老實人 + 3 個 9upper — 最啱玩嘅人數` · `官方玩法：共 10 輪（每人做 2 次諗樣）` ·
+Summary lines (lobby): `5 人：1 諗樣 + 1 老實人 + 3 個 9upper — 最啱玩嘅人數` · `快玩：共 5 輪（每人做 1 次諗樣）` (官方玩法: `官方玩法：共 10 輪（每人做 2 次諗樣）`) ·
 `難度：隨機` · `發言次序：諗樣揀` / `系統隨機派` / `自己決定` · `睇卡 9 秒` (or `一部手機輪流睇，每人 9 秒`) · `收皮啦 1 張` · optional `每人解釋限時 45 秒` ·
 `類別：…` · `分數唔會低過 0` · `老實人可以再睇` · `老實人唔連續做`.
 Head-count reasons: 3 「人少，諗樣盲估都有一半機會中」 · 4 「人少，追問更針對」 · 5–7 「最啱玩嘅人數」 · 8–9 「好熱鬧，諗樣最難估」.
@@ -122,7 +124,12 @@ it the card is redrawn — **before** the 9-second step.
 | who | screen |
 |---|---|
 | 諗樣 | term + hint; 「有人已經識呢個詞？出聲就換題，身份唔變。冇人識就開始。」; big 「開始睇卡」; `有人識呢條？換題（仲有 3 次）` (two taps) |
-| 玩家 / table | term + hint; 「已經識呢個詞？即刻出聲，諗樣會換題。」 · 「等 阿明 開始睇卡…」 |
+| 玩家 | term + hint; 「已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。」 · 「等 阿明 開始睇卡…」 · 「🙋 我識呢條」 (tap again: 「🙋 已話咗識（再㩒取消）」) |
+| table | term + hint; 「等 阿明 開始睇卡…」 |
+
+**「我識呢條」 (decision D5, 2026-10-04).** Every 玩家 has the same button; it only **flags** the 諗樣's 換題 button, which then reads
+`🙋 阿聰、小美 話識 · 換題（仲有 2 次）` with an accent outline. It never swaps by itself (the 諗樣 still decides — a swap is two taps)
+and it is no tell: nobody holds a card in `term`, the flags are public (`view.knows`), and a swap clears them.
 
 After a 換題 every phone's term card shows 「🔄 換咗題（仲可以換 2 次）」 for 4 s (silent play has no cue to say so).
 
@@ -134,6 +141,32 @@ Hint speech: level 1 「提示：同地理有關。」 · level 2 「提示：�
 endless fishing). Same difficulty (`levelWanted`; with `mix` any level), **roles, 老實人 and speaking order stay**,
 nothing scores. No clock runs in `term`, so nobody's peek is eaten by reading the term.
 `start` (諗樣) → `read`. No timer; a stalled 諗樣 is auto-acted with `start`.
+
+### 3.2a 呢輪作廢 and 💤 唔喺度 (decision D4/D6, 2026-10-04)
+
+The host has two tools for a seat that stops answering (the shell's ⋯ menu / stall banner):
+
+- **🗑️ 呢輪作廢** (`@void-round`): the round in play is thrown away — no score, no stats, its term is never dealt again — and
+  dealt again under the **same round number**: a fresh term, fresh roles and a fresh speaking order. Who keeps the 諗樣 seat:
+  - **same 諗樣** when the stuck seat is a 玩家 (a void during the read or the explaining);
+  - **the next 諗樣** when the stuck seat is the 諗樣 — a void in a step only the 諗樣 can move on (`level` 揀難度, `term`
+    開始睇卡, `judge` 揀人), or when the host names the 諗樣 (`{ type: '@void-round', pid }`; naming a 玩家 keeps the 諗樣).
+    **Lap bookkeeping:** the stuck 諗樣's turn moves to the end of this lap, once, so they still judge if they are back by
+    then and nobody judges twice in a lap. Stuck again (or already the last of the lap): that turn is lost, the game is one
+    round shorter. With nobody left to judge, the game ends.
+  - A scored round (`reveal`) is never voided: `engine.canVoid` says 「呢輪已經計咗分，㩒「下一輪」就得」.
+- **💤 唔喺度** (`@absent { pid }`, back with `@present { pid }`): public; the seat is not waited on for the rest of the game.
+  The 諗樣 → the round is void and the seat moves on (their turn is dropped). Before the read (`level`, `term`) → the cards are
+  dealt again without them. Pass-the-phone read → their peek is passed over. Explaining → their turn is skipped (⏭, listed
+  as 💤 唔喺度, never ✅ 已講; back in time, they get it once at the end). 揀人 → their card stands (they can still be picked).
+  From the next deal on: no card and no turn as 諗樣 (dropped when it comes up). Their own actions are ignored until
+  `@present`. Refused (state unchanged) when fewer than 3 seats would be left.
+  **Never automatic on a role:** voiding only when the absent seat is the 老實人 would tell the table who it was, and keeping
+  the round only when it is a 9upper would tell the 諗樣 the same. The host, who cannot see roles, may still void.
+
+Every phone shows why a deal is fresh, in `level` / `term`: 「🗑️ 上一鋪作廢：新題目、重新派身份」 · 「🗑️ 上一鋪作廢：阿明 遲啲先做諗樣，
+呢鋪由 小美 做」 · 「💤 阿明 唔喺度：呢鋪由 小美 做諗樣」. A 💤 sits next to the name in the score strip. The results list every
+void (「🗑️ 第 2 輪作廢（「深水埗」）…」, 「💤 第 5 輪：阿明 唔喺度，冇做諗樣」). Rules text: the 📖 section 「有人唔喺度」.
 
 ### 3.3 `read` — the 9-second peek
 
@@ -315,12 +348,15 @@ State (JSON; **PRIVATE** = never in any view before `reveal`):
 
 ```
 phase, deadline, timerLabel, cfg (normalised, preset applied, laps resolved), players [{id,name,seat,color}],
-order [pid…], totalRounds, roundNo, judges [pid…] (the whole schedule), lastHonest (public after its reveal),
+order [pid…], totalRounds (= judges.length), roundNo, judges [pid…] (the whole schedule), judgeLaps [lap…] (parallel),
+moved {pid: lap} (a stuck 諗樣's turn already moved this lap), voids [{n, judge, term, how, kept?}] (how: redeal / stuck /
+absent / skip), absent [pid…] (💤, public), lastHonest (public after its reveal),
 scores {pid: n}, stats {pid: {judged, caught, fooled, callHit, callMiss}},
 history [round summaries incl. parts[] = why each point moved — after reveal only], cueAck,
 round: {
-  n, judge, explainers [pid…] (speaking queue — by cfg.speakOrder: rotation from a random start / random permutation / seat order), readers [pid…] (seat order from the judge's left),
-  honest (PRIVATE), term {term, explain (PRIVATE), cat, level, src, hint}, levelWanted, swaps,
+  n, key (n, or `${n}v${voids}` after a void: cue ids and the UI's per-round memory), judge,
+  explainers [pid…] (speaking queue — by cfg.speakOrder: rotation from a random start / random permutation / seat order; seats marked 💤 at the deal are left out), readers [pid…] (seat order from the judge's left),
+  honest (PRIVATE), term {term, explain (PRIVATE), cat, level, src, hint}, levelWanted, swaps, knows [pid…] (我識呢條, public), redo {how, judge, kept}|null (public),
   reader, readStarted, readDone [pid…] (pass mode), speaker (null in 自己決定), spoken [pid…], skipped [pid…] (turn ended
   for them), back [pid…] (already had their one come-back), turnNo, called [pid…], pick, reveal
 }
@@ -334,7 +370,9 @@ round: {
 | action | pid | phase | rule |
 |---|---|---|---|
 | `{type:'level', level:1\|2\|3}` | judge | `level` | draws the term → `term` |
-| `{type:'swap'}` | judge | `term` | `swaps < 3`; new term of `levelWanted`; honest, explainers unchanged |
+| `{type:'swap'}` | judge | `term` | `swaps < 3`; new term of `levelWanted`; honest, explainers unchanged; clears `knows` |
+| `{type:'know', on?}` | a 玩家 dealt this round | `term` | 我識呢條: adds (or with `on: false` removes) the seat in `knows`; never swaps |
+| `{type:'away', turn?}` | the speaker (`free`: a 玩家 not yet ticked) | `explain` | what 代佢做 sends for a 玩家 whose phone is gone: the turn ends as a **skip** (⏭ 跳過咗, back once), never as their own 我講完. A seat can only ever skip itself |
 | `{type:'start'}` | judge | `term` | → `read` |
 | `{type:'peek'}` | the current reader | `read`, `passPhone` | starts that reader's `readSecs` window (once) |
 | `{type:'done', turn?}` | current speaker or judge | `explain`, `judge` / `system` | speaker → spoken (sent by the 諗樣: also → skipped); next waiting in queue, else a skipped player once; none left → `judge`. Optional `turn` (number) must equal `round.turnNo`, else ignored |
@@ -343,7 +381,9 @@ round: {
 | `{type:'decide'}` | judge | `explain` | → `judge` |
 | `{type:'callout', target}` | judge | `explain`, `judge` | target is a 玩家, not yet called, `called.length < callouts`; nobody is muted |
 | `{type:'pick', target}` | judge | `judge` | target is a 玩家 → scores settle → `reveal` |
-| `{type:'next'}` | judge | `reveal` | next round, or `over` after the last |
+| `{type:'next'}` | judge (any present seat while the judge is 💤) | `reveal` | next round, or `over` after the last |
+| `@void-round {pid?}` | host | any but `reveal` / `over` | 呢輪作廢 (§3.2a): same 諗樣 (a 玩家 stuck) or the next one with lap bookkeeping (the 諗樣 stuck: `level`, `term`, `judge`, or `pid` = the 諗樣) |
+| `@absent {pid}` / `@present {pid}` | host | any but `over` | 💤 (§3.2a); refused below 3 seats at the table |
 | `@cue-done {id}` | host | any | acknowledges the cue if `id` matches |
 | `@next` | host | any | acknowledges a pending cue first; otherwise skips the wait: `level` → random level, `term` → `read`, `read` together → `explain`, `read` pass → start the reader's window, then end it (never skips a reader), `explain` → end turn as a skip (`free`: tick the first 玩家 still waiting, as a skip), `judge` → nothing, `reveal` → `next` |
 
@@ -358,7 +398,8 @@ round: {
 
 ### Views (whitelist)
 
-Common: `me, phase, title ('第 3/12 輪'), subtitle ('阿明 做諗樣'), deadline?, timerLabel?, round {n,total}, judge,
+Common: `me, phase, title ('第 3/12 輪'), subtitle ('阿明 做諗樣'), deadline?, timerLabel?, round {n, total, key}, absent [pid…],
+knows [pid…] (`term` only), redo {how, judge, kept}|null (`level` / `term` of a fresh deal), judge,
 explainers, scores, term {text, level, hint}|null, readMode ('together'|'pass'), readSecs,
 reading {pid, started, done, order}|null (pass mode, read phase), turn {pid, spoken, total, skipped, no, next}|null (explain; `pid` is `null`
 in `free`), speakOrder ('judge'|'system'|'free', public), callouts {max,left,used}, canSwap, swapsLeft, last, rePeek, mine,
@@ -371,13 +412,24 @@ myRole, reveal, hint`.
 
 ### `focus`
 
-`level|term|explain|judge|reveal` → `{ pids: [judge] }` (in `free` too: on one shared phone the 諗樣 holds it and ticks names); `read` together → all 玩家; pass → `[reader]`; `over` → null.
+`level|term|explain|judge|reveal` → `{ pids: [judge] }` (in `free` too: on one shared phone the 諗樣 holds it and ticks names); `reveal` with the 諗樣 marked 💤 → null (anybody presses 下一輪; a shared phone's gate never asks for a seat that is away); `read` together → all 玩家 at the table; pass → `[reader]`; `over` → null.
+
+### `blocking(state, pid)` — is the table really waiting on this seat?
+
+The room's stall check (代佢做 / 💤) asks this, not `focus`: the 諗樣 in `level`, `term`, `judge`, `reveal` · the reader whose turn it is
+in a pass-the-phone read (not yet started) · the speaker on the floor in `explain` (諗樣揀 / 系統派) · nobody in the shared read window
+(it has a clock) or in 自己決定 (the 諗樣 can tick anybody off) · never a seat marked 💤.
+
+### `canVoid(state)`
+
+`{ ok: true }`, or `{ ok: false, message }` on `reveal` (「呢輪已經計咗分，㩒「下一輪」就得」 / 「…㩒「睇總結」就得」) and after the end.
 
 ### `autoAct(state, pid)`
 
-`level` judge → random level · `term` judge → `start` · `read` (pass) reader → `peek` · `explain` speaker or judge →
-`done` (`free`: a 玩家 not yet ticked → `done`, the judge → `done` of the first 玩家 still waiting, a ticked 玩家 → null) ·
-`judge` judge → random pick · `reveal` judge → `next` · otherwise null.
+`level` judge → random level · `term` judge → `start` · `read` (pass) reader → `peek` · `explain` judge → `done` (a skip) and the
+speaker → `away` (a skip: ⏭ 跳過咗, never ✅ 已講 — round-1 leftover, 2026-10-04) (`free`: a 玩家 not yet ticked → `away`, the judge →
+`done` of the first 玩家 still waiting, a ticked 玩家 → null) · `judge` judge → random pick · `reveal` judge → `next` ·
+a seat marked 💤 → null · otherwise null.
 
 ### `legalActions(state, pid)`
 
@@ -441,6 +493,17 @@ Tests named `rule: …` pin a research rule. Covered in `tests/9upper.test.mjs`:
   a wrong screen, and the new controls (開始睇卡, peek, 叫佢講, 收皮啦 double tap, decide, pick) send the right actions.
 - Fuzzer: every n 3–9 × 110 seeds plus five config modes with leak checks; empty/missing bank; determinism and
   JSON-safety; every legal action changes the state.
+- Decisions 2026-10-04: D5 — 快玩 is the default at every n (n rounds), 官方玩法 next in the select with the rulebook table,
+  an old saved 官方玩法 moves over once and a later pick stays; 我識呢條 (public, toggles, never swaps, cleared by a swap, only
+  in `term`, same button on every 玩家's phone). D4/D6 — 呢輪作廢 with a stuck 玩家 (same 諗樣, fresh term / roles / order, no
+  score, fresh cue ids, the voided term never returns) and with a stuck 諗樣 (moved to the end of the lap once, then dropped;
+  every seat still judges once per lap; the last voids end the game); `canVoid`; 💤 for the 諗樣 (void, turn dropped, no card
+  later, their later turns dropped), for a 玩家 (skipped, never ✅, back once with `@present`; their card stands in 揀人), before
+  the read (cards dealt again without them / with them), for a pass-the-phone reader; refused below 3 seats; 下一輪 for anybody
+  while the 諗樣 is away; `blocking` per phase; `autoAct` for a speaker → `away` (⏭ 跳過咗); a fuzz with random voids, absences
+  and returns (leak sweep at every step, history = rounds played, at most one 諗樣 turn per seat per lap). UI: 我識呢條 →
+  the 諗樣's flagged 換題, the fresh-deal line, ⏭ after 代佢做, 💤 in the list and the scores, 下一輪 for others, no card for a
+  seat that was away at the deal.
 
 ## 7. 貼心 touches
 
@@ -470,9 +533,11 @@ Tests named `rule: …` pin a research rule. Covered in `tests/9upper.test.mjs`:
    switch to writing the preset values into the visible fields.
 4. `categories` Field: 9upper supplies `options` itself (`CATEGORIES` in game.js); a `stats` object
    (「已用 37 / 1,243」) is not supplied because `config.fields` has no bag access.
-5. Stall detection only flags disconnected seats that have a legal action; `autoAct` covers every phase.
+5. Stall detection: 9upper has `engine.blocking` (§5); `autoAct` covers every phase. With the 2026-10-04 core change a
+   connected seat can be listed as 「冇反應」 too; in 9upper the long, normal waits are a speaker talking (no `speakSecs`) and
+   the 諗樣 thinking in 揀人, so that list should stay quiet (the ⋯ menu), never a banner.
 6. Bank curators: a new category in `js/data/9upper-terms.js` must be added to `CATEGORIES` in game.js
    (the test fails until it is). The 新手 preset needs ⭐ (level 1) terms — keep at least ~20.
-7. A shell-level 「呢輪作廢」 (void the round) for a dead phone would help; not implemented here.
+7. 「呢輪作廢」 (`@void-round`) and 💤 (`@absent` / `@present`) are implemented (§3.2a), with `canVoid`.
 8. Naming (research, legal): 9UPPER / 瞎掰王 belongs to Time2Play; the research suggests a neutral display name
    (e.g. 吹水王). `meta.name` and the registry entry are left as they are — the lead decides.

@@ -152,6 +152,7 @@ export function mount(root, api) {
       el('span', { class: 'ww-seat-name', text: nameOf(s.pid) }),
       s.flipped ? el('em', { text: S.UI.roster.flipped }) : null,
       !s.alive ? el('em', { text: S.UI.roster.dead }) : null,
+      s.absent ? el('em', { class: 'ww-seat-absent', text: S.UI.roster.absent }) : null,
       role ? el('small', { text: role.emoji }) : null);
     }));
   }
@@ -556,16 +557,25 @@ export function mount(root, api) {
         const me = v.me;
         const can = !!me && vt.voters.includes(me);
         const tied = vt.round === 2;
-        const text = can ? S.UI.day.votePick : !me ? '' : (seatOf(v, me)?.alive === false ? S.UI.day.voteDead : (tied ? S.UI.day.voteNoPk : S.UI.day.voteNo));
+        const mine = me ? seatOf(v, me) : null;
+        const text = can ? S.UI.day.votePick : !me ? ''
+          : mine?.alive === false ? S.UI.day.voteDead
+            : mine?.absent ? S.UI.day.voteAbsent
+              : tied ? S.UI.day.voteNoPk : S.UI.day.voteNo;
         setText(info, text);
         setHidden(info, !text);
         setHidden(panelHost, !can);
         if (can) {
+          // an absent seat is still a candidate: its name carries the public 💤
+          const absent = new Set(v.seats.filter((s) => s.absent).map((s) => s.pid));
           const props = {
-            players: players().filter((p) => v.seats.some((s) => s.pid === p.id)),
+            players: players().filter((p) => v.seats.some((s) => s.pid === p.id))
+              .map((p) => (absent.has(p.id) ? { ...p, name: `${p.name} ${S.UI.roster.absent}` } : p)),
             candidates: vt.cands, me,
             myVote: 'myVote' in vt ? vt.myVote : undefined,
             allowAbstain: true, allowChange: true,
+            // your own phone never prints whom you picked (D6): 「已投 ✓」 until the tally, so a glance learns nothing
+            secretChoice: true,
             progress: vt.progress, reveal: null,
             onVote: (t) => api.send({ type: 'vote', target: t }),
           };

@@ -76,7 +76,20 @@ function makeEnv(api, local, refresh) {
   const players = () => api.players ?? [];
   const nameOf = (pid) => players().find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => players().find((p) => p.id === pid)?.color ?? 'var(--accent)';
-  return { api, C: api.components, local, refresh, players, nameOf, colorOf };
+  /** The players for a VotePanel: an absent seat's name carries the public 💤 (D4). */
+  const markedPlayers = (view) => {
+    const away = new Set(view?.absent ?? []);
+    return players().map((p) => (away.has(p.id) ? { ...p, name: `${p.name} ${T.absentMark}` } : p));
+  };
+  /** One public line naming the 💤 seats, or '' when nobody is away. */
+  const awayText = (view) => (view?.absent?.length ? T.absentLine(view.absent.map(nameOf).join('、')) : '');
+  return { api, C: api.components, local, refresh, players, nameOf, colorOf, markedPlayers, awayText };
+}
+
+/** A small public line under a count: 「💤 暫時離開（唔使等）：阿明」 while anybody is marked absent. */
+function makeAway(E) {
+  const el = h('p', { class: 'on-count on-away', hidden: true });
+  return { el, update(view) { setText(el, E.awayText(view)); setHidden(el, !el.textContent); } };
 }
 
 /** The public role list ("今局角色"): the official tokens that sit next to the centre. */
@@ -163,8 +176,9 @@ function buildDeal(E) {
   const list = makeRoleList();
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-ready', type: 'button', onclick: () => { api.sfx('lock'); api.send({ type: 'ready' }); } });
   const count = h('p', { class: 'on-count' });
+  const away = makeAway(E);
   const tip = h('details', { class: 'on-tip' }, h('summary', { text: '夜晚點玩？' }), h('p', { text: T.dealTip }));
-  const el = h('div', { class: 'on-screen on-deal' }, lead, roleCard.el, list.el, readyBtn, count, tip);
+  const el = h('div', { class: 'on-screen on-deal' }, lead, roleCard.el, list.el, readyBtn, count, away.el, tip);
   return {
     el,
     update(view) {
@@ -174,6 +188,7 @@ function buildDeal(E) {
       readyBtn.disabled = done;
       setText(readyBtn, done ? T.dealReadyDone : T.dealReady);
       setText(count, T.dealCount(view.ready.done, view.ready.total));
+      away.update(view);
     },
     destroy() { roleCard.destroy(); el.remove(); },
   };
@@ -407,8 +422,9 @@ function buildDay(E) {
   let mine = false;
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'ready-vote', on: !mine }) });
   const count = h('p', { class: 'on-count' });
+  const away = makeAway(E);
   const hostNote = h('p', { class: 'on-count', text: T.hostSkip, hidden: !api.isHost });
-  const el = h('div', { class: 'on-screen on-day' }, banner, timerSlot, lead, recap.el, list.el, readyBtn, count, hostNote);
+  const el = h('div', { class: 'on-screen on-day' }, banner, timerSlot, lead, recap.el, list.el, readyBtn, count, away.el, hostNote);
   return {
     el,
     update(view, ctx) {
@@ -419,6 +435,7 @@ function buildDay(E) {
       readyBtn.classList.toggle('btn-locked', mine);
       setText(readyBtn, mine ? T.readyVoteDone : T.readyVote);
       setText(count, T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
+      away.update(view);
     },
     destroy() { timer.destroy(); recap.destroy(); el.remove(); },
   };
@@ -432,6 +449,7 @@ function buildVote(E) {
   const { api, C } = E;
   const lead = h('p', { class: 'on-lead', text: T.voteLead });
   const panel = C.VotePanel({ players: [], candidates: [], me: api.me, progress: { done: 0, total: 0 }, reveal: null, onVote: () => {} });
+  const away = makeAway(E);
   const ringTitle = h('h3', { class: 'on-h', text: T.ringTitle });
   const ringHelp = h('p', { class: 'on-note', text: T.ringHelp });
   let ringMine = false;
@@ -440,17 +458,24 @@ function buildVote(E) {
   const ringStuck = h('p', { class: 'on-warn', text: T.ringStuck });
   const ring = h('div', { class: 'on-ring' }, ringTitle, ringHelp, ringBtn, ringCount, ringStuck);
   const recap = makeRecap(E, { compact: true });
-  const el = h('div', { class: 'on-screen on-vote' }, lead, panel.el, ring, recap.el);
+  const el = h('div', { class: 'on-screen on-vote' }, lead, panel.el, away.el, ring, recap.el);
   return {
     el,
     update(view) {
+      // 💤 an absent seat casts no vote (D4): its phone says so instead of offering a ballot or the circle
+      const benched = !!view.my?.absent && view.myVote === undefined;
+      setText(lead, benched ? T.absentSelf : T.voteLead);
+      setHidden(panel.el, benched);
       panel.update({
-        players: E.players(), candidates: view.candidates ?? [], me: api.me,
+        players: E.markedPlayers(view), candidates: view.candidates ?? [], me: api.me,
         myVote: view.myVote, allowAbstain: false, allowChange: true,
+        // your own phone never prints whom you picked (D6): 「已投 ✓」 until the reveal
+        secretChoice: true,
         progress: view.progress, reveal: null, title: T.voteTitle,
         onVote: (pid) => { if (pid) api.send({ type: 'vote', target: pid }); },
       });
-      setHidden(ring, !view.ring.on);
+      away.update(view);
+      setHidden(ring, !view.ring.on || benched);
       ringMine = !!view.ring.mine;
       ringBtn.classList.toggle('btn-locked', ringMine);
       setText(ringBtn, ringMine ? T.ringOn : T.ringOff);
@@ -478,7 +503,8 @@ function buildReveal(E) {
   let done = false;
   const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'done' }) });
   const count = h('p', { class: 'on-count' });
-  const el = h('div', { class: 'on-screen on-reveal' }, banner, summary, votesBox, deadBox, cardsBox, whyBox, recapBox, doneBtn, count);
+  const away = makeAway(E);
+  const el = h('div', { class: 'on-screen on-reveal' }, banner, summary, votesBox, deadBox, cardsBox, whyBox, recapBox, doneBtn, count, away.el);
   let chime = null;       // the reveal fanfare plays once, only for a screen that was there when the cards turned over
 
   const dot = (pid) => h('span', { class: 'dot', style: { '--seat': E.colorOf(pid) } });
@@ -553,6 +579,7 @@ function buildReveal(E) {
       doneBtn.disabled = done;
       setText(doneBtn, done ? T.revealDoneAck : T.revealDone);
       setText(count, T.revealCount(view.revealDone?.done ?? 0, view.revealDone?.total ?? 0));
+      away.update(view.phase === 'reveal' ? view : null);
     },
     destroy() { clearTimeout(chime); el.remove(); },
   };
@@ -583,7 +610,8 @@ function buildTable(E) {
   const timerSlot = h('div', { class: 'on-timer', hidden: true });
   const timer = makeTimer(E, timerSlot);
   const list = makeRoleList();
-  const el = h('div', { class: 'on-screen on-table' }, title, body, bar, timerSlot, count, list.el);
+  const away = makeAway(E);
+  const el = h('div', { class: 'on-screen on-table' }, title, body, bar, timerSlot, count, away.el, list.el);
   let current = null;
   let total = 1;
   let seen = null;
@@ -630,6 +658,7 @@ function buildTable(E) {
         default: break;
       }
       setHidden(count, !count.textContent);
+      away.update(view.phase === 'night' ? null : view);
       timer.update(view.phase === 'day' ? view : { deadline: null }, ctx);
       tick();
     },

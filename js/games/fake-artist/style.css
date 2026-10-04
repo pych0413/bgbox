@@ -116,7 +116,7 @@
 .fk-verdict.escaped { background: rgba(228, 87, 61, .12); border-color: rgba(228, 87, 61, .45); }
 .fk-verdict.revote { background: rgba(245, 197, 24, .12); border-color: rgba(245, 197, 24, .5); }
 .fk-linger { height: .25rem; border-radius: 99px; background: var(--line); overflow: hidden; }
-.fk-linger i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; animation: fk-linger 4.5s linear forwards; }
+.fk-linger i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; animation: fk-linger 7s linear forwards; /* = TALLY_MS (D12); the UI sets it inline too */ }
 @keyframes fk-linger { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
 /* ---------- the guess ---------- */

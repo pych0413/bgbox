@@ -25,6 +25,8 @@
 }
 .uc-seat.is-out { opacity: .5; }
 .uc-seat.is-out > span { text-decoration: line-through; text-decoration-color: var(--text-dim); }
+.uc-seat.is-away { opacity: .6; }                 /* 💤 marked absent by the host (D4) */
+.uc-order-item.is-away { opacity: .6; }
 
 .uc-dot {
   flex: none; display: inline-block; width: .75rem; height: .75rem; border-radius: 50%;

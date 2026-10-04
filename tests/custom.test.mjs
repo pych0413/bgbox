@@ -1316,6 +1316,58 @@ test('custom ui: taps send the actions the engine accepts — peek on release, l
   });
 });
 
+test('custom ui: #3 — host buttons confirm in the page (api.confirm on the tapped button), never with a native dialog', async () => {
+  await withCustomUi(async (ui) => {
+    const native = globalThis.confirm;
+    globalThis.confirm = () => { throw new Error('a native confirm() froze the host phone'); };
+    try {
+      const sim = mk(4, { seed: 3 });
+      const asked = [];
+      const armed = new Set();
+      // the shell's arm-then-confirm: the first tap on a button arms it (false), the second goes ahead (true)
+      const confirm = (text, node, opts) => {
+        asked.push({ text, node, key: opts?.key });
+        if (armed.has(node)) { armed.delete(node); return true; }
+        armed.add(node);
+        return false;
+      };
+      const host = mountFor(ui, sim, 'p1', { confirm });
+      host.handle.update(sim.view('p1'), {});
+      for (const [label, type] of [['👁 開晒啲骰', 'reveal-dice'], ['🃏 重新派牌', 'redeal'], ['🔓 開晒角色', 'reveal-roles'], ['🏁 結束遊戲', 'end']]) {
+        const b = button(host.root, label);
+        b.click();
+        assert.deepEqual(host.sent, [], `${label}: the first tap only arms it`);
+        assert.equal(asked.at(-1).node, b, `${label}: the confirm sits on the tapped button`);
+        assert.ok(asked.at(-1).text.length > 4 && asked.at(-1).key === `custom:${type}`);
+        b.click();
+        assert.deepEqual(host.sent, [{ type }], `${label}: the second tap sends`);
+        host.sent.length = 0;
+      }
+      // 全體搖骰 only asks when somebody's cup is locked
+      button(host.root, '🎲 全體搖骰').click();
+      assert.deepEqual(host.sent, [{ type: 'roll-all' }]);
+      // an older shell without api.confirm: the action goes ahead, still no native dialog
+      const bare = mountFor(ui, sim, 'p1');
+      bare.handle.update(sim.view('p1'), {});
+      button(bare.root, '🏁 結束遊戲').click();
+      assert.deepEqual(bare.sent, [{ type: 'end' }]);
+    } finally {
+      globalThis.confirm = native;
+    }
+  });
+});
+
+test('custom: result() says the app keeps no score (noScore), so the shell can say 「邊個贏由你哋講」', () => {
+  const sim = mk(4, { seed: 2 });
+  assert.equal(sim.result(), null);
+  sim.act(sim.state.hostPid ?? 'p1', { type: 'end' });
+  const res = sim.result();
+  assert.ok(res, 'ended');
+  assert.equal(res.noScore, true);
+  assert.deepEqual(res.winners, []);
+  assert.equal(res.points, undefined, 'no points either');
+});
+
 test('custom ui: U1 — long-pressing a role name on the roster explains it; a tap or a scroll does not', async () => {
   await withCustomUi(async (ui) => {
     const sim = mk(5, { seed: 6, patch: { preset: 'killer', hostPlays: false, modSees: true } });

@@ -93,19 +93,41 @@ test('9upper: U1 — rules.quick is at most 6 short lines; every role says what 
 
 // ---------- config (#8 presets) ----------
 
-test('9upper: config.defaults is valid for every head-count; laps follow the official table', () => {
+test('9upper: D5 — 快玩 (each seat is 諗樣 once) is the default for every head-count; 官方玩法 follows the rulebook table', () => {
   const rounds = { 3: 9, 4: 12, 5: 10, 6: 12, 7: 14, 8: 8, 9: 9 };
   for (let n = 3; n <= 9; n++) {
     const cfg = config.defaults(n);
+    assert.equal(cfg.preset, 'quick', `n=${n}`);
     const v = config.validate(cfg, n);
     assert.ok(v.ok, `n=${n}: ${v.message}`);
     assert.deepEqual(v.warnings, [], `n=${n}: the recommended setup warns ${v.warnings}`);
     const sim = mk(n);
-    assert.equal(sim.state.totalRounds, rounds[n], `n=${n}`);
-    assert.equal(sim.state.cfg.laps, game.lapsFor(n));
-    assert.ok(config.summary(cfg, n)[1].includes(`共 ${rounds[n]} 輪`));
+    assert.equal(sim.state.totalRounds, n, `n=${n}: 快玩 = one lap`);
+    assert.equal(sim.state.cfg.laps, 1);
+    assert.ok(config.summary(cfg, n)[1].startsWith(`快玩：共 ${n} 輪`), config.summary(cfg, n)[1]);
     assert.ok(config.fields(cfg, n).length >= 6);
+    // 官方玩法 is the next option of the same select
+    const off = mk(n, 1, { preset: 'official' });
+    assert.equal(off.state.totalRounds, rounds[n], `n=${n}`);
+    assert.equal(off.state.cfg.laps, game.lapsFor(n));
+    assert.ok(config.summary({ ...cfg, preset: 'official' }, n)[1].includes(`共 ${rounds[n]} 輪`));
   }
+});
+
+test('9upper: D5 — a setup saved before 快玩 became the default moves over once; a later 官方玩法 pick is kept', () => {
+  const old = { preset: 'official', readSecs: 12, speakOrder: 'system' };   // saved by an older build (no mark)
+  const d = config.defaults(5, old);
+  assert.equal(d.preset, 'quick');
+  assert.equal(d.readSecs, 12, 'the rest of the old setup is kept');
+  assert.equal(d.speakOrder, 'system');
+  assert.ok(d.presetRev, 'the setup carries the mark from now on');
+  const picked = config.defaults(5, { ...d, preset: 'official' });   // the host chose 官方玩法 since
+  assert.equal(picked.preset, 'official');
+  assert.equal(config.defaults(5, { preset: 'newbie' }).preset, 'newbie', 'other old presets stay');
+  assert.equal(config.defaults(5, { preset: 'custom', laps: 2 }).preset, 'custom');
+  assert.ok(config.validate(d, 5).ok);
+  const sim = new Sim(game, { n: 5, seed: 1, banks, config: d });
+  assert.ok(!('presetRev' in sim.state.cfg), 'the mark is lobby bookkeeping only');
 });
 
 test('9upper: #8 — the lobby summary opens with the head-count line and a reason players can read', () => {
@@ -144,7 +166,7 @@ test('9upper: #8 — presets fix level mode, laps and 收皮啦; custom shows th
   assert.equal(nb.state.round.term.level, 1);
   // the preset select offers every preset, each with a label
   const sel = config.fields(config.defaults(5), 5).find((f) => f.key === 'preset');
-  assert.deepEqual(sel.options.map((o) => o.value), ['official', 'newbie', 'quick', 'custom']);
+  assert.deepEqual(sel.options.map((o) => o.value), ['quick', 'official', 'newbie', 'custom'], '快玩 first, 官方玩法 next');
   for (const o of sel.options) assert.ok(o.label);
 });
 
@@ -159,7 +181,7 @@ test('9upper: config.defaults keeps prev, sanitises it and honours singleDevice'
   assert.deepEqual(d.topics, { cats: ['地理'] });
   assert.ok(!('junk' in d));
   const fresh = config.defaults(5);
-  assert.equal(fresh.preset, 'official');
+  assert.equal(fresh.preset, 'quick');
   assert.deepEqual(fresh.topics, { cats: [] });
   assert.equal(fresh.passPhone, false);
   assert.equal(fresh.antiStreak, false);
@@ -918,7 +940,8 @@ test('9upper: 系統派 — speakSecs clocks every dealt turn; @next and autoAct
   sim.advance();
   assert.equal(sim.view(null).turn.pid, ex[1]);
   assert.ok(sim.state.timerLabel.includes(nameOf(sim, ex[1])));
-  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' });
+  // 代佢做 for the speaker is a skip (⏭ 跳過咗), never their own 我講完 (✅ 已講)
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'away', turn: sim.view(null).turn.no });
   assert.equal(engine.autoAct(sim.state, ex[2], sim.ctx()), null);
   assert.deepEqual(engine.autoAct(sim.state, J(sim), sim.ctx()), { type: 'done' });
   sim.host({ type: ACT.NEXT });                          // acknowledges the cue
@@ -1004,7 +1027,7 @@ test('9upper: 自己決定 — legalActions, autoAct, @next and the cue', () => 
   assert.deepEqual(sim.legal(ex[1]), [{ type: 'done' }]);
   assert.deepEqual(sim.legal(judge), [
     { type: 'done', target: ex[0] }, { type: 'done', target: ex[1] }, { type: 'done', target: ex[2] }, { type: 'decide' }]);
-  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' });
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'away' }, '代佢做 skips them, it does not tick them off');
   assert.deepEqual(engine.autoAct(sim.state, judge, sim.ctx()), { type: 'done', target: ex[0] });
   assert.deepEqual(sim.focus(), { pids: [judge] });
   const c = sim.cue();
@@ -1022,7 +1045,8 @@ test('9upper: 自己決定 — legalActions, autoAct, @next and the cue', () => 
   sim.host({ type: ACT.NEXT });
   assert.equal(phase(sim), 'explain', 'nobody new is waiting: the skipped one is back on the list');
   assert.deepEqual(sim.view(null).turn.spoken, [ex[0], ex[2]]);
-  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'done' }, 'and can tick themselves off');
+  assert.deepEqual(sim.legal(ex[1]), [{ type: 'done' }], 'and can tick themselves off');
+  assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'away' });
   let presses = 0;
   while (phase(sim) === 'explain' && presses < 5) { sim.host({ type: ACT.NEXT }); presses += 1; }
   assert.equal(phase(sim), 'judge');
@@ -1458,6 +1482,289 @@ test('9upper: @next from the host never gets stuck in judge, and skips level/ter
   assert.equal(phase(sim), 'judge');
 });
 
+// ---------- D4: 呢輪作廢 (@void-round) and 💤 唔喺度 (@absent / @present) ----------
+
+const VOID = { type: ACT.VOID_ROUND };
+const ABSENT = (pid) => ({ type: ACT.ABSENT ?? '@absent', pid });
+const PRESENT = (pid) => ({ type: ACT.PRESENT ?? '@present', pid });
+/** Every seat's turns as 諗樣 per lap, from the plan. */
+const lapCounts = (s) => {
+  const out = {};
+  s.judges.forEach((pid, i) => { const k = `${s.judgeLaps[i]}|${pid}`; out[k] = (out[k] ?? 0) + 1; });
+  return out;
+};
+
+test('9upper: D4 — 呢輪作廢 while a 玩家 is stuck: same 諗樣, fresh term, roles and order, no score, fresh cue ids', () => {
+  const sim = mk(5, 3, { speakOrder: 'system' });
+  toExplain(sim);
+  const before = clone(sim.state);
+  const judge = J(sim);
+  const oldTerm = sim.state.round.term.term;
+  assert.deepEqual(engine.canVoid(sim.state), { ok: true });
+  assert.equal(sim.host(VOID), true);
+  const s = sim.state;
+  assert.equal(phase(sim), 'term');
+  assert.equal(s.roundNo, 1, 'the same round number');
+  assert.equal(J(sim), judge, 'the same 諗樣');
+  assert.notEqual(s.round.term.term, oldTerm, 'a fresh term');
+  assert.deepEqual(s.scores, before.scores, 'nothing scores');
+  assert.deepEqual(s.stats, before.stats);
+  assert.deepEqual(s.history, []);
+  assert.deepEqual(s.judges, before.judges, 'the plan is untouched');
+  assert.equal(s.round.key, '1v1');
+  assert.equal(sim.cue().id, 'r1v1:term:0', 'a fresh cue id: the narrator reads the new term');
+  assert.deepEqual(sim.view(null).redo, { how: 'redeal', judge, kept: false });
+  assert.equal(sim.view(null).round.key, '1v1');
+  assert.equal(sim.view(null).title, '第 1/5 輪');
+  assert.deepEqual(s.voids, [{ n: 1, judge, term: oldTerm, how: 'redeal' }]);
+  // the void round is played out normally and the game ends with every seat judging once
+  const res = sim.runRandom().result;
+  assert.equal(sim.state.history.length, 5);
+  assert.ok(res.lines.some((l) => l.includes('第 1 輪作廢') && l.includes(oldTerm)), 'the results list the void');
+  assert.ok(!sim.state.history.some((h) => h.term === oldTerm), 'the voided term never comes back');
+});
+
+test('9upper: D4 — 呢輪作廢 while the 諗樣 is stuck hands the seat on; their turn moves to the end of the lap, once', () => {
+  const sim = mk(4, 5, { preset: 'official' });   // 3 laps of 4
+  const order0 = sim.state.judges.slice();
+  toJudge(sim);
+  const stuck = J(sim);
+  assert.equal(sim.host(VOID), true);
+  let s = sim.state;
+  assert.equal(phase(sim), 'term');
+  assert.equal(J(sim), order0[1], 'the next seat is 諗樣 now');
+  assert.deepEqual(s.judges.slice(0, 4), [order0[1], order0[2], order0[3], stuck], 'the stuck one judges last in this lap');
+  assert.deepEqual(s.judges.slice(4), order0.slice(4), 'later laps unchanged');
+  assert.equal(s.totalRounds, 12);
+  assert.deepEqual(lapCounts(s), lapCounts({ judges: order0, judgeLaps: order0.map((_, i) => Math.floor(i / 4)) }),
+    'nobody judges twice in a lap, nobody loses a turn');
+  assert.deepEqual(sim.view(null).redo, { how: 'stuck', judge: stuck, kept: true });
+  assert.ok(S.redoLine(sim.view(null).redo, (p) => nameOf(sim, p), J(sim)).includes('遲啲先做諗樣'));
+  // play the lap through to the stuck one's deferred turn; stuck again → the turn is lost (no second move)
+  for (let k = 0; k < 3; k++) {
+    toJudge(sim);
+    sim.act(J(sim), { type: 'pick', target: sim.state.round.explainers[0] });
+    sim.act(J(sim), { type: 'next' });
+  }
+  assert.equal(J(sim), stuck);
+  assert.equal(sim.state.roundNo, 4);
+  sim.host(VOID);   // in `term`: only the 諗樣 can start, so the 諗樣 is the stuck seat
+  s = sim.state;
+  assert.equal(s.totalRounds, 11, 'moved once already this lap: the turn is dropped');
+  assert.equal(J(sim), order0[4], 'lap 2 starts');
+  assert.equal(s.roundNo, 4);
+  assert.deepEqual(s.voids.map((x) => [x.how, x.kept]), [['stuck', true], ['stuck', false]]);
+  const res = sim.runRandom().result;
+  assert.equal(sim.state.history.length, 11);
+  assert.ok(res.lines.some((l) => l.includes('今個圈冇做到諗樣')));
+});
+
+test('9upper: D4 — the host can name the stuck seat; the last of a lap who is stuck loses the turn; the last round ends the game', () => {
+  const sim = mk(4, 2);
+  toJudge(sim);
+  const judge = J(sim);
+  sim.host({ ...VOID, pid: sim.state.round.explainers[0] });   // in 揀人, but a 玩家's phone is named: same 諗樣
+  assert.equal(J(sim), judge);
+  assert.equal(sim.state.voids[0].how, 'redeal');
+  toExplain(sim);
+  sim.host({ ...VOID, pid: judge });                            // during the explaining, the 諗樣 named: moved on
+  assert.notEqual(J(sim), judge);
+  assert.equal(sim.state.voids[1].how, 'stuck');
+  // a 4-round game: void every round's 諗樣 until nobody is left → the game ends with no extra rounds
+  let guard = 0;
+  while (phase(sim) !== 'over' && guard++ < 20) { toJudge(sim); sim.host(VOID); }
+  assert.equal(phase(sim), 'over');
+  assert.equal(sim.state.history.length, 0);
+  assert.ok(sim.result(), 'a well-formed result even with no round played');
+  assert.equal(sim.host(VOID), false, 'nothing to void after the end');
+});
+
+test('9upper: D4 — a scored round is never voided; canVoid says why', () => {
+  const sim = mk(4, 2);
+  toJudge(sim);
+  sim.act(J(sim), { type: 'pick', target: sim.state.round.explainers[0] });
+  assert.equal(phase(sim), 'reveal');
+  const c = engine.canVoid(sim.state);
+  assert.equal(c.ok, false);
+  assert.ok(c.message.includes('計咗分') && c.message.includes('下一輪'), c.message);
+  assert.equal(sim.host(VOID), false, 'reveal: state unchanged');
+  assert.equal(engine.canVoid({ ...sim.state, phase: 'over' }).ok, false);
+});
+
+test('9upper: D4 — 💤 an absent 諗樣: the round is void, the seat moves on, their turns are dropped; no card for them later', () => {
+  const sim = mk(5, 4, { preset: 'official' });   // 2 laps of 5
+  toExplain(sim);
+  const away = J(sim);
+  const total = sim.state.totalRounds;
+  assert.equal(sim.host(ABSENT(away)), true);
+  assert.deepEqual(sim.view(null).absent, [away]);
+  assert.notEqual(J(sim), away);
+  assert.equal(phase(sim), 'term');
+  assert.equal(sim.state.totalRounds, total - 1);
+  assert.deepEqual(sim.view(null).redo, { how: 'absent', judge: away, kept: false });
+  assert.ok(!sim.state.round.explainers.includes(away), 'no card for a seat that is away');
+  assert.equal(sim.view(away).mine, null);
+  assert.equal(engine.blocking(sim.state, away), false);
+  assert.equal(engine.autoAct(sim.state, away, sim.ctx()), null);
+  // their lap-2 turn is dropped when it comes up; everybody else still judges twice
+  const res = sim.runRandom({ onStep: leakCheck }).result;
+  const judged = sim.state.history.map((h) => h.judge);
+  assert.ok(!judged.includes(away));
+  for (const p of sim.state.order.filter((x) => x !== away)) assert.equal(judged.filter((x) => x === p).length, 2, p);
+  assert.ok(!sim.state.history.some((h) => h.honest === away || h.pick === away));
+  assert.ok(res.lines.filter((l) => l.startsWith('💤')).length === 2, res.lines.join('\n'));
+});
+
+test('9upper: D4 — 💤 a 玩家 who is away: skipped when explaining (never ✅ 已講), back once with @present', () => {
+  const sim = mk(5, 7, { speakOrder: 'system' });
+  toExplain(sim);
+  const ex = sim.state.round.explainers;
+  sim.host(ABSENT(ex[2]));                         // not on the floor yet: marked skipped, never called
+  let t = sim.view(null).turn;
+  assert.ok(t.skipped.includes(ex[2]) && t.spoken.includes(ex[2]));
+  assert.equal(t.pid, ex[0]);
+  assert.equal(engine.blocking(sim.state, ex[0]), true, 'the speaker on the floor is waited on');
+  sim.host(ABSENT(ex[0]));                         // the speaker goes: the turn ends as a skip
+  t = sim.view(null).turn;
+  assert.equal(t.pid, ex[1]);
+  assert.ok(t.skipped.includes(ex[0]));
+  sim.act(ex[1], { type: 'done', turn: t.no });
+  assert.equal(sim.view(null).turn.pid, ex[3]);
+  sim.host(PRESENT(ex[2]));                        // back in time: gets the floor once after everybody else
+  sim.act(ex[3], { type: 'done', turn: sim.view(null).turn.no });
+  assert.equal(sim.view(null).turn.pid, ex[2]);
+  sim.act(ex[2], { type: 'done', turn: sim.view(null).turn.no });
+  assert.equal(phase(sim), 'judge', 'the one still away is never waited for');
+  // 揀人: an absent 玩家's card stands — they can still be picked
+  assert.ok(sim.legal(J(sim)).some((a) => a.type === 'pick' && a.target === ex[0]));
+});
+
+test('9upper: D4 — 💤 before the read deals the cards again without them; back before the read deals them in', () => {
+  const sim = mk(5, 9);
+  assert.equal(phase(sim), 'term');
+  const ex = sim.state.round.explainers.slice();
+  const away = ex[1];
+  sim.host(ABSENT(away));
+  assert.ok(!sim.state.round.explainers.includes(away));
+  assert.notEqual(sim.state.round.honest, away);
+  assert.equal(sim.state.round.explainers.length, 3);
+  assert.equal(sim.view(away).hint.length > 0, true);
+  sim.host(PRESENT(away));
+  assert.ok(sim.state.round.explainers.includes(away), 'dealt in again');
+  assert.equal(sim.state.round.explainers.length, 4);
+  // pass-the-phone read: a reader who is away is passed over
+  const pp = mk(4, 2, { passPhone: true });
+  toRead(pp);
+  const first = pp.state.round.reader;
+  pp.host(ABSENT(first));
+  assert.notEqual(pp.state.round.reader, first);
+  assert.ok(pp.state.round.readDone.includes(first));
+});
+
+test('9upper: D4 — 💤 is refused when fewer than 3 seats would be left; an absent 諗樣 on the reveal lets anybody go on', () => {
+  const three = mk(3, 1);
+  assert.equal(three.host(ABSENT('p2')), false, '3 players: nobody can be away');
+  const sim = mk(4, 1);
+  toJudge(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  assert.equal(sim.host(ABSENT(ex[0])), true);
+  assert.equal(sim.host(ABSENT(ex[1])), false, 'a second one would leave 2');
+  assert.equal(sim.host(ABSENT('nobody')), false);
+  assert.equal(sim.host(ABSENT(ex[0])), false, 'already away');
+  sim.act(judge, { type: 'pick', target: ex[0] });
+  assert.equal(phase(sim), 'reveal');
+  sim.host(PRESENT(ex[0]));
+  assert.deepEqual(sim.focus(), { pids: [judge] });
+  assert.equal(sim.host(ABSENT(judge)), true, 'the reveal is scored: no void, just marked');
+  assert.equal(phase(sim), 'reveal');
+  assert.equal(sim.focus(), null, 'focus never names a seat that is away (a shared phone would ask for them)');
+  assert.ok(sim.legal(ex[1]).some((a) => a.type === 'next'), 'anybody present may press 下一輪');
+  assert.equal(sim.act(ex[1], { type: 'next' }), true);
+  assert.notEqual(J(sim), judge);
+});
+
+test('9upper: D5 — 「我識呢條」 only flags the 諗樣\'s 換題 button: public, no swap, no role in sight, cleared by a swap', () => {
+  const sim = mk(5, 2);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  const term = sim.state.round.term.term;
+  const honest = sim.state.round.honest;
+  assert.deepEqual(sim.legal(ex[0]), [{ type: 'know', on: true }]);
+  assert.equal(sim.act(ex[0], { type: 'know' }), true);
+  assert.equal(sim.state.round.term.term, term, 'never swaps by itself');
+  assert.equal(sim.state.round.swaps, 0);
+  assert.equal(sim.state.round.honest, honest);
+  for (const p of [...sim.players.map((x) => x.id), null]) assert.deepEqual(sim.view(p).knows, [ex[0]]);
+  assert.equal(sim.view(ex[0]).mine, null, 'no card yet: the flag cannot say anything about a role');
+  assert.deepEqual(sim.legal(ex[0]), [{ type: 'know', on: false }]);
+  assert.equal(sim.act(ex[0], { type: 'know' }), false, 'idempotent');
+  assert.equal(sim.act(judge, { type: 'know' }), false, 'the 諗樣 just swaps');
+  sim.act(ex[1], { type: 'know' });
+  sim.act(ex[0], { type: 'know', on: false });
+  assert.deepEqual(sim.view(null).knows, [ex[1]]);
+  sim.act(judge, { type: 'swap' });
+  assert.deepEqual(sim.view(null).knows, [], 'a new term: the flags go');
+  sim.act(ex[2], { type: 'know' });
+  sim.act(judge, { type: 'start' });
+  assert.equal(phase(sim), 'read');
+  assert.deepEqual(sim.view(null).knows, []);
+  assert.equal(sim.act(ex[2], { type: 'know' }), false, 'only before the read');
+});
+
+test('9upper: D4 — blocking names exactly the seat the table waits on, never one that is away', () => {
+  const sim = mk(5, 3, { levelMode: 'judge', speakOrder: 'system' });
+  const judge = J(sim);
+  const ids = sim.players.map((p) => p.id);
+  const waitedOn = () => ids.filter((p) => engine.blocking(sim.state, p));
+  assert.deepEqual(waitedOn(), [judge]);                    // level
+  sim.act(judge, { type: 'level', level: 2 });
+  assert.deepEqual(waitedOn(), [judge]);                    // term
+  sim.act(judge, { type: 'start' });
+  assert.deepEqual(waitedOn(), [], 'the shared read has a clock');
+  sim.advance();
+  assert.deepEqual(waitedOn(), [sim.state.round.speaker], 'explaining: the speaker on the floor');
+  sim.act(judge, { type: 'decide' });
+  assert.deepEqual(waitedOn(), [judge]);
+  const free = mk(4, 1, { speakOrder: 'free' });
+  toExplain(free);
+  assert.deepEqual(free.players.map((p) => p.id).filter((p) => engine.blocking(free.state, p)), [], '自己決定: nobody is up');
+});
+
+test('9upper: D4 — fuzz: random voids, absences and returns never leak, never stall, and keep one 諗樣 turn per seat per lap', () => {
+  const seen = { redeal: 0, stuck: 0, absent: 0, skip: 0 };
+  for (const over of [{}, { preset: 'official' }, { speakOrder: 'system', passPhone: true }, { speakOrder: 'free', levelMode: 'judge' }]) {
+    for (let seed = 1; seed <= 25; seed++) {
+      for (const n of [4, 6]) {
+        const sim = mk(n, seed, over);
+        const plan0 = lapCounts(sim.state);
+        const rng = mulberry32(seed * 31 + n);
+        let i = 0;
+        sim.runRandom({
+          onStep(x) {
+            leakCheck(x);
+            const s = x.state;
+            if (s.phase === 'over' || (i++ % 7) !== 0) return;
+            const pid = x.players[Math.floor(rng() * n)].id;
+            const roll = rng();
+            if (roll < 0.15) x.host(VOID);
+            else if (roll < 0.25) x.host(ABSENT(pid));
+            else if (roll < 0.4) x.host(PRESENT(pid));
+            if (x.state.phase !== 'over') {
+              assert.ok(!x.state.absent.includes(x.state.round.judge) || x.state.phase === 'reveal', 'a 諗樣 who is away');
+            }
+            for (const [k, c] of Object.entries(lapCounts(x.state))) assert.ok(c <= (plan0[k] ?? 0), `lap turn ${k} ×${c}`);
+          },
+        });
+        const played = sim.state.history.length;
+        assert.equal(played, sim.state.totalRounds, JSON.stringify({ over, seed, n }));
+        for (const v of sim.state.voids) seen[v.how] += 1;
+      }
+    }
+  }
+  for (const [k, c] of Object.entries(seen)) assert.ok(c > 0, `the fuzz never hit a ${k}`);
+});
+
 // ---------- U1 phase hints ----------
 
 test('9upper: U1 — every phase gives every seat (and the table) a one-line hint that never leaks', () => {
@@ -1531,7 +1838,7 @@ function leakCheck(sim) {
     const isHonest = p === r.honest;
     const myWindow = s.phase === 'read' && (!pass || (r.reader === p && r.readStarted));
     const mayRead = isHonest && (myWindow || ((s.phase === 'explain' || s.phase === 'judge') && s.cfg.rePeek));
-    const holdsCard = p !== null && p !== r.judge && (s.phase === 'explain' || s.phase === 'judge'
+    const holdsCard = p !== null && p !== r.judge && r.explainers.includes(p) && (s.phase === 'explain' || s.phase === 'judge'
       || (s.phase === 'read' && (!pass || r.readDone.includes(p) || (r.reader === p && r.readStarted))));
     assert.equal(json.includes(secret), revealed || mayRead,
       `phase ${s.phase}: seat ${p} ${json.includes(secret) ? 'has' : 'lacks'} the explanation`);
@@ -1554,7 +1861,7 @@ function leakCheck(sim) {
     for (const bad of ['cfg', 'stats', 'cueAck', 'judges', 'players', 'history', 'lastHonest', 'readers']) {
       assert.equal(bad in v, false, `view leaks ${bad}`);
     }
-    assert.deepEqual(Object.keys(v.round), ['n', 'total']);
+    assert.deepEqual(Object.keys(v.round), ['n', 'total', 'key']);
     if (!revealed && !mayRead) assert.deepEqual(paths(v, (x) => x === secret), []);
   }
 }
@@ -2121,6 +2428,82 @@ test('9upper: UI — same-length cards, an honest read the phone can vouch for, 
     sw.act(J(sw), { type: 'swap' });
     t = p2.show();
     assert.ok(t.includes('🔄 換咗題（仲可以換 2 次）'), t);
+  } finally {
+    for (const ui of mounted) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('9upper: UI — 我識呢條, 💤, a fresh deal after 呢輪作廢, and 代佢做 for a speaker shows ⏭ 跳過咗', async () => {
+  const dom = installDom();
+  const mounted = [];
+  try {
+    const { mount } = await import('../js/games/9upper/ui.js');
+    const seatUi = (sim, pid) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const ui = mount(root, { me: pid, players: sim.players, isHost: pid === 'p1', send: (a) => sent.push(a),
+        sfx() {}, toast() {}, now: () => sim.now, components: fc.components, meta, config: sim.config });
+      mounted.push(ui);
+      return { root, sent, show() { ui.update(sim.view(pid), {}); return root.visibleText(); } };
+    };
+    const sim = mk(5, 4, { speakOrder: 'system' });
+    const judge = J(sim);
+    const ex = sim.state.round.explainers;
+    const seats = Object.fromEntries(sim.players.map((p) => [p.id, seatUi(sim, p.id)]));
+    // D5: every 玩家 has the same 「我識呢條」 button; the 諗樣 has none
+    const texts = ex.map((p) => seats[p].show());
+    assert.ok(texts.every((t) => t === texts[0]), 'the term step looks the same on every 玩家\'s phone');
+    assert.ok(!seats[judge].show().includes('我識呢條'));
+    button(seats[ex[1]].root, '我識呢條').click();
+    assert.deepEqual(seats[ex[1]].sent.pop(), { type: 'know', on: true });
+    sim.act(ex[1], { type: 'know', on: true });
+    assert.ok(seats[judge].show().includes(`🙋 ${nameOf(sim, ex[1])} 話識 · 換題`), 'the 諗樣\'s 換題 names who knows it');
+    assert.ok(buttons(seats[judge].root).some((b) => b.className.includes('g9-swap') && b.classList.contains('flagged')));
+    assert.ok(seats[ex[1]].show().includes('已話咗識'));
+    button(seats[ex[1]].root, '已話咗識').click();
+    assert.deepEqual(seats[ex[1]].sent.pop(), { type: 'know', on: false }, 'a second tap takes it back');
+    assert.equal(sim.state.round.term.term, sim.view(null).term.text, 'nothing swapped');
+
+    // 呢輪作廢 → every phone says why there is a fresh deal
+    toExplain(sim);
+    sim.host({ type: ACT.VOID_ROUND });
+    for (const p of sim.players) assert.ok(seats[p.id].show().includes('上一鋪作廢'), p.id);
+    toExplain(sim);
+    for (const p of sim.players) assert.ok(!seats[p.id].show().includes('上一鋪作廢'), 'only over the fresh deal');
+
+    // 代佢做 for the speaker (autoAct) → ⏭ 跳過咗, never ✅ 已講
+    const speaker = sim.state.round.speaker;
+    const auto = engine.autoAct(sim.state, speaker, sim.ctx());
+    assert.equal(sim.act(speaker, auto), true);
+    const row = (u, pid) => u.root.all().find((n) => n.className?.startsWith('g9-speaker ') && n.textContent.includes(nameOf(sim, pid)));
+    seats[judge].show();
+    assert.ok(row(seats[judge], speaker).textContent.includes('⏭ 跳過咗'));
+    assert.ok(!row(seats[judge], speaker).textContent.includes('✅ 已講'));
+
+    // 💤: the list and the scores say so on every phone; the seat itself keeps its card this round
+    const gone = sim.state.round.speaker;
+    sim.host({ type: ACT.ABSENT ?? '@absent', pid: gone });
+    seats[judge].show();
+    assert.ok(row(seats[judge], gone).textContent.includes('💤 唔喺度'));
+    assert.ok(seats[judge].root.all().some((n) => n.className === 'g9-score-name' && n.textContent.endsWith('💤')));
+    // the reveal: the 諗樣 goes too — every other seated phone gets 下一輪
+    sim.act(judge, { type: 'decide' });
+    sim.act(judge, { type: 'pick', target: sim.state.round.explainers[0] });
+    const other = sim.state.round.explainers.find((p) => p !== gone);
+    seats[other].show();
+    assert.ok(!button(seats[other].root, '下一輪'), 'only the 諗樣 while they are here');
+    sim.host({ type: ACT.ABSENT ?? '@absent', pid: judge });
+    seats[other].show();
+    button(seats[other].root, '下一輪').click();
+    assert.deepEqual(seats[other].sent.pop(), { type: 'next' });
+    sim.act(other, { type: 'next' });
+    // next deal: the seat that is away holds no card and sees the table's screen
+    toRead(sim);
+    sim.now += 1000;
+    const txt = seats[gone].show();
+    assert.ok(!txt.includes('你係 9upper') && !txt.includes('你係老實人'), txt);
   } finally {
     for (const ui of mounted) ui.destroy();
     dom.restore();

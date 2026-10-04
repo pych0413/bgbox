@@ -131,10 +131,11 @@ engine.cue(state) → { id, text, minMs } | null       // narration for the curr
 engine.focus(state) → null | { pids: [...], anonymous?: string }
 engine.autoAct(state, pid, ctx) → action | null      // what to do for a stalled player
 engine.result(state) → null | { winners, summary, lines, points?, void?, spectators?, carry? }
-// optional (15.2): blocking · hostActions · canInk;  required: legalActions
+// optional (15.2): blocking · hostActions · canInk · canVoid;  required: legalActions
 engine.blocking?(state, pid) → boolean               // is the game waiting on this seat?
 engine.hostActions?(state) → [{ label, action }]     // extra host-menu buttons, dispatched as '@host'
 engine.canInk?(state, pid) → boolean                 // drawing games, §11
+engine.canVoid?(state) → { ok: true } | { ok: false, message }   // would '@void-round' do anything now? (why not)
 ```
 
 - `players` is `[{ id, name, seat, color }]` in seat order.
@@ -152,8 +153,21 @@ engine.canInk?(state, pid) → boolean                 // drawing games, §11
   `{ type: '@void-round' }` (`ACT.VOID_ROUND` — host chose 呢輪作廢: a phone died or the round got mixed up).
   `@void-round` is **optional**: the engine discards the current round and starts it again (or ends the game
   with `result.void`); an engine that does not support it returns the state unchanged, so
-  `app.hostCtl.voidRound()` returns `false` and the UI toasts 「呢個遊戲唔支援」. It is also refused
-  while the game is paused.
+  `app.hostCtl.voidRound()` returns `false` and the UI toasts 「呢個遊戲唔支援呢輪作廢」. It is also refused
+  while the game is paused. An engine may say **why not** with `engine.canVoid(state)` → `{ ok: false, message }`
+  (「呢輪已經計咗分，㩒「下一輪」就得」): the host's 呢輪作廢 then toasts that message at once, without arming.
+- **Absent seats (decision D4).** `{ type: '@absent', pid }` (`ACT.ABSENT`; games may use the literal) — the host
+  marked this seat absent (a friend left the table, a phone lies dead or forgotten). The seat stops being waited on
+  **for the rest of the current game**: votes, unanimity and majorities count present seats only, ready checks
+  and 睇完 counts skip it, turn order passes it by, and a step it alone was holding up moves on (the engine's
+  own rule, e.g. 間諜: a spy who is absent voids the round). `{ type: '@present', pid }` (`ACT.PRESENT`) brings it
+  back; it is optional even for an engine that takes `@absent`. Both arrive with `pid === '@host'`, like
+  `@void-round`, and are **optional**: an engine without them returns the state unchanged → `false`, the seat is
+  not marked, and the shell toasts 「而家標記唔到 阿明 缺席 — 可以代佢做或者呢鋪唔計」 (an engine may also refuse for
+  its own reason, e.g. too few seats left). Absent seats are **public**: the room view's `absent: [pid]`
+  goes to every phone, and views may show 💤 next to the name. The core keeps the list (`session.absent`, in the
+  snapshot), clears it with the game, and stall detection never flags an absent seat (`session.blocking` is false
+  for it). An engine should also keep absent seats out of `focus` and `blocking`.
 - `hostActions(state)` — the game's own host-only buttons (e.g. 你畫我猜 「＋30 秒」 / 「呢題作廢」). The session
   sanitises the list (≤ 6 entries; `label` non-empty, trimmed to 24 chars; `action` a plain object with a string
   `type`). Only the **host device** is told, as `[{ i, label }]` (the actions themselves never leave the host);
@@ -199,7 +213,10 @@ engine.canInk?(state, pid) → boolean                 // drawing games, §11
 - **Every seat gets something to tap during every night step.** Non-actors get a decoy
   of the same shape and size (e.g. 「㩒一張牌確認你未瞓著」). Tap noise and finger
   movement are then uninformative.
-- Non-host phones mute SFX and dim to a black "閉眼" screen between their own actions.
+- Non-host phones mute SFX and dim to a black "閉眼" screen between their own actions (語音 / 讀稿).
+  In **靜音** eyes stay open, so a lit phone among dark ones would show who is awake: there every seat's phone
+  gets the **same readable ~70 % dim all night**, the awake one included, with the same overlay words (decision D1,
+  §7 Night dim). Engines keep the awake seat's screen the same shape and brightness as a sleeper's.
 
 ## 5. Session & room (host)
 
@@ -216,8 +233,9 @@ The **room view** (`room` message, §15.3) is built field by field from this. Ne
 all seated players sit on the host's device). It is recomputed from the seating on every room view and is what
 games receive as `env.singleDevice` in `config.defaults / validate / presets` (§3). Also in the view:
 `loading` (the picked game's module is still loading), `timer` (the table timer, below), host-only
-`stalled` / `claims` / `versionMismatch`, and per player `offlineSince`, `keep`, `dropAt` (when an offline
-lobby seat will be dropped).
+`stalled` / `idle` / `claims` / `versionMismatch`, and per player `offlineSince`, `keep`, `dropAt` (when an offline
+lobby seat will be dropped). `absent` — the seats the host marked absent this game (D4, §4; public, `[]` outside a
+game). Host-only `idle` — connected seats the table has waited on for stallMs (#9, below).
 
 - **Lobby.** Host picks a game (everyone sees it change), edits config (everyone sees the
   summary), arranges seats to match the real table, starts. Players may pick their colour.
@@ -232,8 +250,17 @@ lobby seat will be dropped).
 - **Late join.** Lobby: normal. Mid-game: spectator (table view) until the next game.
 - **Disconnect.** The seat is kept. If the engine is *blocked on that seat* (`engine.blocking`, §4) for longer
   than `stallMs` (config, default 45 s; the clock restarts whenever the game state changes), the host sees
-  「阿明斷咗線 — 代佢做／呢鋪唔計／再等」. Auto-act uses `engine.autoAct` (abstain, pass, random legal choice);
-  呢鋪唔計 sends `@void-round`.
+  「⚠️ 阿明 斷咗線，成個遊戲等緊佢 — 代佢做 · 💤 當佢缺席 · 呢鋪唔計 · 再等」. Auto-act uses `engine.autoAct` (abstain,
+  pass, random legal choice); 💤 當佢缺席 sends `@absent` (§4, two taps); 呢鋪唔計 sends `@void-round`.
+- **Connected but silent (#9).** iOS keeps the link of a phone put down or taken to the bathroom, so it shows
+  🟢. Such a seat goes on a second host-only list, `idle: [{ pid, since }]`, after stallMs with no state change —
+  but only while **the rest of the table waits for it** (some present seat is not blocked) and no game clock
+  (`state.deadline`) will end the step by itself; a step everybody is in at once (a discussion, a vote nobody has
+  cast) is never pinned on one seat, and neither is a **secret step** (`focus.anonymous`, e.g. the Assassin's pick):
+  there the host device learns only *that* the table waits (`waiting`), never on whom — only a dead phone is named,
+  because nothing else would unfreeze the table. It gets **no banner** — a long table talk before a pick or the assassination
+  looks exactly the same — only the ⋯ menu's 「斷咗線 / 無反應」 rows (🤖 代佢做 · 💤 當佢缺席), and a ⏭ that the
+  engine ignores names it (「跳唔到呢步 — 等緊 阿明…」). Absent seats are on neither list.
 - **Lobby ghosts.** A remote seat that goes offline in the lobby is dropped `LOBBY_GRACE_MS` (180 s — a phone that
   auto-locked for a minute or two keeps its seat and its place) later unless
   the host keeps it (`keepSeat`, banner 「保留個位」). Mid-game seats are always kept.
@@ -272,7 +299,7 @@ must be idempotent. Local, uncommitted UI state (a half-picked target) lives in 
 The UI is mounted once per (game, seat): switching seat on a shared phone destroys it and mounts a fresh one.
 
 Besides the game's own fields, the shell reads a few **optional, conventional view fields** (`night`,
-`title`, `subtitle`, `hint`, `roleId`, `hintRoleLabel`, `canDraw`) — listed in 15.2.
+`title`, `subtitle`, `hint`, `roleId`, `hintRoleLabel`, `hintRoleText`, `canDraw`) — listed in 15.2.
 
 ## 7. Devices, seats and single-device play
 
@@ -295,10 +322,17 @@ Two people can share a phone (someone's battery died); one phone can hold every 
   phone to that seat when tapped; otherwise it is a **decoy**: tapping it changes nothing. A shared phone
   therefore never shows whether a role is here, elsewhere or absent. While the step is anonymous the seat chip
   reads 「🤫 而家係秘密步驟」 and the seat switcher lists 「座位 N」 without names or 輪到 badges.
-- **Night dim.** `view.night` makes the phone dark and silent between that seat's own steps (unless `focus`
-  names it). On a device holding **2+ seats the dim is fully opaque and swallows taps** — the screen underneath
-  belongs to whoever held the phone last; on a single-seat phone it is near-black but still tappable, so decoy
-  buttons keep working (§4 anti-tell).
+- **Night dim** (`logic.nightChrome`, `js/ui/night.js`). `view.night` makes the phone dim and silent:
+  - **語音 / 讀稿** (eyes closed): near-black (95 %) between that seat's own steps, lifted while `focus` names it;
+    the overlay says 「閉 眼 · 🌙 可以將螢幕調暗啲」.
+  - **靜音** (decision D1; eyes stay open, so brightness would be a tell): **one readable ~70 % dim on every
+    single-seat phone all night** — the awake / focus seat gets **no lift**, nothing fades at a window's edges, and
+    the overlay words are the same on every phone (「夜 晚 · 🌙 可以將螢幕調暗啲」, never 閉眼). SFX are muted on
+    every phone alike.
+  - On a device holding **2+ seats** focus still drives the pass gate: a seat that is not called is covered by
+    an **opaque** layer that swallows taps (the screen underneath belongs to whoever held the phone last); the
+    called seat sees its screen (in 靜音 under the same soft dim). On a single-seat phone every level stays
+    tappable, so decoy buttons keep working (§4 anti-tell).
 - Votes and other simultaneous secret actions become sequential on a shared device;
   engines already accept actions in any order, so nothing changes for them.
 - `meta.singleDevice` tells the picker how well a game works on one phone, and the
@@ -331,7 +365,7 @@ Host → client
 | t | payload |
 |---|---|
 | `welcome` | `{ v, build, device, seats: [{ id, token, name }], room, views }` — re-sent when this device's seat list changes |
-| `room` | room view (15.3): players, seats, colours, game, config summary, phase, scores, narration, `singleDevice`, timer … — `stalled`, `claims`, `versionMismatch` carry data for the host device only |
+| `room` | room view (15.3): players, seats, colours, game, config summary, phase, scores, narration, `singleDevice`, timer, `absent` … — `stalled`, `idle`, `claims`, `versionMismatch` carry data for the host device only |
 | `views` | `{ rev, hostNow, bySeat: { pid: view }, table: view, focus, canInk }` — only this device's playing seats; `focus` is filtered to them (§4); `canInk` = those of them `engine.canInk` allows to draw now. **Host device only:** `cue` (`{ id, text }`), `hostActions` (`[{ i, label }]`, §4), `waiting` (bool, §4) |
 | `ack` | `{ id, ok }` — after the views the action produced; `ok` = it changed the game (false = refused) |
 | `claimWait` | `{ pid, name }` — the claim waits for the host's approval |
@@ -418,7 +452,9 @@ the only stream kept outside views. A spectator-only device gets `table` and no 
 - `tests/lib.mjs` mirrors the core contracts: `Sim(game, { n, seed, config, hostPid = 'p1', carry, singleDevice })`
   calls `setup` and `config.defaults(n, undefined, { singleDevice })` exactly as the Room does; `makeBag` has
   `draw`, `release` and `stats` like `core/bag.js`. `tests/core.test.mjs` covers session / room / app (focus
-  filtering, `result.void` / `spectators` / `carry`, `hostActions`, `@void-round`, keepsake, `resumeInfo`).
+  filtering, `result.void` / `spectators` / `carry`, `hostActions`, `@void-round`, `canVoid`, `@absent` /
+  `@present`, idle stalls, keepsake, `resumeInfo`). `tests/ui-logic.test.mjs` runs the shared components and the
+  play screen under a fake DOM (two-tap confirms, the 靜音 night chrome being identical on every seat, 💤).
 - Browser: two-tab and single-device runs per game before each release.
 
 ## 15. Implementation contracts (binding — parallel agents build against these)
@@ -446,6 +482,7 @@ js/ui/logic.js                pure UI rules, Node-testable: fits, teamStyle, ran
 js/ui/hints.js                the 💡 sheet (15.11)
 js/ui/ink.js                  Canvas maths (smoothing, outbox, ids) + paintStrokes, shared with the keepsake PNG
 js/ui/{timer,status,settings,preflight,sheet,dom}.js   table timer UI, notice layer, ⚙️, pre-flight check, bottom sheet, DOM helpers
+js/ui/night.js                the night overlay (dark · soft · opaque), driven by logic.nightChrome (§7)
 js/ui/components/<Name>.js    one file per component (15.7)
 js/games/registry.js          export const GAMES = [{ id, meta, load: () => import('./<id>/index.js?v=N') }]
 js/games/<id>/game.js         PURE: export const meta, rules, config, engine — Node-importable, imports only engine-kit and js/data
@@ -478,8 +515,9 @@ Every relative import and every `href`/`src` to our own files carries `?v=N`
   `views` message carries `canInk: [pid]` for its own playing seats the engine lets draw now (the session
   answers false while paused or after the game), → `app.state.canInk`; the shell folds the narrator bar for
   those seats.
-- `engine.blocking?(state, pid) → bool`, `engine.hostActions?(state) → [{ label, action }]` and the
-  `@void-round` host action — semantics in §4. All optional.
+- `engine.blocking?(state, pid) → bool`, `engine.hostActions?(state) → [{ label, action }]`,
+  `engine.canVoid?(state) → { ok, message? }` and the `@void-round`, `@absent` / `@present` host actions — semantics
+  in §4. All optional.
 - `config.defaults(n, prev, env)` must return a config valid for every n in `meta.players`; `env` is optional
   (§3). `config.validate(cfg, n, env)` and `config.presets?(n, env)` take the same optional `env`;
   `config.fields(cfg, n, { bag })` gets the content bag for 「已用 / 總數」 counts.
@@ -493,11 +531,12 @@ Every relative import and every `href`/`src` to our own files carries `?v=N`
 
 | view field | read by | meaning |
 |---|---|---|
-| `night: true` | play screen | dims the screen and mutes SFX for this seat unless `focus` names it; fully opaque on a device holding 2+ seats (§7) |
+| `night: true` | play screen | dims the screen and mutes SFX (§7): 語音 / 讀稿 — near-black for this seat unless `focus` names it; 靜音 — the same readable ~70 % dim on every seat all night, the awake one included (D1); opaque for an uncalled seat on a device holding 2+ seats |
 | `title`, `subtitle` | top bar | |
 | `hint` (string or `{ text }`) | 💡 sheet | one line 「而家要做咩」 for a first-timer, for every phase |
 | `roleId` | 💡 sheet | the seat's **own** role id, matched against `rules.roles` — never anybody else's; omit it (undercover) when the role is secret even from its holder, and the sheet lists every role instead |
 | `hintRoleLabel` | 💡 sheet | relabels the 「你嘅角色」 heading (≤ 20 chars), e.g. 「你派到嘅角色」 where cards change hands |
+| `hintRoleText` | 💡 sheet | the seat's own role text **for this table** (≤ 400 chars), preferred over the generic `rules.roles` text: a string written 「做乜：… 點贏：…」 or `{ what, win }` — e.g. 狼人殺 prints only the win rule this table plays (屠邊 / 屠城) and the side's own goal. Only in that seat's own view (it is as secret as the role); ignored when no own role is found |
 | `canDraw` | game UI, play screen | this seat may ink now (the UI passes it to `Canvas`); the play screen prefers `state.canInk` and falls back to `view.canDraw` / `view.draw.canDraw` to fold the narrator bar. (`canInk` itself is **not** a view field: it travels beside the views, `views.canInk` → `state.canInk`, computed from `engine.canInk`) |
 | `recent` | play screen (`RecentFold`, under the game UI) | **public** "what just happened" folds, so a result that flashed for a few seconds can be found again (#10): one fold or an array (max 4) of `{ id?, title, lines?, entries?: [{ title?, lines }], open? }`; a line is a string, `{ text }`, or a ballot `{ from: pid, to: pid \| null }` (shown 「阿明 → 小美」, null = 棄權). E.g. `[{ id: 'votes', title: '📜 之前嘅投票', entries: [{ title: '第 2 日', lines: [{ from, to }, …] }, …] }, { id: 'night', title: '🌅 昨晚', lines: ['2號阿明 出局'] }]`. Newest entry first; empty folds are dropped; a fold starts **closed** unless `open: true` and keeps its open/closed state across updates. Must be identical in every seat's view (and the table view) — never a secret. A game that wants the fold somewhere else in its own layout renders `api.components.RecentFold` itself from another field instead |
 
@@ -545,7 +584,9 @@ app.state = {
     scoreboard: { [pid]: { played, wins, points } }, history: [{ gameId, winners, summary, void? }],
     narration: { mode: 'voice' | 'read' | 'silent' }, paused: false,
     timer: null | { id, label, totalMs, endsAt, remainingMs, paused, done },   // table timer, host clock (§5)
-    stalled: [{ pid, since }],                         // host only: seats the session is waiting on
+    stalled: [{ pid, since }],                         // host only: seats the session is waiting on, phone away
+    idle: [{ pid, since }],                            // host only: the same, phone connected but silent (#9)
+    absent: [pid],                                     // D4: seats marked absent this game (public)
     claims: [{ pid, name, deviceId, at }],             // host only: phones asking for an offline seat back
     versionMismatch: [{ pid, build }],                 // host only: seats on a phone with another build stamp
     lastResult: null | { gameId, winners, summary, lines, points, void?, noScore?, linesTitle? },   // void: 呢鋪唔計
@@ -622,7 +663,11 @@ app.results.toLobby()
 // host controls — all return booleans, false when not the host (or not playing)
 app.hostCtl.pause(); app.hostCtl.resume(); app.hostCtl.next(); app.hostCtl.autoAct(pid)
 app.hostCtl.voidRound()            // dispatches '@void-round' (§4): true iff the engine changed state; false if it
-                                   // does not support it, the game is paused, or it is not playing — the UI toasts 「呢個遊戲唔支援」
+                                   // does not support it, the game is paused, or it is not playing — the UI toasts
+                                   // engine.canVoid's message, else 「呢個遊戲唔支援呢輪作廢」
+app.hostCtl.canVoid() → { ok, message } | null   // engine.canVoid (null: the game does not say); read-only
+app.hostCtl.markAbsent(pid) / markPresent(pid)   // D4 '@absent' / '@present' (§4): true iff the engine changed state;
+                                   // false: the game cannot, already so, paused, not playing. state.room.absent = [pid]
 app.hostCtl.hostAction(i, label)   // one of state.hostActions: pass its `i` and `label`; false if stale (§4)
 app.hostCtl.timer.start(ms, label?) / .pause() / .resume() / .add(ms) / .stop()   // the table timer (§5)
 app.narration.setMode('voice' | 'read' | 'silent')
@@ -667,7 +712,10 @@ session.stop() / poke()         // stop = game over; poke = re-check the deadlin
 session.setNarrationMode(mode)  // only 'silent' makes the session complete cues by itself
 session.view(pid) / session.table() / session.focus() / session.cue() / session.result()   // fresh JSON copies
 session.legal(pid) → action[]   // engine.legalActions
-session.blocking(pid) → bool    // engine.blocking → focus.pids → legalActions (§4)
+session.blocking(pid) → bool    // engine.blocking → focus.pids → legalActions (§4); always false for an absent seat
+session.setAbsent(pid, away) → bool   // dispatch(HOST, { type: '@absent' | '@present', pid }); session.absent (seat order,
+                                // snapshotted) changes only when the engine changed state. isAbsent(pid)
+session.canVoid() → { ok, message } | null   // engine.canVoid, sanitised (message ≤ 60 chars); null if none / threw
 session.hostActions() → [{ label, action }]   // engine.hostActions, sanitised (≤ 6, label ≤ 24 chars, plain-object actions)
 session.canInk(pid) → bool      // engine.canInk; false when the engine has none, while paused, and after stop()
 session.deadline() → ms | null
@@ -677,7 +725,7 @@ session.snapshot() / Session.restore(snap, deps)   // a restored session starts 
 ```
 
 `ctx.now` handed to engines is a number (host ms at the call), not a function. `HOST` = `'@host'` and `ACT`
-(`CUE_DONE`, `NEXT`, `AUTO`, `VOID_ROUND`) come from `js/core/engine-kit.js`.
+(`CUE_DONE`, `NEXT`, `AUTO`, `VOID_ROUND`, `ABSENT`, `PRESENT`) come from `js/core/engine-kit.js`.
 
 ### 15.5 Bag (js/core/bag.js)
 
@@ -732,7 +780,7 @@ full props again. All styles live in css/base.css under `.c-<name>`.
 | `RoleCard` | `{ role: { emoji, name, team, text } \| null, locked, onLockToggle, hint, lockLabels?, ariaLabel? }` — Cover + 🔒 button underneath. For a card that is not a role (誰是臥底's word): `lockLabels: { lock, locked, message }` rewords the 🔓 button, its locked face and the refusal toast; `ariaLabel` the cover's label; `hint: ''` hides the hint line |
 | `DiceCup` | `{ dice: [n] \| null, sides, rollSeq, canRoll, lockedRoll, onRoll, onLock, shakeToRoll: true }` — cup art, hold to peek, roll button, lock-roll button, shake detector |
 | `PlayerPicker` | `{ players, me, count: 1, exclude: [pid], selected: [pid], disabled, onChange(sel), confirmLabel, onConfirm(sel) }` |
-| `VotePanel` | `{ players, candidates: [pid], me, myVote, allowAbstain, progress: { done, total }, reveal: null \| { counts, top, votes? }, onVote(pid \| null), allowChange?, title?, colorOf?, secretChoice? }` — the progress line (「已投 2/5」 + pips) is updated **in place**; rows and 確定 are rebuilt only when candidates, `myVote`, the local pick, the options or the reveal change, so a ballot arriving mid-press never swallows a tap (#15). `colorOf(pid)` → the dot colour (假畫家's pen colours), falling back to `player.color`. `secretChoice` (default **off**, decision D14): the button reads 「確定投票」 and the voted state 「已投 ✓」, with no name and no row lit |
+| `VotePanel` | `{ players, candidates: [pid], me, myVote, allowAbstain, progress: { done, total }, reveal: null \| { counts, top, votes? }, onVote(pid \| null), allowChange?, title?, colorOf?, secretChoice? }` — the progress line (「已投 2/5」 + pips) is updated **in place**; rows and 確定 are rebuilt only when candidates, `myVote`, the local pick, the options or the reveal change, so a ballot arriving mid-press never swallows a tap (#15). `colorOf(pid)` → the dot colour (假畫家's pen colours), falling back to `player.color`. `secretChoice` (default **off**; hidden-role games turn it on — decision D6 of 2026-10-04, summary item D14): the button reads 「確定投票」 and the voted state 「已投 ✓」, with no name and no row lit |
 | `Timer` | `{ deadline, now: () => ms, label, paused, warnAt: [60, 10] }` — plays sfx at warnings/zero |
 | `RulesSheet` | `RulesSheet.open(game)` / `.close()` — modal from `game.rules` |
 | `NarratorBar` | `{ cue, mode, onReplay, onNext, onMode, paused?, onPause?, onSkip?, stalled?, line?, reason?, compact?, hidden?, confirmNext? }` — `stalled` (+ `line`, `reason`) = the phone was asked to speak and nothing came out: big text, 🔁 重講, ⏭ 跳過 (`onSkip`), 下一步. `compact` (the play screen sets it while this phone's seat can draw — `state.canInk` / `view.canDraw`) folds the bar to one line (icon, line, 下一步) with a ▴ to open it for this turn. The host's skip is a small **ghost** 「⏭ 跳過呢步」 (#13); only the 讀稿 narrator with a line to read (or a stalled line) gets the big primary 「下一步 ⏭」. `confirmNext` (string) = skipping now would cut somebody off: the first tap arms the button 「再㩒一次：…」, only a second tap within ~3 s calls `onNext`. 下一步 ignores a second tap within 1.5 s of a real one |
@@ -841,22 +889,32 @@ Optional props (safe to omit):
 | `scoreboardMode(rows)` | `{ points, earned(row) }`: is there a 分數 column tonight; may a row wear a medal (#39) |
 | `resultHero(result, meta)`, `confettiSet(meta)` | the results headline (#39, see below); confetti with the game's own emoji |
 | `recentFolds(recent)` | `view.recent` → `[{ key, title, open, entries: [{ title, lines }] }]` (§15.2) |
+| `nightChrome({ seat, night, inFocus, mode, shared })`, `NIGHT_WORDS` | the night overlay `{ on, level: 'dark' \| 'soft' \| 'opaque' \| null, words }` (§7): in 靜音 the same for every seat (D1); `words` depend on the mode only |
+| `hintRoleText(view)` | `view.hintRoleText` as one 「做乜：… 點贏：…」 string ('' if none); `roleFor` puts it in place of the rules text |
 
 **💡 sheet** (`js/ui/hints.js`, `HintSheet(sh, { onRules }) → { open(game, view), update(game, view), close(), isOpen() }`)
 — **on demand only**: it opens when the player taps 💡 (top bar or ⋯ menu) and never by itself. Sections:
 「而家要做咩」 (`view.hint`), 「你嘅角色」 (role card from `roleFor`: the game's `rules.roles` entry for `view.roleId`,
 behind the same hold-to-peek `Cover` as a role card, so a glance from the next seat sees nothing; heading from
-`view.hintRoleLabel` if present), and 「📖 睇晒成套規則」. A game with no own-role field (undercover) lists every role
+`view.hintRoleLabel` if present; **text from `view.hintRoleText` if present** — this table's rule, e.g. 狼人殺's win
+condition — else the `rules.roles` text), and 「📖 睇晒成套規則」. A game with no own-role field (undercover) lists every role
 of the game instead. It follows the live view while open and **closes whenever the phone changes hands** (seat
 switch, pass gate).
 
-**Play screen** (`screens/play.js`), host ⋯ menu: ▶/⏸ · ⏭ 跳過呢步 · 🗑️ 呢輪作廢 (two taps → `hostCtl.voidRound()`; toast
-「呢個遊戲唔支援」 when it returns false, 「暫停緊 — 先㩒「繼續」」 while paused) · one 「🎛️ label」 per
+**Play screen** (`screens/play.js`), host ⋯ menu: ▶/⏸ · ⏭ 跳過呢步 (a skip the engine ignores toasts 「跳唔到呢步 — 要等人
+自己做…」, #9) · 🗑️ 呢輪作廢 (two taps → `hostCtl.voidRound()`; when `hostCtl.canVoid()` says no, its message at once and
+nothing armed; when it returns false, that message or 「呢個遊戲唔支援呢輪作廢」; 「暫停緊 — 先㩒「繼續」」 while paused) ·
+**💤 標記缺席…** (D4: the sheet turns into a seat picker in place — 「💤 阿明」 takes two taps → `hostCtl.markAbsent`;
+an absent seat reads 「👋 阿明 返咗嚟」, one tap → `markPresent`; ‹ 返回; a refusal toasts) · one 「🎛️ label」 per
 `state.hostActions` entry (`hostCtl.hostAction(i, label)`; toast 「而家做唔到」 on false) · ⏱️ · narration mode ·
-「🤖 代 X 做」 per stalled seat · 🚪 離開房間 (two taps). Every confirm is the in-page arm-then-confirm (`sh.confirm`,
+「🤖 代 X 做」 + 「💤 當 X 缺席」 per seat in `room.stalled` or `room.idle` (「斷咗線 / 無反應」) · the connection list
+(💤 缺席 tag) · 🚪 離開房間 (two taps). Every confirm is the in-page arm-then-confirm (`sh.confirm`,
 never a native dialog, #3): the row stays open on the first tap and reads 「再㩒一次：…」. ⏭ 跳過呢步 (menu and narrator
 bar) takes two taps when `logic.skipNeedsConfirm` says skipping would cut somebody off (#13). A stalled seat also gets
-a banner: **代佢做 · 呢鋪唔計 · 再等** (rebuilt only when it changes, so an armed 呢鋪唔計 keeps its label). The narrator
+a banner — 「⚠️ 阿明 斷咗線，成個遊戲等緊佢」 — with **代佢做 · 💤 當佢缺席 · 呢鋪唔計 · 再等** (💤 and 呢鋪唔計 take two
+taps; rebuilt only when it changes, so an armed button keeps its label). A connected seat nobody answers on
+(`room.idle`, #9) gets no banner, only the ⋯ rows 🤖 代 X 做 · 💤 當 X 缺席, and the ⏭ toast names it. The night overlay follows
+`logic.nightChrome` (§7). The narrator
 bar is compact while `state.canInk` (or `view.canDraw`) names this phone's seat. The header's 「輪到你」 follows
 `logic.turnBadge` and sits **before** the subtitle (a long subtitle's ellipsis never hides it). Under the game UI,
 `view.recent` renders as `RecentFold` (#10). Shared-phone behaviour: §7.
@@ -865,7 +923,10 @@ bar is compact while `state.canInk` (or `view.canDraw`) names this phone's seat.
 included) push the page and the sticky play header down, so 💡 📖 ⋯ → 🚪 stay reachable. A **guest** stuck behind it
 for 30 s (the host has gone) also gets 🚪 離開 inside the bar (two taps). `sh.leave(node?)` / `sh.confirm(text, node?,
 opts?)` are the shell's own arm-then-confirm entry points (lobby ‹ and ✕ 踢走 and results 🚪 go through them; ConfigForm's
-↺ 重置 calls `confirmTap` itself).
+↺ 重置 calls `confirmTap` itself). 📋 複製連結 (lobby, the in-app-browser card) uses `dom.copyBox()`: when the clipboard
+refuses, the link appears in the page as a selected read-only field (「㩒住條連結 → 揀「拷貝」」) — never
+`window.prompt`. DiceCup's motion-permission lines say 「iPhone」 / Safari only on a real iPhone / iPad
+(`shake.isIOS`, `motionWords`; neutral 「部機」 wording elsewhere, #38).
 
 **Results screen** (`screens/results.js`): hero (#39, `logic.resultHero`) — the game's emoji + name as a small
 kicker line, then the **result** as the headline: the game's `summary` (every scoring game writes it as the result,
@@ -890,7 +951,8 @@ room.kick(pid) · keepSeat(pid, keep) · applySavedOrder() · approveClaim(pid) 
 room.start() → { ok, message, warnings? }  ·  room.again()  ·  room.toLobby()   // toLobby also aborts a running game (nothing scored)
 room.act(deviceId, pid, action) → bool          // the seat's own device only; '@…' types and > 8 KB refused
 room.ink(deviceId, pid, payload) → bool
-room.pause() · resume() · next() · cueDone(id) · autoAct(pid) · voidRound() · hostAction(i, label?) · setNarrationMode(mode) · poke() · hostBack(awayMs)
+room.pause() · resume() · next() · cueDone(id) · autoAct(pid) · voidRound() · canVoid() · hostAction(i, label?) · setNarrationMode(mode) · poke() · hostBack(awayMs)
+room.markAbsent(pid) · markPresent(pid)        // D4 '@absent' / '@present' as the host; room view `absent`; stalls skip them
 room.timerStart(ms, label?) · timerPause() · timerResume() · timerAdd(ms) · timerStop()
 room.snapshot() · close(reason) · dispose() · currentCue() · seatedCount · player(pid) · seatsOfDevice(id) · deviceOfPeer(peerId)
 export filterFocus(focus, seatIds)   // §4: what one device may learn about focus

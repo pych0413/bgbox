@@ -272,7 +272,7 @@ export const CONFIG = {
     revealSecs: '每個人睇同一段時間，唔會因為有人睇完就提早完。0＝冇倒數，每人睇完自己㩒「我睇完」（一部手機玩會自動用 0）。',
     questSecs: '隊員喺呢段時間內出牌，時間到先公佈結果，咁就睇唔出邊個出得快慢。0＝全部出完即刻公佈（一部手機玩會自動用 0）。',
     discussSecs: '0＝唔計時。時間到只係響鬧提醒，唔會自動決定隊伍。',
-    assassinSecs: '0＝唔計時。時間到只係響鬧提醒。',
+    assassinSecs: '夠鐘只係提醒：唔會自動揀，刺客幾時揀都得，房主可以加時。0＝唔計時。',
     lady: '官方建議 7 人或以上先用。',
   },
   warn: {
@@ -292,7 +292,7 @@ export const CONFIG = {
     reveal: (s) => (s > 0 ? `⏱ 睇身份 ${s} 秒（人人一樣長）` : '⏱ 睇身份：每人睇完自己㩒'),
     quest: (s) => (s > 0 ? `出牌 ${s} 秒（時間到先公佈）` : '出牌：出齊即公佈'),
     discuss: (s) => `組隊討論 ${s} 秒（只係提醒）`,
-    assassin: (s) => `刺殺商量 ${s} 秒（只係提醒）`,
+    assassin: (s) => `刺殺商量 ${s} 秒（只係提醒，唔會自動揀）`,
     flip: '刺殺前邪惡亮牌',
     onePhone: '📱 一部手機玩：唔計時，逐個交電話',
     oberon: (merlin, lady) => `奧伯倫：梅林${merlin ? '睇到' : '睇唔到'}，女神驗到${lady ? '好人' : '邪惡'}`,
@@ -433,6 +433,7 @@ export function endSummary({ reason, assassin, target, merlin }) {
     case 'five-rejections': return '邪惡陣營贏 — 同一個任務連續五次被否決';
     case 'assassinated-merlin': return `邪惡陣營反敗為勝 — 刺客 ${assassin} 刺中梅林 ${target}`;
     case 'assassin-missed': return `好人贏 — 刺客 ${assassin} 刺錯 ${target}，梅林係 ${merlin}`;
+    case 'no-shot': return '好人贏 — 邪惡陣營冇人喺度刺殺';
     default: return '完咗';
   }
 }
@@ -447,6 +448,8 @@ export function endWhy({ reason, assassin, target, targetRole, merlin, failedNos
       return `好人完成咗三個任務，但係刺客 ${assassin} 刺中梅林 ${merlin}，邪惡陣營反敗為勝。`;
     case 'assassin-missed':
       return `好人完成咗三個任務，刺客 ${assassin} 刺咗 ${target}（${roleLabel(targetRole)}），但係梅林係 ${merlin}，好人贏。`;
+    case 'no-shot':
+      return '好人完成咗三個任務；邪惡陣營全部都唔喺度（💤），冇人刺殺，好人贏。';
     default: return '';
   }
 }
@@ -472,9 +475,10 @@ export const RECAP = {
   twoFail: '　（呢個任務要兩張失敗先算失敗，得一張失敗所以仍然成功）',
   autoPlayed: (names) => `　（${list(names)} 冇出牌，由系統代出成功）`,
   votesHead: '── 🗳 提議同投票記錄 ──',
-  proposal: ({ q, no, leader, team, approved, approves, rejects, yes, no_ }) =>
+  proposal: ({ q, no, leader, team, approved, approves, rejects, yes, no_, away = [] }) =>
     `任務 ${q} · 第 ${no} 次提議：隊長 ${leader} 揀 ${list(team)} → ${approved ? '通過' : '否決'} ${approves}:${rejects}`
-    + `（贊成：${yes.length ? list(yes) : '冇'}；反對：${no_.length ? list(no_) : '冇'}）`,
+    + `（贊成：${yes.length ? list(yes) : '冇'}；反對：${no_.length ? list(no_) : '冇'}${away.length ? `；💤 冇投：${list(away)}` : ''}）`,
+  absent: (names) => `💤 中途唔喺度：${list(names)}（冇投票、出牌當成功）`,
   voidsHead: '── ⏭ 主持「呢鋪唔計」 ──',
   voided: ({ q, no, phase, leader }) => (phase === 'pick'
     ? `任務 ${q}：隊長 ${leader} 冇揀到隊，傳俾下一位（唔算否決）`
@@ -498,6 +502,7 @@ export const T = {
     trackSuffix: (k) => `${k}/5`,
     twoFail: '兩張失敗先算失敗',
     leader: '隊長',
+    away: '唔喺度',
     lady: '湖中女神',
     team: '隊員',
   },
@@ -566,6 +571,7 @@ export const T = {
     waiting: (leader) => `等 ${leader} 繼續…`,
     yes: '贊成',
     no: '反對',
+    away: (names) => `💤 冇投：${names}`,
   },
   quest: {
     title: '出任務牌',
@@ -619,6 +625,8 @@ export const T = {
     flipped: '已公開嘅邪惡角色',
     timerLabel: '商量時間',
     anonymous: '刺客請拎起部手機',
+    overtime: '⏰ 夠鐘 — 等刺客揀，唔會自動揀',
+    extend: '⏱️ 刺殺 ＋60 秒',
   },
   shot: {
     title: '刺殺結果',

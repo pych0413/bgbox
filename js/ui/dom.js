@@ -232,6 +232,47 @@ export function installConfirmShim(win, doc) {
   }
 }
 
+// ---------- 📋 copy a link, never a native prompt (#3) ----------
+
+/** Select all of a text field (iOS needs setSelectionRange as well as select()). */
+export function selectAll(field) {
+  try { field.focus?.(); field.select?.(); field.setSelectionRange?.(0, String(field.value ?? '').length); } catch { /* not focusable now */ }
+}
+
+/**
+ * copyBox() → { el, copy(text, done?) }. `copy` puts `text` on the clipboard and toasts `done`; when the clipboard
+ * refuses (no permission, an in-app browser, an older iOS) it shows `text` in an in-page, read-only field — selected,
+ * with 「㩒住條連結 → 拷貝」 — inside `el` (hidden until then), instead of window.prompt, which would freeze the page
+ * (on the host's phone: the room's server). Resolves true when it copied.
+ */
+export function copyBox({ label = '㩒住條連結 → 揀「拷貝」' } = {}) {
+  const field = el('input', {
+    type: 'text', class: 'copy-field', readonly: true, 'aria-label': '連結', autocomplete: 'off', spellcheck: 'false',
+    onfocus: (e) => selectAll(e.currentTarget), onclick: (e) => selectAll(e.currentTarget),
+  });
+  const box = el('div', { class: 'copy-box' }, el('span', { class: 'hint', text: label }), field);
+  box.hidden = true;
+  return {
+    el: box,
+    field,
+    async copy(text, done = '連結已複製') {
+      const value = String(text ?? '');
+      try {
+        await navigator.clipboard.writeText(value);
+        box.hidden = true;
+        toast(done);
+        return true;
+      } catch {
+        field.value = value;
+        box.hidden = false;
+        selectAll(field);
+        toast('自動複製唔到 — 用下面條連結', 2600);
+        return false;
+      }
+    },
+  };
+}
+
 /** Stable JSON key for "did these props change?" checks. */
 export function sig(x) {
   try { return JSON.stringify(x); } catch { return String(Math.random()); }

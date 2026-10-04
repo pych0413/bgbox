@@ -1094,7 +1094,8 @@ function guess(s, ctx, pid, a) {
   const end = endOf(s);
   if (ctx.now > end) return s;                          // after the clock: its advance is about to end the turn
 
-  const res = analyse(text, t.word, s.cfg.strictness);
+  // the revealed characters are public: a near miss on them alone is not 好接近 (D9, docs/research/draw-guess.md A.5)
+  const res = analyse(text, t.word, s.cfg.strictness, maskView(t).cells);
   if (!res.g) return s;                                 // nothing left after dropping punctuation and symbols
   const seen = (t.seenG[pid] ??= []);
   if (seen.includes(res.g)) return s;                   // identical guess this turn: ignored silently

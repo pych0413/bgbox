@@ -1849,8 +1849,9 @@ test('onuw: 💡 view.hintRoleLabel — every seat view that shows the dealt rol
 // ============================================================
 
 const VIEW_KEYS = new Set(['seat', 'phase', 'n', 'title', 'subtitle', 'night', 'roleList', 'opts', 'deadline', 'timerLabel', 'ready',
-  'step', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'hintRoleLabel', 'voided']);
-const MY_KEYS = new Set(['dealt', 'ready', 'acked', 'night', 'notes']);
+  'step', 'my', 'dayReady', 'canExtend', 'progress', 'ring', 'candidates', 'myVote', 'reveal', 'revealDone', 'hint', 'hintRoleLabel', 'voided',
+  'absent']);   // D4: the public list of seats the host marked 💤
+const MY_KEYS = new Set(['dealt', 'ready', 'acked', 'night', 'notes', 'absent']);
 const NIGHT_KEYS = new Set(['awake', 'info', 'ab', 'copied', 'seen']);
 const SECRET_KEYS = ['cards', 'centre', 'orig', 'dop', 'log', 'votes', 'moves', 'final', 'report', 'why', 'recap', 'dealtCentre', 'counts', 'ringAgree'];
 
@@ -1903,6 +1904,7 @@ function checkViews(sim) {
     assert.equal(v.title, table.title);
     assert.equal(v.subtitle, table.subtitle);
     assert.equal(v.night, table.night);
+    assert.deepEqual(v.absent, table.absent, 'the 💤 list is public and the same for everybody');
   }
   if (pre) {
     assert.equal(JSON.stringify(engine.view(scrambled(s, null), null)), JSON.stringify(table), 'the table view depends on hidden state');
@@ -2697,7 +2699,7 @@ test('onuw ui: the doppelgänger\'s copy and its instructions are only behind th
       assert.ok(nightBookOf(d).front.includes('預言家：中間第 1 張係 🧵 皮匠'), 'the look lands behind the cover');
       assert.ok(!nightBookOf(d).front.includes(S.T.hint.doppelNow('seer', false)), 'and the "act now" line is gone');
     });
-    // the cover is a fixed 5:2 box held open by a finger (no scrolling on a phone): the copy note and the act-now line
+    // the cover is a fixed 2:1 box held open by a finger (no scrolling on a phone): the copy note and the act-now line
     // must fit together, so the act-now line is the short form (measured: copy note + it fit at 360–414 px)
     for (const [ab, m] of [['seer', false], ['robber', false], ['troublemaker', false], ['drunk', true]]) {
       const t = S.T.hint.doppelNow(ab, m);
@@ -3114,4 +3116,271 @@ test('onuw in a real Room: a phone that drops is never flagged at night or in th
   const last = [...sent].reverse().find((x) => x.deviceId === 'dev_host' && x.msg.t === 'room').msg.room.lastResult;
   assert.equal(JSON.stringify(last).includes('carry'), false);
   assert.deepEqual(room.carries.onuw, { wolves: dealtWolves });
+});
+
+// ============================================================
+// decisions 2026-10-04: D4 absent seats, D6 secret own vote, a 📓 night cover that holds 3+ notes
+// ============================================================
+
+const ABSENT = (pid) => ({ type: ACT.ABSENT ?? '@absent', pid });
+const PRESENT = (pid) => ({ type: ACT.PRESENT ?? '@present', pid });
+
+test('onuw: @absent at the deal — the night does not wait; @present counts the seat again; bad input changes nothing (D4)', () => {
+  const sim = uiGame(5, 3);
+  for (const p of ['p1', 'p2', 'p3']) sim.act(p, { type: 'ready' });
+  assert.deepEqual(sim.view('p1').ready, { done: 3, total: 5 });
+  assert.ok(sim.host(ABSENT('p4')));
+  assert.deepEqual(sim.view('p1').ready, { done: 3, total: 4 }, 'the count is of the seats the night waits for');
+  assert.deepEqual(sim.focus().pids, ['p5']);
+  assert.equal(engine.blocking(st(sim), 'p4'), false);
+  assert.equal(engine.blocking(st(sim), 'p5'), true);
+  assert.equal(sim.host(ABSENT('p4')), false, 'already absent');
+  assert.ok(sim.host(PRESENT('p4')));
+  assert.equal(engine.blocking(st(sim), 'p4'), true);
+  assert.equal(sim.host(PRESENT('p4')), false, 'already present');
+  sim.host(ABSENT('p4'));
+  sim.act('p5', { type: 'ready' });
+  assert.equal(st(sim).phase, 'night');
+  for (const bad of [ABSENT('nobody'), ABSENT(null), { type: ACT.ABSENT ?? '@absent' }, PRESENT('p1')]) assert.equal(sim.host(bad), false, JSON.stringify(bad));
+  assert.equal(sim.act('p1', ABSENT('p2')), false, 'a seat cannot mark anybody');
+  // the night is untouched: same steps, same fixed windows, and nothing at night ever blocks
+  for (let guard = 0; guard < 100 && st(sim).phase === 'night'; guard++) {
+    for (const p of st(sim).order) assert.equal(engine.blocking(st(sim), p), false);
+    if (st(sim).stage === 'cue') sim.cueDone(); else sim.advance();
+  }
+  assert.equal(st(sim).phase, 'day');
+});
+
+test('onuw: @absent by day and at the vote — 夠鐘投票 and the vote count present seats; an absent seat casts no vote but can still die (D4)', () => {
+  const sim = dayGame();
+  for (const p of ['p1', 'p2']) sim.act(p, { type: 'ready-vote', on: true });
+  assert.ok(sim.host(ABSENT('p4')));
+  assert.deepEqual(sim.view('p1').dayReady, { done: 2, total: 3, mine: true });
+  sim.act('p3', { type: 'ready-vote', on: true });
+  assert.equal(st(sim).phase, 'vote', 'the absent seat did not hold up 夠鐘投票');
+  assert.equal(sim.act('p4', { type: 'vote', target: 'p1' }), false, 'no vote');
+  assert.equal(sim.act('p4', { type: 'ring', on: true }), false, 'no part in the circle');
+  assert.deepEqual(sim.legal('p4'), []);
+  assert.equal(engine.autoAct(st(sim), 'p4', sim.ctx()), null);
+  assert.equal(engine.blocking(st(sim), 'p4'), false);
+  assert.ok(sim.view('p1').candidates.includes('p4'), 'still a candidate');
+  assert.equal(sim.view('p1').progress.total, 3);
+  assert.equal(sim.view('p1').ring.total, 3);
+  assert.equal(sim.view('p4').hint, S.HINT.vote.absent);
+  for (const p of ['p1', 'p2', 'p3']) sim.act(p, { type: 'vote', target: 'p4' });
+  assert.equal(st(sim).phase, 'reveal');
+  assert.deepEqual(st(sim).final.dead, ['p4'], 'an absent seat can be voted out');
+  assert.equal(st(sim).final.votes.p4, undefined);
+  // 睇完 counts the present seats too
+  sim.act('p2', { type: 'done' });
+  assert.deepEqual(sim.view('p1').revealDone, { done: 1, total: 3, mine: false });
+  sim.act('p3', { type: 'done' });
+  assert.equal(st(sim).phase, 'reveal');
+  sim.host(ABSENT('p1'));                                         // the host is the last one reading — marked away
+  assert.equal(st(sim).phase, 'over');
+
+  // a ballot cast before leaving stays; marking the last missing voter closes the vote
+  const v2 = dayGame();
+  v2.host({ type: ACT.NEXT });
+  v2.act('p2', { type: 'vote', target: 'p1' });
+  v2.host(ABSENT('p2'));
+  assert.equal(st(v2).votes.p2, 'p1');
+  assert.equal(v2.view('p1').progress.total, 4, 'its ballot stays in the count');
+  v2.act('p1', { type: 'vote', target: 'p2' });
+  v2.act('p3', { type: 'vote', target: 'p1' });
+  assert.equal(st(v2).phase, 'vote');
+  assert.ok(v2.host(ABSENT('p4')));
+  assert.equal(st(v2).phase, 'reveal');
+  assert.deepEqual(st(v2).final.dead, ['p1'], 'p2\'s early ballot counted');
+
+  // @present at the vote: waited for again
+  const v3 = dayGame();
+  v3.host({ type: ACT.NEXT });
+  v3.host(ABSENT('p3'));
+  for (const p of ['p1', 'p2']) v3.act(p, { type: 'vote', target: 'p3' });
+  v3.host(PRESENT('p3'));
+  v3.act('p4', { type: 'vote', target: 'p3' });
+  assert.equal(st(v3).phase, 'vote');
+  v3.act('p3', { type: 'vote', target: 'p1' });
+  assert.equal(st(v3).phase, 'reveal');
+});
+
+test('onuw: @absent and the circle — it forms when every PRESENT seat agrees; nobody dies, an absent seat\'s early ballot is set aside (D4)', () => {
+  const sim = dayGame();
+  sim.host({ type: ACT.NEXT });
+  sim.act('p4', { type: 'vote', target: 'p1' });
+  sim.host(ABSENT('p4'));
+  for (const p of ['p1', 'p2']) sim.act(p, { type: 'ring', on: true });
+  assert.equal(st(sim).phase, 'vote');
+  assert.equal(sim.view('p1').ring.done, 2);
+  sim.act('p3', { type: 'ring', on: true });
+  assert.equal(st(sim).phase, 'reveal');
+  const f = st(sim).final;
+  assert.equal(f.nobodyDied, true, 'the circle still means nobody dies');
+  assert.equal(f.votes.p4, undefined, 'the absent seat\'s ballot was set aside');
+  assert.ok(Object.values(f.counts).every((c) => c <= 1));
+  // the circle is stuck when every present seat has voted or agreed but not all agreed
+  const stuck = dayGame();
+  stuck.host({ type: ACT.NEXT });
+  stuck.host(ABSENT('p4'));
+  stuck.act('p1', { type: 'ring', on: true });
+  stuck.act('p2', { type: 'vote', target: 'p1' });
+  stuck.act('p3', { type: 'vote', target: 'p1' });
+  assert.equal(stuck.view('p1').ring.stuck, true);
+  assert.deepEqual(stuck.focus().pids, ['p1'], 'only the present agreer has to pick');
+  // an agreer who leaves: the circle can still form without it
+  const left = dayGame();
+  left.host({ type: ACT.NEXT });
+  left.act('p4', { type: 'ring', on: true });
+  for (const p of ['p1', 'p2']) left.act(p, { type: 'ring', on: true });
+  left.host(ABSENT('p3'));
+  assert.equal(st(left).phase, 'reveal', 'every present seat had agreed');
+  assert.equal(st(left).final.nobodyDied, true);
+  // everybody leaves mid-vote: nobody is left to have agreed to a circle, so the ballots cast before leaving stand
+  const gone = dayGame();
+  gone.host({ type: ACT.NEXT });
+  gone.act('p1', { type: 'vote', target: 'p2' });
+  gone.act('p3', { type: 'vote', target: 'p2' });
+  for (const p of st(gone).order) gone.host(ABSENT(p));
+  assert.equal(st(gone).phase, 'reveal');
+  assert.deepEqual(st(gone).final.votes, { p1: 'p2', p3: 'p2' });
+});
+
+test('onuw: absent seats are public — every phone and the table list the same 💤 seats; every seat marked away still ends the game (D4)', () => {
+  const sim = dayGame();
+  sim.host(ABSENT('p3'));
+  sim.host(ABSENT('p2'));
+  const lists = [...st(sim).order, null].map((p) => JSON.stringify(sim.view(p).absent));
+  assert.equal(new Set(lists).size, 1);
+  assert.deepEqual(JSON.parse(lists[0]), ['p2', 'p3'], 'seat order');
+  assert.equal(sim.view('p3').my.absent, true);
+  assert.equal(sim.view('p1').my.absent, undefined);
+  checkViews(sim);
+  // everybody away during the day: the vote has nobody to wait for and reveals at once
+  const all = dayGame();
+  for (const p of st(all).order) all.host(ABSENT(p));
+  assert.equal(st(all).phase, 'reveal');
+  all.host({ type: ACT.NEXT });
+  all.host({ type: ACT.NEXT });
+  assert.ok(all.result());
+});
+
+test('onuw: fuzz — the host marks random seats absent and back; every game ends, nothing waits on an absent seat, views stay clean (D4)', () => {
+  let marks = 0;
+  for (let n = 3; n <= 10; n++) {
+    for (let seed = 1; seed <= 12; seed++) {
+      const sim = uiGame(n, seed * 23 + n, seed % 3 === 0 ? { preset: 'advanced' } : {});
+      const rng = mulberry32(seed * 7 + n);
+      sim.runRandom({
+        maxSteps: 6000,
+        onStep: (x) => {
+          const s = st(x);
+          if (s.phase !== 'over' && rng() < 0.05) {
+            const p = s.order[Math.floor(rng() * s.n)];
+            x.host(s.absent?.[p] ? PRESENT(p) : ABSENT(p));
+            marks++;
+          }
+          const t = st(x);
+          for (const p of t.order) if (t.absent?.[p]) assert.equal(engine.blocking(t, p), false);
+          if (t.phase === 'vote') assert.ok(t.order.some((p) => t.votes[p] === undefined && !t.absent?.[p]), 'the vote closes once every present seat has voted');
+          if (x.steps % 9 === 0) checkViews(x);
+        },
+      });
+      const s = st(sim);
+      assert.equal(s.phase, 'over');
+      for (const [p, t] of Object.entries(s.final.votes)) assert.ok(t !== p && s.order.includes(t));
+    }
+  }
+  assert.ok(marks > 100, `the host marked seats ${marks} times`);
+});
+
+test('onuw: the night 📓 lists what you learned newest first — a third note never pushes the latest one out of the fixed cover', () => {
+  const nm = (p) => p;
+  const step = { k: 'werewolf', stage: 'window' };
+  const notesOf = (...ks) => ks.map((k, i) => ({ ix: i, k, ...(k === 'copy' ? { target: 'p2', role: 'werewolf' } : k === 'wolves' ? { alone: true, via: 'doppel', with: [] } : { slot: 1, role: 'seer', via: 'doppel' }) }));
+  const seen = notesOf('copy', 'wolves', 'lone-peek');
+  const book = S.nightBook(step, { awake: true, seen, info: [], ab: null }, nm);
+  assert.deepEqual(book.map(([t]) => t), seen.slice().reverse().map((n) => S.noteLine(n, nm)), 'newest first');
+  // her own step: the copy note, then what it means for her (both at the top)
+  const dstep = { k: 'doppelganger', stage: 'window' };
+  const d = S.nightBook(dstep, { awake: true, seen: notesOf('copy'), info: notesOf('copy'), ab: null, copied: 'werewolf' }, nm);
+  assert.equal(d.length, 2);
+  assert.equal(d[0][0], S.noteLine(notesOf('copy')[0], nm));
+  assert.equal(d[1][1], 'do');
+  // nothing learned yet: the same single line on every sleeper's cover
+  assert.deepEqual(S.nightBook(step, { awake: false, seen: [] }, nm), [[S.T.nightNothing, 'none']]);
+  // a played night: the lone wolf's look sits above the wolves note
+  const sim = scenario({ p1: 'werewolf', p2: 'seer', p3: 'villager', p4: 'villager' }, ['werewolf', 'robber', 'troublemaker']);
+  openStep(sim, 'werewolf');
+  act(sim, 'p1', { type: 'look-centre', cards: [1] });
+  const v = sim.view('p1').my.night;
+  const lines = S.nightBook({ k: 'werewolf', stage: 'window' }, v, nm).map(([t]) => t);
+  assert.ok(lines[0].includes('獨狼睇牌') && lines[1].includes('冇其他狼人醒'), lines.join(' / '));
+});
+
+test('onuw ui: your own vote is secret on your phone (D6); absent candidates carry 💤; an absent seat gets a 💤 line, no ballot, no circle (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = dayGame();
+    sim.host({ type: ACT.NEXT });
+    sim.host(ABSENT('p3'));
+    const seats = mountAll(ui, sim, []);
+    const comps = seats.p1.api.components;
+    const made = [];
+    const base = comps.VotePanel;
+    comps.VotePanel = (p) => { const x = base(p); made.push(x); return x; };
+    pushViews(sim, seats);
+    const ballots = made.filter((x) => x.props && !x.props.reveal);
+    assert.equal(ballots.length, 4, 'one ballot screen per seat');
+    for (const x of ballots) {
+      assert.equal(x.props.secretChoice, true);
+      assert.ok(x.props.players.find((p) => p.id === 'p3').name.endsWith(S.T.absentMark));
+      assert.ok(!x.props.players.find((p) => p.id === 'p2').name.includes(S.T.absentMark));
+    }
+    const text = (k) => seats[k].root.textContent;
+    assert.ok(text('p3').includes(S.T.absentSelf));
+    assert.equal(findAll(seats.p3.root, (n) => hasCls(n, 'c-votepanel'))[0].hidden, true, 'no ballot');
+    assert.equal(findAll(seats.p3.root, (n) => hasCls(n, 'on-ring'))[0].hidden, true, 'no circle');
+    assert.equal(findAll(seats.p1.root, (n) => hasCls(n, 'on-ring'))[0].hidden, false);
+    for (const k of ['p1', 'p3', 'table']) assert.ok(text(k).includes(S.T.absentLine('玩家3')), `${k}: the public 💤 line`);
+    for (const x of Object.values(seats)) x.handle.destroy();
+  });
+});
+
+test('onuw ui: the night 📓 cover draws its notes newest first, the same cover on every phone', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario({ p1: 'werewolf', p2: 'seer', p3: 'villager', p4: 'villager' }, ['werewolf', 'robber', 'troublemaker']);
+    const seats = mountAll(ui, sim, []);
+    openStep(sim, 'werewolf');
+    act(sim, 'p1', { type: 'look-centre', cards: [1] });
+    pushViews(sim, seats);
+    const items = (k) => findAll(nightBookOf(seats[k]).el, (n) => n.tag === 'li').map((n) => n.textContent);
+    const wolf = items('p1');
+    assert.equal(wolf.length, 2);
+    assert.ok(wolf[0].includes('獨狼睇牌') && wolf[1].includes('冇其他狼人醒'), wolf.join(' / '));
+    assert.deepEqual(items('p3'), [S.T.nightNothing]);
+    assert.equal(new Set(st(sim).order.map((p) => nightBookOf(seats[p]).back)).size, 1, 'one back label for everybody');
+    for (const x of Object.values(seats)) x.handle.destroy();
+  });
+});
+
+test('onuw ui: with seats marked 💤 and back through whole random games, every screen still renders for every seat, idempotently (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    for (const [n, seed, over] of [[4, 2, {}], [7, 5, { preset: 'advanced' }], [10, 7, {}]]) {
+      const sim = uiGame(n, seed, over);
+      const seats = mountAll(ui, sim, []);
+      const rng = mulberry32(seed * 101);
+      sim.runRandom({
+        maxSteps: 6000,
+        onStep: (x) => {
+          if (st(x).phase !== 'over' && rng() < 0.05) {
+            const p = st(x).order[Math.floor(rng() * st(x).n)];
+            x.host(st(x).absent?.[p] ? PRESENT(p) : ABSENT(p));
+          }
+          if (x.steps % 3 === 0) pushViews(x, seats);
+        },
+      });
+      pushViews(sim, seats);
+      for (const s of Object.values(seats)) s.handle.destroy();
+    }
+  });
 });

@@ -42,6 +42,15 @@ const drawAll = (sim) => { while (phase(sim) === 'draw') assert.ok(drawStroke(si
 const toVote = (sim) => { if (phase(sim) === 'qm-input') sim.act(R(sim).qm, { type: 'qm-auto' }); if (phase(sim) === 'deal') readyAll(sim); if (phase(sim) === 'first') sim.act(R(sim).qm, { type: 'first', target: R(sim).artists[0] }); return drawAll(sim); };
 const voteWith = (sim, fn) => { for (const a of R(sim).vote.voters) sim.act(a, { type: 'vote', target: fn(a) }); return sim; };
 const settle = (sim) => { if (phase(sim) === 'tally') sim.advance(); return sim; };
+/** The result: every present seat of the round taps 睇完 (D3), so the next round (or the end) comes. */
+const allNext = (sim) => {
+  const r = R(sim);
+  for (const p of [...r.artists, ...(r.qm ? [r.qm] : [])]) {
+    if (phase(sim) !== 'result' || R(sim).key !== r.key) break;
+    if (!sim.state.absent?.[p]) sim.act(p, { type: 'next' });
+  }
+  return sim;
+};
 const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
 const other = (list, not) => list.find((x) => x !== not);
 
@@ -262,7 +271,7 @@ test('fake-artist: bank draws never hand the fake the answer (theme never names 
       assert.ok(e.level <= 2, `default levels are easy + medium: ${rd.word} is level ${e.level}`);
       playRound(sim, { caught: false });
       if (sim.state.ending) break;
-      sim.act('p1', { type: 'next' });
+      allNext(sim);
     }
   }
   const cfg = { ...game.config.defaults(5), topics: { cats: ['水果'], levels: [1] } };
@@ -321,7 +330,7 @@ test('fake-artist: player QM — the QM is not an artist, rotates to the left ea
     assert.notEqual(R(sim).fake, r.qm, 'the QM is never the fake');
     assert.deepEqual(r.artists, [...ids(sim).slice(ids(sim).indexOf(r.qm) + 1), ...ids(sim).slice(0, ids(sim).indexOf(r.qm))], 'artists in seat order starting left of the QM');
     playRound(sim);
-    sim.act('p1', { type: 'next' });
+    allNext(sim);
   }
   for (let i = 1; i < seen.length; i++) assert.equal(seen[i], ids(sim)[(ids(sim).indexOf(seen[i - 1]) + 1) % 5], 'the QM moves one seat left each round');
 });
@@ -351,7 +360,7 @@ test('fake-artist: option antiStreak — off by default; on, the same seat is no
       if (prev !== null && R(sim).fake === prev) repeats++;
       prev = R(sim).fake;
       playRound(sim);
-      sim.act('p1', { type: 'next' });
+      allNext(sim);
     }
   }
   assert.equal(repeats, 0, 'no immediate repeats with antiStreak');
@@ -363,7 +372,7 @@ test('fake-artist: option antiStreak — off by default; on, the same seat is no
       if (prev !== null && R(sim).fake === prev) plain++;
       prev = R(sim).fake;
       playRound(sim);
-      sim.act('p1', { type: 'next' });
+      allNext(sim);
     }
   }
   assert.ok(plain > 0, 'without it repeats do happen (so the option really does something)');
@@ -687,7 +696,7 @@ test('fake-artist: the picture is a fresh epoch every round (the session clears 
   assert.equal(sim.state.inkEpoch, 1);
   playRound(sim);
   assert.equal(sim.state.inkEpoch, 1, 'the picture stays for the reveal');
-  sim.act('p1', { type: 'next' });
+  allNext(sim);
   assert.equal(sim.state.inkEpoch, 2);
   assert.ok(!JSON.stringify(sim.state).includes('"pts"'));
 });
@@ -1167,7 +1176,7 @@ test('fake-artist: the fake and the QM are different players, one player never g
     assert.equal(new Set(h.deltas.map((d) => d.pid)).size, h.deltas.length, 'one award each');
     for (const [id, v] of Object.entries(sim.state.scores)) assert.ok(v >= prev[id]);
     prev = clone(sim.state.scores);
-    sim.act('p1', { type: 'next' });
+    allNext(sim);
   }
   assert.equal(phase(sim), 'over');
 });
@@ -1181,7 +1190,7 @@ test('fake-artist: first to the target wins — checked after the round is score
     const top = Math.max(...Object.values(sim.state.scores));
     assert.equal(sim.view('p1').last, top >= 5, 'the last-round flag follows the target');
     assert.equal(phase(sim), 'result');
-    sim.act('p1', { type: 'next' });
+    allNext(sim);
     if (top < 5) assert.notEqual(phase(sim), 'over');
   }
   assert.equal(phase(sim), 'over');
@@ -1204,7 +1213,7 @@ test('fake-artist: first to the target wins — checked after the round is score
   const t = mk(5, { seed: 3, config: { target: 5 } });
   for (const id of ids(t)) t.state.scores[id] = 4;
   playRound(t, { caught: true, correct: false });         // every real artist +1 → five of them... the fake stays on 4
-  t.act('p1', { type: 'next' });
+  allNext(t);
   assert.equal(phase(t), 'over');
   const r = t.result();
   const F = t.state.history[0].fake;
@@ -1217,7 +1226,7 @@ test('fake-artist: endMode rounds — exactly N rounds (auto = one per player), 
   const auto = mk(4, { seed: 3, config: { endMode: 'rounds', rounds: 0, target: 1 } });
   assert.equal(auto.state.totalRounds, 4);
   let played = 0;
-  while (phase(auto) !== 'over') { playRound(auto, { caught: true, correct: false }); played++; auto.act('p1', { type: 'next' }); }
+  while (phase(auto) !== 'over') { playRound(auto, { caught: true, correct: false }); played++; allNext(auto); }
   assert.equal(played, 4, 'a target of 1 does not end a rounds game');
   const three = mk(5, { seed: 3, config: { endMode: 'rounds', rounds: 3 } });
   played = 0;
@@ -1227,7 +1236,7 @@ test('fake-artist: endMode rounds — exactly N rounds (auto = one per player), 
     playRound(three, { caught: false });
     played++;
     assert.equal(three.view('p1').last, played === 3);
-    three.act('p1', { type: 'next' });
+    allNext(three);
   }
   assert.equal(played, 3);
   assert.equal(three.result().lines.filter((l) => l.startsWith('第 ')).length, 3);
@@ -1238,13 +1247,13 @@ test('fake-artist: result lines explain every round, including what was hidden d
   playRound(sim, { caught: false });
   const w1 = R(sim).word;
   const f1 = R(sim).fake;
-  sim.act('p1', { type: 'next' });
+  allNext(sim);
   playRound(sim, { caught: true, correct: false });
   const w2 = R(sim).word;
   const f2 = R(sim).fake;
   const name = (id) => sim.players.find((p) => p.id === id).name;
   assert.ok(sim.view('p1').reveal.lines.length >= 4, 'the reveal explains how it went');
-  sim.act('p1', { type: 'next' });
+  allNext(sim);
   const res = sim.result();
   const [l1, why1, l2, why2] = res.lines;
   assert.ok(l1.includes('第 1/2 輪') && l1.includes(w1) && l1.includes(name(f1)) && l1.includes('假畫家逃脫') && l1.includes(`${name(f1)} +2`), l1);
@@ -1571,7 +1580,7 @@ test('fake-artist: with the real Session — the drawer inks, nobody else can, t
   session.dispatch(st().round.judge, { type: 'verdict', correct: false });
   assert.equal(st().phase, 'result');
   assert.equal(session.drawing.strokes.length, 2, 'the picture stays for the reveal');
-  session.dispatch(st().round.artists[0], { type: 'next' });
+  for (const a of st().round.artists) if (st().phase === 'result') session.dispatch(a, { type: 'next' });
   assert.equal(st().round.n, 2);
   assert.equal(session.drawing.epoch, 2, 'a new round starts a new picture');
   assert.equal(session.drawing.strokes.length, 0);
@@ -1727,7 +1736,7 @@ test('fake-artist: @void-round through the real Session clears the drawing and r
   assert.match(session.cue().text, /上一鋪唔計/);
 });
 
-test('fake-artist: blocking — the table waits exactly on the seats in focus, never during the tally linger or on the result screen', () => {
+test('fake-artist: blocking — the table waits exactly on the seats in focus (and the result’s 睇完 still to come), never during the tally linger', () => {
   let checked = 0;
   for (const cfg of [{ qm: 'app' }, { qm: 'player', first: 'qm', guess: 'typed', tieRule: 'revote' }, { draw: 'paper', qm: 'player' }]) {
     for (let seed = 1; seed <= 4; seed++) {
@@ -1736,11 +1745,15 @@ test('fake-artist: blocking — the table waits exactly on the seats in focus, n
         const st = s.state;
         const f = engine.focus(st);
         const blockers = ids(s).filter((pid) => engine.blocking(st, pid));
-        for (const pid of ids(s)) assert.equal(engine.blocking(st, pid), !!f && f.pids.includes(pid), `${st.phase}: ${pid}`);
+        const readers = [...st.round.artists, ...(st.round.qm ? [st.round.qm] : [])];
+        for (const pid of ids(s)) {
+          const want = st.phase === 'result' ? readers.includes(pid) && !st.round.seen?.[pid] : !!f && f.pids.includes(pid);
+          assert.equal(engine.blocking(st, pid), want, `${st.phase}: ${pid}`);
+        }
         assert.equal(engine.blocking(st, null), false);
         assert.equal(engine.blocking(st, 'ghost'), false);
-        if (['tally', 'result', 'over'].includes(st.phase)) {
-          assert.deepEqual(blockers, [], `${st.phase}: nobody holds the table up (anyone may press 下一輪)`);
+        if (['tally', 'over'].includes(st.phase)) {
+          assert.deepEqual(blockers, [], `${st.phase}: nobody holds the table up`);
           return;
         }
         assert.ok(blockers.length >= 1, `${st.phase}: somebody is always being waited on (no silent deadlock)`);
@@ -1770,7 +1783,7 @@ test('fake-artist: blocking — the table waits exactly on the seats in focus, n
 test('fake-artist: carry — the QM rotation and antiStreak run on into the next game; a junk carry is ignored', () => {
   const g1 = mk(5, { seed: 3, config: { qm: 'player', first: 'auto', endMode: 'rounds', rounds: 2 } });
   const qms = [];
-  while (phase(g1) !== 'over') { qms.push(R(g1).qm); playRound(g1); g1.act(R(g1).artists[0], { type: 'next' }); }
+  while (phase(g1) !== 'over') { qms.push(R(g1).qm); playRound(g1); allNext(g1); }
   const carry = g1.result().carry;
   const order = ids(g1);
   assert.equal(carry.lastFake, g1.state.history[g1.state.history.length - 1].fake);
@@ -1804,7 +1817,7 @@ test('fake-artist: carry — the QM rotation and antiStreak run on into the next
   }
   const app = mk(4, { seed: 1, config: { endMode: 'rounds', rounds: 1 } });
   playRound(app);
-  app.act('p1', { type: 'next' });
+  allNext(app);
   assert.deepEqual(app.result().carry, { lastFake: app.state.history[0].fake, nextQm: null }, 'no human QM, no rotation to carry');
 });
 
@@ -1833,7 +1846,7 @@ test('fake-artist: 唔計分 (none-v2, the current print) — nobody scores, eac
     assert.ok(rv.lines.some((l) => l.includes('唔計分')), rv.lines.join(' | '));
     assert.ok(!/得 \d 分/.test(sim.cue().text), 'the result cue does not talk about points');
     assert.ok(Object.values(sim.state.scores).every((x) => x === 0));
-    sim.act(R(sim).artists[0], { type: 'next' });
+    allNext(sim);
   }
   assert.equal(new Set(qms).size, 5, 'everybody was QM once');
   assert.equal(phase(sim), 'over');
@@ -1845,7 +1858,7 @@ test('fake-artist: 唔計分 (none-v2, the current print) — nobody scores, eac
   // a target means nothing without points: the game is a fixed number of rounds
   const t = mk(4, { seed: 2, config: { scoring: 'none', endMode: 'target', target: 1, rounds: 2 } });
   let played = 0;
-  while (phase(t) !== 'over') { playRound(t, { caught: false }); played++; t.act('p1', { type: 'next' }); }
+  while (phase(t) !== 'over') { playRound(t, { caught: false }); played++; allNext(t); }
   assert.equal(played, 2);
   // the form follows: no end mode or target, the number of rounds instead
   const keys = game.config.fields({ ...game.config.defaults(6), scoring: 'none' }, 6).map((f) => f.key);
@@ -1891,7 +1904,7 @@ test('fake-artist: pens — every seat gets its own pen: distinct, dark enough f
   assert.deepEqual(Object.keys(pens).sort(), ids(sim).sort());
   for (const pid of [...ids(sim), null]) assert.deepEqual(sim.view(pid).pens, pens);
   playRound(sim);
-  sim.act(R(sim).artists[0], { type: 'next' });
+  allNext(sim);
   assert.deepEqual(sim.view('p2').pens, pens, 'a new QM does not reshuffle the pens');
 });
 
@@ -2094,13 +2107,13 @@ test('fake-artist: UI (fake DOM) renders every phase for every seat, never shows
     assert.ok(!fakeUi.root.textContent.includes(R(sim).word));
     sim.act(R(sim).judge, { type: 'verdict', correct: false });
 
-    // result: 下一輪 only after a beat (a stray tap must not skip the reveal), then { type: 'next' }
+    // result: 睇完 only after a beat (a stray tap must not skip the reveal), then { type: 'next' }
     const res = mountSeat(sim, R(sim).artists[2]);
     res.show();
-    assert.equal(uiButton(res.root, '下一輪').disabled, true);
+    assert.equal(uiButton(res.root, '睇完').disabled, true);
     dom.flush();
     res.show();
-    uiButton(res.root, '下一輪').click();
+    uiButton(res.root, '睇完').click();
     assert.deepEqual(res.sent.pop(), { type: 'next' });
 
     // paper: 畫完 for the drawer, 「幫佢㩒」 for the QM
@@ -2375,12 +2388,268 @@ test('fake-artist: 呢鋪唔計 explains itself — engine.canVoid agrees with @
   const s = mk(4, { seed: 3 });
   playRound(s);
   assert.equal(phase(s), 'result');
-  assert.deepEqual(engine.canVoid(s.state), { ok: false, message: '呢輪已經計咗分，㩒「下一輪」就得' });
-  // the round that decided the game: its button reads 睇總結, and so does the reason
+  assert.deepEqual(engine.canVoid(s.state), { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' });
+  // the round that decided the game says the same: everybody taps 睇完 (D3)
   const last = mk(4, { seed: 3, config: { endMode: 'rounds', rounds: 1 } });
   playRound(last);
   assert.equal(phase(last), 'result');
   assert.equal(last.view('p1').last, true);
-  assert.deepEqual(engine.canVoid(last.state), { ok: false, message: '呢輪已經計咗分，㩒「睇總結」就得' });
+  assert.deepEqual(engine.canVoid(last.state), { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' });
   assert.ok(game.rules.sections.some((x) => x.body.includes('已經計咗分')), 'the rules sheet says a scored round stays');
+});
+
+// ============================================================
+// decisions 2026-10-04: D3 睇完 n / m, D4 absent seats, D12 the tally stays 7 s, D6 secret own vote
+// ============================================================
+
+const ABSENT = (pid) => ({ type: '@absent', pid });
+const PRESENT = (pid) => ({ type: '@present', pid });
+
+test('fake-artist D12: who voted for whom stays 7 s on the tally, and the result keeps every ballot', () => {
+  assert.equal(game.TALLY_MS, 7000);
+  const sim = atVote(5, { seed: 501 });
+  const F = R(sim).fake;
+  const real = R(sim).artists.filter((a) => a !== F);
+  voteWith(sim, (a) => (a === real[0] ? real[1] : real[0]));
+  assert.equal(phase(sim), 'tally');
+  assert.equal(sim.state.deadline, sim.now + 7000);
+  sim.tick(6900);
+  assert.equal(engine.advance(clone(sim.state), sim.ctx()).phase, 'tally', 'still on screen at 6.9 s');
+  settle(sim);
+  assert.equal(phase(sim), 'result');
+  const votes = sim.view('p1').reveal.round1.votes;
+  assert.deepEqual(Object.keys(votes).sort(), R(sim).artists.slice().sort(), 'every ballot is on the result screen');
+  for (const a of R(sim).artists) assert.equal(votes[a], a === real[0] ? real[1] : real[0]);
+});
+
+test('fake-artist D3: the result moves on once every seat of the round has tapped 睇完; the host can force it; a shared phone taps once', () => {
+  const sim = mk(5, { seed: 510, config: { qm: 'player', first: 'auto', endMode: 'rounds', rounds: 3 } });
+  playRound(sim);
+  assert.equal(phase(sim), 'result');
+  const readers = [...R(sim).artists, R(sim).qm];
+  assert.deepEqual(sim.view('p1').seen, { who: [], total: 5 });
+  assert.ok(sim.act(readers[0], { type: 'next' }));
+  assert.equal(phase(sim), 'result', 'one eager seat does not move everybody on');
+  assert.equal(sim.act(readers[0], { type: 'next' }), false, 'twice is nothing');
+  assert.deepEqual(sim.legal(readers[0]), []);
+  assert.equal(engine.blocking(sim.state, readers[0]), false);
+  assert.equal(engine.blocking(sim.state, readers[1]), true, 'a reader still to tap is waited on');
+  assert.deepEqual(engine.autoAct(sim.state, readers[1]), { type: 'next' });
+  assert.ok(sim.act(readers[1], { type: 'next', seats: [readers[2], 'ghost', 4] }), 'a shared phone counts for its other seat');
+  assert.deepEqual(sim.view('p2').seen.who.slice().sort(), readers.slice(0, 3).sort());
+  assert.ok(sim.act(readers[3], { type: 'next' }));
+  assert.equal(phase(sim), 'result');
+  assert.ok(sim.act(readers[4], { type: 'next' }));
+  assert.equal(R(sim).n, 2, 'the last reader deals the next round');
+  // the host's 下一步 (after the line is read) forces it
+  playRound(sim);
+  sim.act(R(sim).qm, { type: 'next' });
+  sim.host({ type: ACT.CUE_DONE, id: sim.cue().id });
+  assert.ok(sim.host({ type: ACT.NEXT }));
+  assert.equal(R(sim).n, 3);
+});
+
+test('fake-artist D4: an absent artist is not waited on to look, its strokes are skipped, it neither votes nor can be voted for', () => {
+  const sim = mk(5, { seed: 520 });
+  const F = R(sim).fake;
+  const gone = R(sim).artists.find((a) => a !== F);
+  for (const a of R(sim).artists) if (a !== gone) sim.act(a, { type: 'ready' });
+  assert.equal(phase(sim), 'deal');
+  assert.ok(sim.host(ABSENT(gone)));
+  assert.equal(phase(sim), 'draw', 'the deal was only waiting on the seat that left');
+  for (const p of [...ids(sim), null]) assert.deepEqual(sim.view(p).absent, [gone], 'public, the same on every phone');
+  assert.deepEqual(sim.legal(gone), []);
+  assert.equal(sim.act(gone, { type: 'stroke', length: 150 }), false);
+  let skipped = 0;
+  while (phase(sim) === 'draw') {
+    assert.notEqual(drawerOf(sim), gone, 'the turn never rests on an absent artist');
+    drawStroke(sim);
+  }
+  skipped = R(sim).strokes.filter((x) => x.kind === 'away').length;
+  assert.equal(skipped, 2, 'both of its laps were skipped');
+  assert.ok(R(sim).strokes.filter((x) => x.kind === 'away').every((x) => x.pid === gone));
+  assert.equal(phase(sim), 'vote');
+  assert.ok(!R(sim).vote.voters.includes(gone) && !R(sim).vote.candidates.includes(gone), 'not a voter, not a candidate (it is not the fake)');
+  assert.equal(sim.view('p1').draw.counts[gone], 0, 'skipped turns are not strokes');
+});
+
+test('fake-artist D4: a drawer who leaves mid-turn is skipped; a voter who leaves closes the ballot it held up; @present brings it back', () => {
+  const sim = mk(6, { seed: 530 });
+  readyAll(sim);
+  const F = R(sim).fake;
+  const d = drawerOf(sim);
+  if (d !== F) {
+    assert.ok(sim.host(ABSENT(d)));
+    assert.notEqual(drawerOf(sim), d);
+    assert.equal(R(sim).strokes[0].kind, 'away');
+    assert.ok(sim.host(PRESENT(d)));
+  }
+  drawAll(sim);
+  const real = R(sim).vote.voters.filter((a) => a !== F);
+  const late = real[real.length - 1];
+  for (const a of R(sim).vote.voters) if (a !== late) sim.act(a, { type: 'vote', target: a === real[0] ? real[1] : real[0] });
+  assert.equal(phase(sim), 'vote');
+  assert.deepEqual(engine.focus(sim.state).pids, [late]);
+  assert.ok(sim.host(ABSENT(late)));
+  assert.equal(phase(sim), 'tally', 'the ballot closes without the seat that left');
+  assert.ok(!(late in R(sim).tally1.votes), 'no abstention is invented for it');
+});
+
+test('fake-artist D4: an absent fake (not yet caught) or question master voids the round; a caught fake that leaves just gives no answer', () => {
+  // the fake leaves while drawing: void, a fresh round under the same number, never the same seat as fake
+  const a = mk(5, { seed: 540, config: { endMode: 'rounds', rounds: 2 } });
+  readyAll(a);
+  const F = R(a).fake;
+  assert.ok(a.host(ABSENT(F)));
+  assert.equal(phase(a), 'deal');
+  assert.equal(R(a).n, 1);
+  assert.equal(R(a).redo, true);
+  assert.notEqual(R(a).fake, F);
+  assert.ok(!R(a).artists.includes(F), 'an absent seat sits the re-dealt round out');
+  const h = a.state.history[0];
+  assert.ok(h.voided && h.why === 'absent' && h.absent === F);
+  assert.ok(Object.values(a.state.scores).every((x) => x === 0));
+  assert.match(a.cue().text, /上一鋪唔計/);
+  // the question master leaves: void, and the next present seat becomes QM
+  const q = mk(6, { seed: 541, config: { qm: 'player', first: 'auto', endMode: 'rounds', rounds: 2 } });
+  const qm = R(q).qm;
+  q.act(qm, { type: 'qm-auto' });
+  assert.ok(q.host(ABSENT(qm)));
+  assert.equal(phase(q), 'qm-input');
+  assert.notEqual(R(q).qm, qm);
+  assert.ok(!R(q).artists.includes(qm));
+  // a caught fake that leaves before its guess: no answer, the artists win
+  const c = atVote(5, { seed: 542 });
+  const F2 = R(c).fake;
+  allVote(c, F2);
+  settle(c);
+  assert.equal(phase(c), 'guess');
+  assert.ok(c.host(ABSENT(F2)));
+  assert.equal(phase(c), 'result');
+  const rv = c.view('p1').reveal;
+  assert.equal(rv.outcome, 'guess-wrong');
+  assert.equal(rv.guess.by, 'away');
+  assert.ok(rv.lines.some((l) => l.includes('唔喺度')), rv.lines.join(' / '));
+  // a fake that escaped and leaves during the tally keeps its win
+  const e = atVote(5, { seed: 543 });
+  const F3 = R(e).fake;
+  const real = R(e).artists.filter((x) => x !== F3);
+  voteWith(e, (x) => (x === real[0] ? real[1] : real[0]));
+  assert.equal(phase(e), 'tally');
+  assert.ok(e.host(ABSENT(F3)));
+  assert.equal(phase(e), 'tally', 'a decided round is not voided');
+  settle(e);
+  assert.equal(e.view('p1').reveal.outcome, 'escaped');
+});
+
+test('fake-artist D4: the judge who leaves is replaced; @absent is refused when too few would draw', () => {
+  const sim = atVote(6, { seed: 550 });
+  allVote(sim, R(sim).fake);
+  settle(sim);
+  assert.equal(phase(sim), 'guess');
+  const j = R(sim).judge;
+  assert.ok(sim.host(ABSENT(j)));
+  assert.notEqual(R(sim).judge, j);
+  assert.ok(R(sim).judge !== R(sim).fake && !sim.state.absent[R(sim).judge]);
+  assert.deepEqual(engine.focus(sim.state).pids, [R(sim).judge]);
+  const three = mk(3, { seed: 551 });
+  assert.equal(three.host(ABSENT('p1')), false, 'three artists is the minimum');
+  const qm4 = mk(4, { seed: 552, config: { qm: 'player' } });
+  assert.equal(qm4.host(ABSENT(R(qm4).artists[0])), false, 'a question master needs three artists');
+  for (const junk of [null, undefined, 'ghost', 7]) assert.equal(sim.host(ABSENT(junk)), false);
+  assert.equal(sim.host(PRESENT(R(sim).fake)), false, 'a seat that is here cannot come back');
+  assert.equal(sim.host(PRESENT(j)), true, 'the old judge is back (the new one keeps judging)');
+});
+
+test('fake-artist D4: fuzz — random @absent / @present / @void-round keep legalActions honest and every game finishing', () => {
+  for (let n = 4; n <= 9; n++) {
+    for (const qm of ['app', 'player']) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const config = { qm, draw: seed % 2 ? 'phone' : 'paper', guess: seed % 3 ? 'spoken' : 'typed', tieRule: ['must-guess', 'escape', 'revote'][seed % 3], endMode: 'rounds', rounds: 3, first: 'auto' };
+        const sim = mk(n, { seed: n * 100 + seed, config });
+        const rng = mulberry32(seed + n);
+        let k = 0;
+        sim.runRandom({
+          maxSteps: 40000,
+          onStep(s) {
+            if (++k % 5) return;
+            const pid = ids(s)[Math.floor(rng() * n)];
+            const x = rng();
+            if (x < 0.3) s.host(ABSENT(pid)); else if (x < 0.5) s.host(PRESENT(pid)); else if (x < 0.53) s.host({ type: ACT.VOID_ROUND });
+            const st = s.state;
+            if (st.phase === 'over') return;
+            for (const p of ids(s)) {
+              if (st.absent[p]) {
+                assert.deepEqual(s.legal(p), [], 'an absent seat has nothing to do');
+                assert.equal(engine.blocking(st, p), false);
+              }
+            }
+            const f = engine.focus(st);
+            if (f) assert.ok(!f.pids.some((p) => st.absent[p]), `focus names an absent seat in ${st.phase}`);
+            if (!['result', 'over'].includes(st.phase) && st.round.fake && st.round.caught !== true && !(st.phase === 'tally' && st.round.next === 'score')) {
+              assert.ok(!st.absent[st.round.fake], 'an undecided round never has an absent fake');
+            }
+          },
+        });
+        assert.equal(phase(sim), 'over');
+        assert.equal(sim.state.history.filter((h) => !h.voided).length, 3);
+      }
+    }
+  }
+});
+
+test('fake-artist UI D3/D4/D6: 睇完 n / m after a short lock, the ballot keeps your pick secret, 💤 for absent seats', async () => {
+  const dom = installDom();
+  try {
+    const { mount } = await import('../js/games/fake-artist/ui.js');
+    const sim = mk(5, { seed: 560 });
+    sim.players = sim.players.map((p, i) => ({ ...p, deviceId: i >= 3 ? 'shared' : `own${i}` }));
+    const mountSeat = (me) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const ui = mount(root, { me, players: sim.players, isHost: me === 'p1', send: (a) => sent.push(a), ink() {}, sfx() {}, toast() {},
+        now: () => sim.now, components: fc.components, meta: game.meta, config: sim.config });
+      return { me, root, ui, sent, fc, show() { ui.update(sim.view(me), { focus: sim.focus(), paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] } }); } };
+    };
+    const gone = R(sim).artists.find((a) => a !== R(sim).fake && a !== 'p2' && a !== 'p4');
+    sim.host(ABSENT(gone));
+    const away = mountSeat(gone);
+    away.show();
+    assert.ok(away.root.visibleText().includes('房主當咗你唔喺度'), away.root.visibleText());
+    assert.ok(!uiButton(away.root, '睇完喇'), 'no 睇完喇 on an absent phone');
+    readyAll(sim);
+    const watcher = mountSeat('p2');
+    watcher.show();
+    assert.ok(watcher.root.textContent.includes('💤'), 'the absent artist is marked');
+    drawAll(sim);
+    watcher.show();
+    const panel = watcher.fc.made.panels[0];
+    assert.equal(panel.props.secretChoice, true, 'D6: your phone says 已投 ✓, never whom');
+    assert.ok(!panel.props.candidates.includes(gone));
+    const F = R(sim).fake;
+    allVote(sim, R(sim).artists.find((a) => a !== F && !sim.state.absent[a]));
+    settle(sim);
+    assert.equal(phase(sim), 'result');
+    const s2 = mountSeat('p2');
+    s2.show();
+    assert.ok(s2.root.textContent.includes('睇完 0 / 4'), s2.root.textContent);
+    assert.equal(uiButton(s2.root, '睇完 ✓').disabled, true, 'a short lock first');
+    dom.flush();
+    s2.show();
+    uiButton(s2.root, '睇完 ✓').click();
+    assert.deepEqual(s2.sent.pop(), { type: 'next' }, 'a phone of its own sends just its own');
+    sim.act('p2', { type: 'next' });
+    s2.show();
+    assert.ok(uiButton(s2.root, '✓ 睇完 · 等緊其他人').disabled);
+    assert.ok(s2.root.textContent.includes('睇完 1 / 4'));
+    const s4 = mountSeat('p4');
+    s4.show();
+    dom.flush();
+    s4.show();
+    uiButton(s4.root, '睇完 ✓').click();
+    assert.deepEqual(s4.sent.pop(), { type: 'next', seats: ['p5'] }, 'a shared phone taps for its other seat too');
+  } finally {
+    dom.restore();
+  }
 });

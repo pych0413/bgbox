@@ -13,7 +13,7 @@
 // these fields simply shows nothing.
 // ============================================================
 
-import { el, toast } from './dom.js?v=1';
+import { el, toast, copyBox } from './dom.js?v=1';
 import { inAppBrowser } from './logic.js?v=1';
 
 const OUTBOX_GRACE_MS = 1500;
@@ -150,16 +150,16 @@ export function createStatus(sh) {
 export function inAppNotice(link = location.href) {
   const which = inAppBrowser(globalThis.navigator?.userAgent);
   if (!which) return null;
+  // no window.prompt when the clipboard refuses (#3): the link shows in the page, selected, to copy by hand
+  const linkCopy = copyBox({ label: '㩒住條連結 → 揀「拷貝」，再去 Safari 貼' });
   return el('div', { class: 'warn inapp-note' },
     el('b', { text: `你喺 ${which} 入面開緊 — 請用 Safari 開` }),
     el('div', { text: '呢度可能冇聲、會熄屏、連唔到房。㩒右上角「⋯」揀「用 Safari 開」，或者複製條連結去 Safari 貼。' }),
     el('button', {
       class: 'btn btn-ghost btn-sm', type: 'button', style: { marginTop: '.5rem' },
-      onclick: async () => {
-        try { await navigator.clipboard.writeText(link); toast('連結已複製，去 Safari 貼'); }
-        catch { window.prompt('複製呢條連結，去 Safari 貼：', link); }
-      },
-    }, '📋 複製連結'));
+      onclick: () => linkCopy.copy(link, '連結已複製，去 Safari 貼'),
+    }, '📋 複製連結'),
+    linkCopy.el);
 }
 
 /** True when PeerJS is unusable right now: its script failed, or the phone is offline. */

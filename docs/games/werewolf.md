@@ -51,7 +51,7 @@ variant. The research's two official boards that need a 狼王/白狼王 are off
 | `openCard` | select | `auto` | 出局亮牌: `auto` follows the board (only the official 6-player 明牌 board) · `on` · `off`. |
 | `spectate` | bool | `false` | dead players see every role. Off by default: a dead player's screen is the easiest one to leak. |
 | `speakSecs` | seconds 0–300 | 60 | per speaker (day speeches and PK). 0 = no clock, the speaker taps 我講完. |
-| `wordsSecs` | seconds 0–300 | 45 | per 遺言. A self-explode always gets 30 s (0 stays untimed). |
+| `wordsSecs` | seconds 0–300 | 60 | per 遺言 — the research's and the official default (decision D7, 2026-10-04; was 45). A self-explode always gets 30 s (0 stays untimed). The 快玩 preset sets 30. |
 | `voteSecs` | seconds 0–120 | 20 | the vote closes at the deadline and anyone who has not voted abstains. 0 = wait for everybody. |
 
 Fixed window lengths (`pace`), in seconds:
@@ -213,7 +213,7 @@ The win check runs here, **before** any death trigger: if the game is decided, t
 For every newly dead player in ascending seat order the step list is `words` and `final` (order per `hunterOrder`).
 
 **遺言 (`words`).** Who: every day death (exile, shot, self-explode — the explode gets 30 s) and, per `lastWords`, night-1 deaths.
-Cue: 「阿明，請講遺言。你有 45 秒。」 Screen: the speaker list with a single 🎙 row; the speaker has 我講完. The timer, 我講完 or 下一步
+Cue: 「阿明，請講遺言。你有 60 秒。」 Screen: the speaker list with a single 🎙 row; the speaker has 我講完. The timer, 我講完 or 下一步
 ends it.
 
 **最後行動 (`final`).** Present **iff a hunter is on the board**, for **every** dead player (poisoned, wolf-killed, exiled,
@@ -239,16 +239,21 @@ Dead seats and the moderator do not get it. A speech with a clock never blocks; 
 
 ### 3.6 Vote
 
-Cue: 「發言完畢，請大家投票。揀你覺得係狼人嘅人，唔想投可以棄權。」 Voters: every living player except a flipped idiot.
-Candidates: every living player (including yourself and a flipped idiot). Screen: the shared **VotePanel** (pick → 確定,
-改票 until the vote closes, 棄權), a progress count 「已投 n/N」 (never who). Voters who cannot vote see why (dead / flipped idiot).
+Cue: 「發言完畢，請大家投票。揀你覺得係狼人嘅人，唔想投可以棄權。」 Voters: every living player except a flipped idiot (and a 💤
+absent seat, §3.11). Candidates: every living player (including yourself, a flipped idiot and an absent seat — its name carries 💤).
+Screen: the shared **VotePanel** (pick → 確定, 改票 until the vote closes, 棄權) with **`secretChoice`** (decision D6): your own phone
+says 「確定投票」 / 「已投 ✓」 and never lights or names whom you picked, so a glance across the table learns nothing before the tally; a
+progress count 「已投 n/N」 (never who). Voters who cannot vote see why (dead / flipped idiot / PK / 💤 「房主當咗你暫時離開，今次唔使投票。
+返嚟咗就同房主講聲。」).
 The vote closes when everyone has voted, at `voteSecs`, or on 下一步; non-voters abstain. Nothing about anybody's ballot is in
 another seat's view before the tally.
 
 ### 3.7 Tally, PK, exile, idiot flip
 
 Public tally screen: the VotePanel's reveal with 票型 (who voted whom), the abstainers listed, and the verdict. Cue:
-「投票結果：阿G四票，阿H兩票。阿G得票最多，被放逐。」
+「投票結果：阿G四票，阿H兩票。阿G得票最多，被放逐。」 The tally is read ballot by ballot, so its cue stays up **4 s + 0.8 s per voter,
+at most 15 s** (`S.tallyMinMs`, decision D7; the text's own reading time when that is longer): 7.2 s for 4 voters, 11.2 s for 9, 13.6 s
+for 12. Every other cue keeps `cueMinMs`; the dawn keeps its 8 s floor.
 
 - **Unique top** → exile: 遺言 (and the final window) follow, then night. Winner check at once.
   If the top is an **unflipped 白痴**: nobody dies; 「阿I翻牌，係白痴！唔使出局，不過以後冇投票權。」 He keeps speaking, is still a
@@ -332,6 +337,29 @@ panel also has a big **⏭ 下一步** (the engine action `{ type: 'skip' }`, ac
 window short, and may 代佢做 for a disconnected player from the ⋯ menu. His screen is never dimmed at night. The results list the moderator
 (🎙️ 上帝：…) and exclude him from `winners`.
 
+
+### 3.11 A seat that stops responding: 💤 absent (decision D4)
+
+A friend leaves the table with the phone still connected (iOS keeps the link up, so the stall detector never fires). The host
+marks the seat absent from the shell (`{ type: '@absent', pid }`, ACT.ABSENT; `@present` brings it back). From then on, for the rest
+of this game:
+
+- **Nothing waits for it.** The deal starts the night once every *present* seat has tapped 睇完喇 (the count reads 「n / present」);
+  it is not a voter in any vote opened later (still a candidate), and in an open vote it stops being waited for — a ballot it cast
+  before it left stands; if it was the last missing voter the vote resolves at once; its queued speech and 遺言 turns are dropped
+  and the turns left are renumbered (「發言 3/7」, 最後一位, and the next PK speaker gets the 「…平票，要 PK 發言」 opening); its own
+  turn in progress ends at once. A seat that is already absent when it ties stays a PK candidate but gets no PK speech (the
+  present tied seats are numbered 1/n, so the first still gets the opening). A PK whose only possible voters are absent is a
+  平安日 (「除咗同票嘅人冇人可以投」).
+- **It is still a player.** It can be killed, exiled or shot; it counts for the win; at night it wakes and gets its panel like
+  anybody (every night step already runs on a fixed clock and never waits for anyone, so absence changes nothing a sleeping
+  table could notice). Its 最後行動 window keeps its fixed length (anti-tell); its 遺言 is dropped.
+- **Public.** `seats[].absent` is the same on every phone; the roster chip and the ballot name show 💤; `my.absent` on its own
+  phone; `engine.blocking` is false for it. `@present` makes it count again and, while a vote is open, makes it a voter of that
+  vote if it may vote (alive, not flipped, not PK-tied). Turns already dropped are not given back.
+- Unchanged state (the shell says this game cannot do it): an unknown seat, the human moderator, a seat already absent / present,
+  or a finished game.
+
 ## 4. Single-device play
 
 One phone in the middle, voice on. The shell's pass-gate does the hand-overs; the engine only supplies `focus`.
@@ -374,6 +402,7 @@ PRIVATE state (never in any view before `over`, except through the per-seat bloc
 | `{type:'skip'}` | the human moderator | any | = `@next` |
 | `@cue-done {id}` | host | a pending cue | matched by id; starts the run / ends an announcement |
 | `@next` | host | any | `deal` → start; a cue → its run; a run → its end (commit); a tail → the next step |
+| `@absent {pid}` / `@present {pid}` | host | any before `over` | §3.11: a player seat stops / starts being waited for; unchanged for an unknown seat, the moderator, or a seat already in that state |
 
 `legalActions` is exactly the actions above that would change the state (a locked non-wolf has none; an already-chosen pick is
 not offered twice), **including `explode` for a living wolf** while it is allowed. That is safe because legalActions never leaves
@@ -384,7 +413,8 @@ done · abstain · (moderator) skip — never explode.
 detection asks it before anything else. True only for: an unready seat at the deal; the speaker of an untimed speech / 遺言
 (`speakSecs` / `wordsSecs` 0); a voter who has not voted in an untimed vote (`voteSecs` 0). False for every night window and
 the final-action window (fixed clocks — flagging the holders of the called role would point at them), any step with a running
-deadline, every narration line and announcement, a wolf's chance to explode, and the human moderator (his 下一步 is optional).
+deadline, every narration line and announcement, a wolf's chance to explode, the human moderator (his 下一步 is optional), and a
+seat the host marked 💤 absent (§3.11).
 
 `@void-round` (呢鋪唔計) is **not supported** and leaves the state unchanged: nothing in this game can be undone (deaths and
 potions are permanent; replaying a vote would let the host overturn an exile). A dead phone is covered by the clocks, autoAct
@@ -393,16 +423,19 @@ and 下一步.
 ### Views (whitelist)
 
 Common: `me, mod, isMod, phase, n, d, seq, title, subtitle, night, say, hint, board, opts, seats, alive, stage, voteLog, lastNight?, recent?,
-deadline?, span?, timerLabel?`. `seats` = `[{pid, no, alive, flipped, how?, at?, role?}]`: `role` **only when public** — dead seats with
+deadline?, span?, timerLabel?, hintRoleText?`. `seats` = `[{pid, no, alive, flipped, absent?, how?, at?, role?}]` (`absent` = the host marked it 💤, §3.11): `role` **only when public** — dead seats with
 出局亮牌, and everybody at `over` / for the moderator / for dead spectators (`spectate`). **Never the viewer's own seat**: it is in `my`,
 and the UI keeps it behind a cover (a role glyph on your own chip was readable from the next seat all day — playtest #2). `how` only for
 public causes (exile, shot, explode) until `over`. `lastNight = { n, deaths[] }` (seat order, no cause) on the day phases after that
 dawn; `voteLog = [{ d, round, votes[{by,to}], outcome, pid, tied }]`, every resolved vote (public 票型), present in every view;
-`recent` (day phases, once a vote has happened) = the shell's fold shape `[{ id: 'ww-votes', title, entries[{ title, lines }] }]` built from it. Per-seat `my = { role, alive, flipped, ready, canVote, notes[], mates?, potion? }` (`mates` wolves only,
+`recent` (day phases, once a vote has happened) = the shell's fold shape `[{ id: 'ww-votes', title, entries[{ title, lines }] }]` built from it. Per-seat `my = { role, alive, flipped, ready, canVote, notes[], mates?, potion?, absent? }` (`mates` wolves only,
 `potion` the witch only, `notes` = the seat's own seer / guard / witch records). Phase blocks: `ready` · `nt` (the panel:
 `step stage chips[{pid on mark tag by}] info hint skip ok pick set lock`, **same keys for every seat**) · `dawn` · `words` ·
 `final` (`nt` only for the dead seat) · `sayInfo` · `speech` (with the public `order`) · `vote` (`cands voters progress myVote?`) · `over`.
 `view.roleId` = the seat's own role id (players only; never for the table or the moderator) — the shell's 💡 sheet reads it.
+`view.hintRoleText` = `{ what, win }` for that card at THIS table (`S.roleHintText`): the board's extra line (隊友, 同守同救) under 做乜
+and only this table's rule (屠邊 or 屠城) under 點贏, so the 💡 role box never says 「睇房主設定」. It is built from the role, the board and
+the win rule only — every seat holding the same card gets the same words, all game.
 `view.hint` is one line (≤ 40 characters) for the 💡 sheet, built only from what that seat may know: its own panel at night
 (real actor → the role's how-to, decoy → 「呢一步冇你份…」, dead → 「你已經出局…」), its own turn by day, otherwise the public
 step — **by day never the seat's card** (the sheet's 而家要做咩 is plain text on a face-up phone; only its role box is covered), so the
@@ -475,6 +508,13 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
   on screen; the witch's potion labels, undo by re-tap, potion-state hints, closing line and the cue's 「準備緊…」; 狼刀優先 explained;
   the role card's table rule; the day 💡 line is the same for a wolf and a good seat, and for a hunter and anybody else in 最後行動; the witch's
   pick line replaces her potions line (a tap never grows her panel); the speaking-order cue names the next speakers; chip `can` / `aria-pressed`.
+- **Decisions (2026-10-04).** 遺言 60 s by default (快玩 30); the 票型 cue `4000 + 800 × voters` ms, capped at 15 s; the vote screen passes
+  `secretChoice` (and 💤 on an absent candidate); `view.hintRoleText` is this table's rule, the same for every holder of a card, all game,
+  and is what the shell's 💡 sheet shows; **@absent / @present** at the deal (the night starts without it), in a vote (not a voter, still a
+  candidate, a cast ballot stands, the last missing voter closes it, @present rejoins an open vote), in PK (not a voter; only-absent voters →
+  平安日), in speeches (turn dropped and renumbered, its own turn ends at once, 最後一位 still right, no turn next day), 遺言 dropped but the
+  final window kept, public and identical `seats[].absent`, never `blocking`, garbage / moderator / over unchanged; a fuzz that marks random
+  seats absent and back through whole games (nothing ever waits on or gives the floor to an absent seat).
 
 ## 7. 貼心 touches
 
@@ -492,7 +532,9 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
 - The role card says this table's win rule for your side, and the day 💡 lines serve both sides (a wolf is not told to hunt wolves) without
   ever depending on your card — the sheet is plain text on a face-up phone.
 - The seer's board remembers his results (✅/🐺 on the chips) and cannot waste a night on a repeat or on himself.
-- A 💡 hint for every phase and every seat, and role text split into 做乜 / 點贏.
+- A 💡 hint for every phase and every seat, and role text split into 做乜 / 點贏; the 💡 role box states this table's rule (屠邊 or 屠城).
+- Your own ballot is never on your screen (「已投 ✓」) until the tally; the 票型 stays up long enough to read every ballot.
+- A friend who leaves the table does not freeze it: the host marks the seat 💤 and the deal, the votes and the speeches go on without it.
 - Public stage line on every phone, so 靜音 and 讀稿 modes never need the host's speaker.
 - The shared phone never learns a name at night; the dead take the phone like everybody else.
 - A human moderator who sees everything, live, with one big 下一步, and can still 代佢做 a dropped phone.

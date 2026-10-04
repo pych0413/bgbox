@@ -182,6 +182,11 @@ The table view is exactly the public part of every player's view.
 
 On a roster row whose cup is locked the host also gets a small 🔓 that unlocks just that seat.
 
+Every confirm above is the shell's in-page arm-then-confirm, `api.confirm(text, button, { key: 'custom:<action>' })`
+(playtest #3, 2026-10-04): the first tap turns the tapped button into 「再㩒一次：…」 and sends nothing, the second
+tap within about 3 s sends. Never `globalThis.confirm`: a native dialog on the host's phone stops the room's server and
+drops every guest. Without `api.confirm` (an older shell) the action goes ahead on the first tap.
+
 ### 💡 hint (U1 — shown only when the player taps 💡, never by this UI)
 
 `view.hint`, one line (≤ 30 characters), built only from public facts plus this seat's own
@@ -357,7 +362,9 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 - `focus` → `{ pids: [card holders who have not seen their card] }` (seat order), `null` while all have seen,
   after the reveal, and after the end.
 - `autoAct` → `{ type: 'seen' }` for such a seat, else `null`.
-- `result` → `null` until `end`; then `{ winners: [], summary: '通用派牌：玩咗 N 回合', lines, carry }` (#10):
+- `result` → `null` until `end`; then `{ winners: [], noScore: true, summary: '通用派牌：玩咗 N 回合', lines, carry }` (#10).
+  `noScore: true` tells the shell this game keeps no score: the results screen says 「邊個贏由你哋講」 instead of a
+  winners list or 冇人贏 (decision 2026-10-04), and there are no `points`. The lines:
   1. `呢個係通用派牌：app 唔計輸贏，邊個贏由你哋自己講。`
   2. `最後一回合（第 N 回合）每個人嘅牌同骰，玩緊嗰陣收埋嘅而家全部公開：`
   3. one line per seat in seat order: `阿明：🔪 殺手　🎲 3 5（= 8）` (dice only if rolled, sum for 2+ dice), or
@@ -413,6 +420,8 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 | UI: 🎲 已搖 ×N, the 開盅 status line, the locked-cup badge (no greyed-out buttons), 開盅 under the cup | `custom ui: 已搖 ×N, the 開盅 status line…` |
 | the rules name the lock like its button (鎖定點數) | `the rules call the dice lock by the button's name…` |
 | long-press a role tag explains it; tap / scroll / jitter handled | `custom ui: U1 — long-pressing a role name…` |
+| host prompts are the in-page `api.confirm` on the tapped button (first tap arms, second sends); a native `confirm()` is never called; no `api.confirm` → goes ahead | `custom ui: #3 — host buttons confirm in the page…` |
+| `result().noScore` is true, no winners, no points | `custom: result() says the app keeps no score…` |
 | fuzz n = 2–16 × 100 seeds × presets/dice/moderator/modSees/selfRoll/antiStreak with per-step invariants and leak sweeps | `fuzz — every head-count x 100 seeds…`, `fuzz — long games with many rounds…` |
 
 ## 7. 貼心 touches
@@ -443,13 +452,13 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 3. **💡 sheet for a seat without a card** (moderator / spectator): today it lists `rules.roles`, i.e. every
    preset's roles. For this game the useful list is the deck in play — `view.roles` (`{ name, emoji, desc }`).
    Suggest: when the view has no own role but has `view.roles`, list those.
-4. **Results hero** says `— 冇人贏` for this game, which reads like a draw. A `result.headline` override
-   (e.g. `玩完喇`) would fit tools that do not score.
+4. **Results hero** said `— 冇人贏` for this game, which reads like a draw. Done 2026-10-04: `result().noScore`
+   (the shell shows 「邊個贏由你哋講」).
 5. Verified against the code that exists today (no request): `ConfigForm`'s `roles` editor takes
    `[{ id, name, emoji, count, filler, desc }]`, honours `max` and shows `help`; `select` options are
    `{ value, label }` with typed values kept; `RoleCard` forwards `onOpen(open)`; `DiceCup` chimes on `rollSeq`
-   and hides its roll button when `canRoll` is false; the shell uses native `confirm` for its own prompts, as this
-   UI does for reveal / redeal / end; the shell loads `games/custom/style.css` for `meta.css`; the room hands
+   and hides its roll button when `canRoll` is false; the shell's prompts and this UI's reveal / redeal / end / 全體搖骰
+   prompts are the in-page `sh.confirm` / `api.confirm` (never a native dialog, #3); the shell loads `games/custom/style.css` for `meta.css`; the room hands
    `result().carry` back as `setup({ carry })`.
 6. Nice to have: a `desc` input in the `roles` editor (v1 had none; the presets carry the 做乜 / 點贏 text).
 7. Nice to have: the room could re-run `config.defaults(n, prev)` on head-count change even when the config was

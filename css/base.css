@@ -965,6 +965,9 @@ button.game-card:active { transform: scale(.97); }
 .banner.err { background: rgba(228,87,61,.1); border-color: rgba(228,87,61,.4); }
 .banner .grow { flex: 1; min-width: 8rem; }
 .banner .btn { width: auto; }
+/* a seat the table waits on (D4): the line on top, its four answers wrap underneath */
+.banner.stall .grow { flex-basis: 100%; }
+.banner.stall .btn { flex: 1 1 auto; }
 .play-game { min-height: 12rem; }
 .play-loading { text-align: center; color: var(--text-dim); padding: 3rem 0; }
 
@@ -1016,6 +1019,16 @@ button.game-card:active { transform: scale(.97); }
 .conn-list li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-list li.off .nm { opacity: .6; }
 .conn-list .conn-state { font-size: .75rem; color: var(--text-dim); flex: none; }
+.conn-list li.absent .nm { opacity: .6; }
+/* D4 💤 標記缺席… — the seat picker inside the ⋯ menu */
+.absent-pick .btn.is-absent { border-style: dashed; color: var(--text-dim); }
+/* a link the clipboard would not take: shown in the page to copy by hand (never a native prompt, #3) */
+.copy-box { margin-top: .625rem; text-align: left; }
+.copy-box .hint { display: block; margin-bottom: .25rem; }
+.copy-field {
+  width: 100%; padding: .5rem .625rem; border-radius: .625rem; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font-size: .8125rem; user-select: all; -webkit-user-select: all;
+}
 .conn-list li.off .conn-state { color: #ff9b86; }
 .conn-tip { margin: .375rem 0 0; line-height: 1.6; }
 .menu-sheet .sheet-list .seg { margin-top: .25rem; }
@@ -1218,10 +1231,12 @@ body.is-night .timer-flash-text { color: rgba(255,200,120,.7); }
 body.has-netbar #app { padding-top: calc(var(--netbar-h, 2.25rem) + 1rem); }
 body.has-netbar .play-top { top: var(--netbar-h, 2.25rem); margin-top: -1rem; padding-top: .5rem; }
 
-/* Night: the screen goes near-black but stays tappable, so decoy buttons
+/* Night (js/ui/night.js, logic.nightChrome): the screen dims but stays tappable, so decoy buttons
    keep working and tap noise tells nobody anything (DESIGN §4 anti-tell).
-   BACKLOG #4: near-black, fades only (in slowly, out a little faster), never
-   a white flash, and a hint to turn the brightness down. */
+   BACKLOG #4: fades only (in slowly, out a little faster), never a white flash, and a hint to turn the
+   brightness down. Levels: dark = near-black between your own steps (語音 / 讀稿, eyes closed);
+   soft = D1 靜音: one readable ~70 % dim on EVERY phone all night, the awake one too (no lift, no tell);
+   opaque = a shared phone. */
 .night-dim {
   position: fixed; inset: 0; z-index: 60; pointer-events: none; background: rgba(2,2,4,.95);
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: .375rem;
@@ -1229,8 +1244,11 @@ body.has-netbar .play-top { top: var(--netbar-h, 2.25rem); margin-top: -1rem; pa
   opacity: 0; transition: opacity .6s ease-out;
 }
 .night-dim.on { opacity: 1; transition: opacity 1s ease-in; }
-/* a shared phone: what is underneath is the last holder's private screen — cover it fully, swallow taps */
-.night-dim.opaque { background: #020204; pointer-events: auto; }
+.night-dim.soft { background: rgba(2,2,4,.7); }
+/* a shared phone: what is underneath is the last holder's private screen — cover it fully, swallow taps
+   (only while on: the class stays for the fade-out, the taps must not) */
+.night-dim.opaque { background: #020204; }
+.night-dim.on.opaque { pointer-events: auto; }
 .night-dim .nd-title { font-size: .8125rem; letter-spacing: .3em; color: rgba(255,255,255,.22); }
 .night-dim .nd-hint { font-size: .6875rem; color: rgba(255,255,255,.14); }
 body.is-night { background-color: #000; }

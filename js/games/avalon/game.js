@@ -22,9 +22,11 @@
 //   the counts and shuffled with ctx.rng, so it carries no seat information.
 //
 // Framework hooks: blocking() (stall detection ignores the decoy taps),
-// `@void-round` (呢鋪唔計 in pick / vote / quest), setup's `carry` (the first
-// leader rotates between games), config.defaults(n, prev, { singleDevice })
-// and config.presets(n). Every view carries a role-independent `hint` (💡).
+// `@void-round` (呢鋪唔計 in pick / vote / quest), `@absent` / `@present` (💤 a
+// seat that left: it is not waited on — no vote, Success on a quest, skipped as
+// leader), hostActions() (⏱️ 刺殺 ＋60 秒), setup's `carry` (the first leader
+// rotates between games), config.defaults(n, prev, { singleDevice }) and
+// config.presets(n). Every view carries a role-independent `hint` (💡).
 // ============================================================
 
 import { HOST, ACT, seatOrder, shuffle, sample, rint } from '../../core/engine-kit.js?v=1';
@@ -46,6 +48,14 @@ export const approvalsNeeded = (n) => Math.floor(n / 2) + 1;
 export const MAX_REJECTS = 5;
 const WIN_QUESTS = 3;
 const SHOT_MS = 8000;
+const EXTEND_MS = 60000;   // the host's ⏱️ ＋60 秒 on the assassination clock
+const MAX_EXTENDS = 5;
+const MIN_PRESENT = 3;     // 💤 is refused when fewer seats would be left at the table
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
+// 2026-10-04 (decision D8): the assassination gets a 120 s soft clock by default. A setup saved before that still
+// holds the old default 0 and moves over once; the mark is kept with the setup, so a table that picks 0 keeps it.
+const CFG_REV = 2;
 const SPECIALS = ['percival', 'morgana', 'mordred', 'oberon'];
 const EVIL_SPECIALS = ['morgana', 'mordred', 'oberon'];
 
@@ -111,7 +121,7 @@ const DEFAULTS = Object.freeze({
   revealSecs: 25,
   questSecs: 12,
   discussSecs: 0,
-  assassinSecs: 0,
+  assassinSecs: 120,   // soft (decision D8): the clock shows, nothing happens at 0, the host can add time
   // Set by defaults() when one phone holds every seat: the two clocks were zeroed for pass-the-phone play, so
   // they come back when the table spreads over several phones again (not a form field).
   passPhone: false,
@@ -200,6 +210,8 @@ export const config = {
     // to 自訂 starts from something sensible for this head-count.
     const hasRoles = isObj(prev) && keyOk('roles', prev.roles);
     out.roles = out.preset === 'custom' ? (hasRoles ? repairRoles(out.roles, k) : recommendedRoles(k)) : recommendedRoles(k);
+    if (isObj(prev) && prev.cfgRev !== CFG_REV && out.assassinSecs === 0) out.assassinSecs = DEFAULTS.assassinSecs;
+    out.cfgRev = CFG_REV;
     // One phone for everybody: a shared clock cannot time N hand-overs, so both windows become taps.
     // Several phones again (friends joined after the host opened the room alone): the clocks come back,
     // but only when they were zeroed for the shared phone; a table that chose 0 itself keeps 0.
@@ -338,13 +350,43 @@ const names = (s, pids) => pids.map((p) => nm(s, p));
 const countOf = (arr, x) => arr.filter((v) => v === x).length;
 
 const leaderOf = (s) => s.order[s.leaderIx];
-const nextLeaderOf = (s) => s.order[(s.leaderIx + 1) % s.n];
+/** 💤 marked absent by the host (public). */
+const isAway = (s, pid) => (s.absent ?? []).includes(pid);
+/** The seats a vote counts: everybody who is at the table (a seat marked 💤 simply does not vote). */
+const votersOf = (s) => s.order.filter((p) => !isAway(s, p));
+/** The index of the next seat after `ix` that is at the table (the leader token skips a seat marked 💤). */
+function nextPresentIx(s, ix) {
+  for (let k = 1; k <= s.n; k++) {
+    const j = (ix + k) % s.n;
+    if (!isAway(s, s.order[j])) return j;
+  }
+  return (ix + 1) % s.n;
+}
+const nextLeaderOf = (s) => s.order[nextPresentIx(s, s.leaderIx)];
+/** Who may tap 繼續 on a public screen: the leader — or, when the leader is 💤, anybody at the table. */
+const mayContinue = (s, pid) => pid === leaderOf(s) || (isAway(s, leaderOf(s)) && !isAway(s, pid));
 const sizeOf = (s) => TEAM_SIZE[s.n][s.questNo - 1];
 const needOf = (s) => failsNeeded(s.n, s.questNo);
 const wins = (s) => countOf(s.results, true);
 const losses = (s) => countOf(s.results, false);
 const roleOwner = (s, role) => s.order.find((p) => s.role[p] === role) ?? null;
 const evilSeats = (s) => s.order.filter((p) => isEvil(s.role[p]));
+
+/**
+ * Who takes the shot: the Assassin — or, if the host marked the Assassin 💤, the next evil seat at the table (in seat
+ * order after the Assassin), as a real table would let another evil player point. Every screen stays the same; only
+ * that seat's own confirm becomes real. null when no evil seat is left at the table.
+ */
+function shooterOf(s) {
+  const a = roleOwner(s, 'assassin');
+  if (a && !isAway(s, a)) return a;
+  const i = Math.max(0, s.order.indexOf(a));
+  for (let k = 1; k <= s.n; k++) {
+    const p = s.order[(i + k) % s.n];
+    if (isEvil(s.role[p]) && !isAway(s, p)) return p;
+  }
+  return null;
+}
 
 /** Lady of the Lake reads loyalty from the character card; Oberon is the only switchable one. */
 function loyaltyOf(s, pid) {
@@ -386,6 +428,7 @@ function setTimer(s, ctx, secs, label) {
 }
 
 function startPick(s, ctx) {
+  if (isAway(s, leaderOf(s))) s.leaderIx = nextPresentIx(s, s.leaderIx);   // 💤 never leads (e.g. away before the first pick)
   s.phase = 'pick';
   s.team = [];
   s.votes = {};
@@ -393,9 +436,9 @@ function startPick(s, ctx) {
   setTimer(s, ctx, s.cfg.discussSecs, S.T.pick.timerLabel);   // a nudge only: advance() leaves `pick` alone
 }
 
-/** Leader token moves one seat per proposal, approved or not. */
+/** Leader token moves one seat per proposal, approved or not (skipping a seat marked 💤). */
 function nextProposal(s, ctx) {
-  s.leaderIx = (s.leaderIx + 1) % s.n;
+  s.leaderIx = nextPresentIx(s, s.leaderIx);
   s.proposalNo += 1;
   startPick(s, ctx);
 }
@@ -409,24 +452,31 @@ function startQuest(s, ctx) {
   for (const p of s.team) s.flip[p] = ctx.rng() < 0.5;   // only that seat's tiles are mirrored; harmless to every other seat
   s.outcome = null;
   setTimer(s, ctx, s.cfg.questSecs, S.T.quest.timerLabel);
+  // a member marked 💤 plays Success at once (the dead-phone rule), recorded in `auto` like every system card
+  for (const p of s.team) if (isAway(s, p)) { s.cards[p] = 'success'; s.auto.push(p); }
+  if (s.cfg.questSecs === 0 && s.team.every((p) => p in s.cards)) resolveQuest(s, ctx);
 }
 
 function tallyVotes(s) {
+  // a seat marked 💤 does not vote: the majority is over the seats at the table (decision D4)
+  const voters = votersOf(s);
   const votes = {};
-  for (const p of s.order) votes[p] = s.votes[p];
-  const approves = s.order.filter((p) => votes[p] === 'approve').length;
-  const rejects = s.n - approves;
-  const approved = approves >= approvalsNeeded(s.n);
+  for (const p of voters) votes[p] = s.votes[p];
+  const approves = voters.filter((p) => votes[p] === 'approve').length;
+  const rejects = voters.length - approves;
+  const approved = approves >= approvalsNeeded(voters.length);
   // no = the game-wide proposal id (internal); k = which proposal of THIS quest it was, the number every screen shows
   // (「任務 3 · 第 2 次提議」, matching the 連續否決 track: a quest always starts on 0 rejections)
   const entry = {
     q: s.questNo, no: s.proposalNo, k: s.rejects + 1, leader: leaderOf(s), team: s.team.slice(), votes, approves, rejects, approved,
   };
+  const away = s.order.filter((p) => !voters.includes(p));
+  if (away.length) entry.absent = away;
   s.voteLog.push(entry);
   const before = s.rejects;
   s.rejects = approved ? 0 : s.rejects + 1;
   const ends = !approved && s.rejects >= MAX_REJECTS;
-  s.reveal = { approves, rejects, approved, needed: approvalsNeeded(s.n), before, after: s.rejects, ends: ends ? 'five-rejections' : null };
+  s.reveal = { approves, rejects, approved, needed: approvalsNeeded(voters.length), before, after: s.rejects, ends: ends ? 'five-rejections' : null };
   if (ends) s.pendingEnd = { winner: 'evil', reason: 'five-rejections' };
   s.phase = 'voted';
   s.deadline = null;
@@ -460,7 +510,7 @@ function resolveQuest(s, ctx) {
 function nextAfterQuest(s) {
   if (losses(s) >= WIN_QUESTS) return 'over';
   if (wins(s) >= WIN_QUESTS) return 'assassinate';
-  if (s.ladyOn && [2, 3, 4].includes(s.quests.length)) return 'lady';
+  if (s.ladyOn && [2, 3, 4].includes(s.quests.length) && !isAway(s, s.lady.holder)) return 'lady';
   return 'pick';
 }
 
@@ -468,7 +518,7 @@ function afterQuest(s, ctx) {
   switch (nextAfterQuest(s)) {
     case 'over': s.pendingEnd = { winner: 'evil', reason: 'three-fails' }; return toOver(s);
     case 'assassinate': return startAssassinate(s, ctx);
-    case 'lady': return startLady(s);
+    case 'lady': return startLady(s, ctx);
     default: return nextQuest(s, ctx);
   }
 }
@@ -480,7 +530,9 @@ function nextQuest(s, ctx) {
   return s;
 }
 
-function startLady(s) {
+function startLady(s, ctx) {
+  // the holder is 💤: no check this time (the token stays with them), on to the next quest
+  if (isAway(s, s.lady.holder)) return nextQuest(s, ctx);
   s.phase = 'lady';
   s.lady.step = { holder: s.lady.holder, target: null, loyalty: null };
   s.deadline = null;
@@ -488,16 +540,27 @@ function startLady(s) {
   return s;
 }
 
+/**
+ * The assassination. `assassinSecs` (default 120) is a SOFT clock (decision D8): it shows how long the table agreed to
+ * talk, and at 0 nothing happens — advance() leaves the step alone, the clock stays on 0:00 and every screen says
+ * 「夠鐘」, the Assassin can still take as long as they need, and the host can add 60 s (hostActions). Nothing ever
+ * picks for the Assassin by itself; only the host's 代佢做 for a seat whose phone is gone does (a random shot).
+ */
 function startAssassinate(s, ctx) {
   s.phase = 'assassinate';
   s.decoyed = [];
+  s.extends = 0;
+  if (!shooterOf(s)) {   // every evil seat is 💤: nobody is left to point at Merlin
+    s.pendingEnd = { winner: 'good', reason: 'no-shot' };
+    return toOver(s);
+  }
   setTimer(s, ctx, s.cfg.assassinSecs, S.T.assassinate.timerLabel);
   return s;
 }
 
 function toShot(s, ctx, target) {
   const hit = s.role[target] === 'merlin';
-  s.shot = { assassin: roleOwner(s, 'assassin'), target, hit, merlin: roleOwner(s, 'merlin') };
+  s.shot = { assassin: shooterOf(s), target, hit, merlin: roleOwner(s, 'merlin') };
   s.pendingEnd = { winner: hit ? 'evil' : 'good', reason: hit ? 'assassinated-merlin' : 'assassin-missed' };
   s.phase = 'shot';
   s.deadline = nowOf(ctx) + SHOT_MS;
@@ -523,7 +586,8 @@ function rawCue(s) {
   const text = (t, k) => ({ id: id(k), text: t, minMs: S.cueMinMs(t) });
   // After a 呢鋪唔計 the same step starts again: a new id (so it is announced again) and a short preface.
   const voids = s.voids ?? [];   // a snapshot from before 呢鋪唔計 existed has none
-  const vk = voids.length ? `~${voids.length}` : '';
+  // a leader token moved on past a seat marked 💤 restarts `pick` under the same proposal number: a fresh id too
+  const vk = (voids.length ? `~${voids.length}` : '') + (s.leaderSkips ? `^${s.leaderSkips}` : '');
   const redo = (ph) => ph === s.phase && redoing(s);
   switch (s.phase) {
     case 'reveal':
@@ -595,7 +659,69 @@ function hostAct(s, a, ctx) {
     return skipStep(s, ctx);
   }
   if (a.type === ACT.VOID_ROUND) return voidRound(s, ctx);
+  if (a.type === ABSENT) return setAway(s, ctx, a.pid, true);
+  if (a.type === PRESENT) return setAway(s, ctx, a.pid, false);
+  if (a.type === 'extend') {
+    // ⏱️ ＋60 秒 (hostActions): only on a running (or run-out) assassination clock
+    if (s.phase === 'assassinate' && s.deadline != null && (s.extends ?? 0) < MAX_EXTENDS) {
+      s.deadline = Math.max(s.deadline, nowOf(ctx)) + EXTEND_MS;
+      s.extends = (s.extends ?? 0) + 1;
+    }
+    return s;
+  }
   return s;   // ACT.AUTO is resolved by the session through autoAct()
+}
+
+/**
+ * 💤 (@absent) / back (@present), host only, public (decision D4). A seat marked absent is not waited on for the rest
+ * of the game: it does not vote (the majority is over the seats at the table), its quest card is Success (the
+ * dead-phone rule), the leader token and the Lady skip it, and if it is the Assassin another evil seat takes the shot.
+ * Nothing here depends on a role in a way anybody can see. Refused (state unchanged) when fewer than 3 seats would be
+ * left at the table.
+ */
+function setAway(s, ctx, pid, away) {
+  if (!isStr(pid) || !s.order.includes(pid) || away === isAway(s, pid)) return s;
+  s.absent ??= [];
+  if (!away) {
+    s.absent.splice(s.absent.indexOf(pid), 1);
+    return s;   // back: votes from now on (an open vote waits for them), leads when the token comes round
+  }
+  if (votersOf(s).length - 1 < MIN_PRESENT) return s;
+  s.absent.push(pid);
+  switch (s.phase) {
+    case 'reveal':
+      if (s.cfg.revealSecs === 0 && votersOf(s).every((p) => s.seen.includes(p))) startPick(s, ctx);
+      break;
+    case 'pick':
+      if (pid === leaderOf(s)) {   // the token moves on — not a rejection, not a new proposal
+        s.leaderIx = nextPresentIx(s, s.leaderIx);
+        s.leaderSkips = (s.leaderSkips ?? 0) + 1;
+        startPick(s, ctx);
+      }
+      break;
+    case 'vote':
+      delete s.votes[pid];   // a ballot not yet public: it simply does not count
+      if (votersOf(s).every((p) => s.votes[p] !== undefined)) tallyVotes(s);
+      break;
+    case 'quest':
+      if (s.team.includes(pid) && !(pid in s.cards)) {
+        s.cards[pid] = 'success';
+        s.auto.push(pid);
+        if ((s.cfg.questSecs === 0 || s.windowOver) && s.team.every((p) => p in s.cards)) resolveQuest(s, ctx);
+      }
+      break;
+    case 'lady':
+      if (pid === s.lady.step.holder) { s.lady.step = null; nextQuest(s, ctx); }
+      break;
+    case 'lady-peek':
+      if (pid === s.lady.step.holder) finishLady(s, ctx);
+      break;
+    case 'assassinate':
+      if (!shooterOf(s)) { s.pendingEnd = { winner: 'good', reason: 'no-shot' }; toOver(s); }
+      break;
+    default: break;
+  }
+  return s;
 }
 
 /** The current pick / vote / quest is a re-run after the host's 呢鋪唔計 (public: the host did it in front of everybody). */
@@ -618,7 +744,7 @@ function voidRound(s, ctx) {
   switch (s.phase) {
     case 'pick':
       record();
-      s.leaderIx = (s.leaderIx + 1) % s.n;
+      s.leaderIx = nextPresentIx(s, s.leaderIx);
       startPick(s, ctx);
       return s;
     case 'vote':
@@ -627,7 +753,8 @@ function voidRound(s, ctx) {
       s.votes = {};
       return s;
     case 'quest':
-      if (!Object.keys(s.cards).length) return s;
+      // only the system's Success for a seat marked 💤 is in: nothing anybody played to throw away
+      if (!Object.keys(s.cards).some((p) => !(s.auto ?? []).includes(p))) return s;
       record();
       startQuest(s, ctx);
       return s;
@@ -662,13 +789,13 @@ function act(state, msg, ctx = {}) {
   const a = msg?.action;
   if (!a || typeof a !== 'object' || typeof a.type !== 'string' || s.phase === 'over') return s;
   if (pid === HOST) return hostAct(s, a, ctx);
-  if (typeof pid !== 'string' || !s.order.includes(pid)) return s;
+  if (typeof pid !== 'string' || !s.order.includes(pid) || isAway(s, pid)) return s;   // 💤: the host brings them back
 
   switch (s.phase) {
     case 'reveal':
       if (a.type === 'seen' && !s.seen.includes(pid)) {
         s.seen.push(pid);
-        if (s.cfg.revealSecs === 0 && s.order.every((p) => s.seen.includes(p))) startPick(s, ctx);
+        if (s.cfg.revealSecs === 0 && votersOf(s).every((p) => s.seen.includes(p))) startPick(s, ctx);
       }
       return s;
 
@@ -685,12 +812,12 @@ function act(state, msg, ctx = {}) {
     case 'vote':
       if (a.type === 'vote' && (a.vote === 'approve' || a.vote === 'reject')) {
         s.votes[pid] = a.vote;
-        if (s.order.every((p) => s.votes[p] !== undefined)) tallyVotes(s);
+        if (votersOf(s).every((p) => s.votes[p] !== undefined)) tallyVotes(s);
       }
       return s;
 
     case 'voted':
-      if (a.type === 'continue' && pid === leaderOf(s)) continueVoted(s, ctx);
+      if (a.type === 'continue' && mayContinue(s, pid)) continueVoted(s, ctx);
       return s;
 
     case 'quest':
@@ -702,7 +829,7 @@ function act(state, msg, ctx = {}) {
       return s;
 
     case 'quest-result':
-      if (a.type === 'continue' && pid === leaderOf(s)) afterQuest(s, ctx);
+      if (a.type === 'continue' && mayContinue(s, pid)) afterQuest(s, ctx);
       return s;
 
     case 'lady': {
@@ -721,7 +848,7 @@ function act(state, msg, ctx = {}) {
       return s;
 
     case 'assassinate': {
-      const assassin = roleOwner(s, 'assassin');
+      const assassin = shooterOf(s);
       if (a.type === 'assassinate' && pid === assassin && isStr(a.target) && s.order.includes(a.target)) {
         toShot(s, ctx, a.target);
       } else if (a.type === 'decoy' && pid !== assassin && !s.decoyed.includes(pid)) {
@@ -743,7 +870,8 @@ function advance(state, ctx) {
   const s = state;
   if (s.deadline == null) return s;
   if (typeof ctx?.now === 'number' && ctx.now < s.deadline) return s;
-  // `pick` and `assassinate` may carry a soft deadline (a nudge): nothing happens when it passes.
+  // `pick` and `assassinate` carry a soft deadline (a nudge): nothing happens when it passes — in particular nothing
+  // ever picks for the Assassin (decision D8). The clock stays on 0:00 until the shot or the host's ＋60 秒.
   if (s.phase === 'reveal') startPick(s, ctx);
   else if (s.phase === 'quest') {
     // The clock only guarantees a minimum time. A card still missing is waited for (代佢做 / 下一步 settle a dead phone).
@@ -759,7 +887,7 @@ function advance(state, ctx) {
 
 const publicVoteEntry = (e) => ({
   q: e.q, no: e.no, leader: e.leader, team: e.team.slice(), votes: { ...e.votes },
-  approves: e.approves, rejects: e.rejects, approved: e.approved,
+  approves: e.approves, rejects: e.rejects, approved: e.approved, absent: (e.absent ?? []).slice(),
 });
 
 const publicQuest = (q) => ({
@@ -867,6 +995,7 @@ function view(state, pid) {
     },
     track: { rejects: s.rejects, max: MAX_REJECTS },
     leader: leaderOf(s),
+    absent: (s.absent ?? []).slice(),   // 💤 marked absent by the host (public)
     proposalNo: s.proposalNo,
     lady: ladyPublic(s),
     history: s.voteLog.map(publicVoteEntry),
@@ -892,20 +1021,22 @@ function view(state, pid) {
     case 'pick':
       v.pick = { leader: leaderOf(s), size: sizeOf(s), need: needOf(s), canPick: seat !== null && seat === leaderOf(s) };
       break;
-    case 'vote':
+    case 'vote': {
+      const voters = votersOf(s);
       v.vote = {
         leader: leaderOf(s), team: s.team.slice(),
-        progress: { done: Object.keys(s.votes).length, total: s.n },
+        progress: { done: voters.filter((p) => s.votes[p] !== undefined).length, total: voters.length },
         mine: seat !== null ? (s.votes[seat] ?? null) : null,
       };
       break;
+    }
     case 'voted': {
       const e = s.voteLog[s.voteLog.length - 1];
       v.voted = {
         leader: e.leader, team: e.team.slice(), votes: { ...e.votes },
         approves: e.approves, rejects: e.rejects, approved: e.approved, needed: s.reveal.needed,
         before: s.reveal.before, after: s.reveal.after, ends: s.reveal.ends,
-        nextLeader: nextLeaderOf(s),
+        nextLeader: nextLeaderOf(s), absent: (e.absent ?? []).slice(),
       };
       break;
     }
@@ -946,7 +1077,7 @@ function view(state, pid) {
       break;
     }
     case 'assassinate': {
-      const assassin = roleOwner(s, 'assassin');
+      const assassin = shooterOf(s);
       v.assassinate = {
         canShoot: seat !== null && seat === assassin,
         tapped: seat !== null && s.decoyed.includes(seat),
@@ -980,12 +1111,14 @@ function focus(state) {
   const s = state;
   switch (s.phase) {
     case 'reveal': {
-      const pids = s.order.filter((p) => !s.seen.includes(p));
+      const pids = votersOf(s).filter((p) => !s.seen.includes(p));
       return pids.length ? { pids } : null;
     }
-    case 'pick': case 'voted': case 'quest-result': return { pids: [leaderOf(s)] };
+    case 'pick': return { pids: [leaderOf(s)] };
+    // a leader marked 💤 is never called (a shared phone's gate must not ask for them): anybody may tap 繼續
+    case 'voted': case 'quest-result': return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)] };
     case 'vote': {
-      const pids = s.order.filter((p) => s.votes[p] === undefined);
+      const pids = votersOf(s).filter((p) => s.votes[p] === undefined);
       return pids.length ? { pids } : null;
     }
     case 'quest': {
@@ -994,7 +1127,7 @@ function focus(state) {
     }
     case 'lady': case 'lady-peek': return { pids: [s.lady.step.holder] };
     // The gate on a shared phone must not name the Assassin: it says what the Assassin is called instead.
-    case 'assassinate': return { pids: [roleOwner(s, 'assassin')], anonymous: S.T.assassinate.anonymous };
+    case 'assassinate': return { pids: [shooterOf(s)], anonymous: S.T.assassinate.anonymous };
     case 'shot': return { pids: [s.shot.assassin] };
     default: return null;
   }
@@ -1008,21 +1141,21 @@ function focus(state) {
  */
 function blocking(state, pid) {
   const s = state;
-  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid)) return false;
+  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAway(s, pid)) return false;
   switch (s.phase) {
     case 'reveal': return s.cfg.revealSecs === 0 && !s.seen.includes(pid);   // timed: the clock ends it, `seen` is a decoy
     case 'pick': case 'voted': case 'quest-result': return pid === leaderOf(s);
     case 'vote': return s.votes[pid] === undefined;
     case 'quest': return s.team.includes(pid) && !(pid in s.cards);
     case 'lady': case 'lady-peek': return pid === s.lady.step.holder;
-    case 'assassinate': return pid === roleOwner(s, 'assassin');            // everybody else only has a decoy
+    case 'assassinate': return pid === shooterOf(s);                         // everybody else only has a decoy
     default: return false;                                                   // shot: its clock ends it
   }
 }
 
 function legalActions(state, pid) {
   const s = state;
-  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid)) return [];
+  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAway(s, pid)) return [];
   const leader = leaderOf(s);
   const out = [];
   switch (s.phase) {
@@ -1036,7 +1169,7 @@ function legalActions(state, pid) {
       for (const vote of ['approve', 'reject']) if (s.votes[pid] !== vote) out.push({ type: 'vote', vote });
       break;
     case 'voted': case 'quest-result':
-      if (pid === leader) out.push({ type: 'continue' });
+      if (mayContinue(s, pid)) out.push({ type: 'continue' });
       break;
     case 'quest':
       if (s.team.includes(pid) && !(pid in s.cards)) {
@@ -1053,7 +1186,7 @@ function legalActions(state, pid) {
       if (pid === s.lady.step.holder) out.push({ type: 'lady-done' });
       break;
     case 'assassinate':
-      if (pid === roleOwner(s, 'assassin')) {
+      if (pid === shooterOf(s)) {
         for (const t of s.order) if (t !== pid) out.push({ type: 'assassinate', target: t });
       } else if (!s.decoyed.includes(pid)) {
         out.push({ type: 'decoy' });
@@ -1070,7 +1203,7 @@ function legalActions(state, pid) {
 /** What to do for a stalled seat. A dead voter approves, a dead quest member plays success (never a surprise sabotage). */
 function autoAct(state, pid, ctx) {
   const s = state;
-  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid)) return null;
+  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAway(s, pid)) return null;
   const rnd = (k) => (ctx && ctx.rng ? rint(ctx.rng, k) : 0);
   const leader = leaderOf(s);
   switch (s.phase) {
@@ -1086,13 +1219,26 @@ function autoAct(state, pid, ctx) {
     }
     case 'lady-peek': return pid === s.lady.step.holder ? { type: 'lady-done' } : null;
     case 'assassinate': {
-      if (pid !== roleOwner(s, 'assassin')) return s.decoyed.includes(pid) ? null : { type: 'decoy' };
+      // only ever for a seat the host acts for (代佢做: its phone is gone) — the soft clock never shoots by itself
+      if (pid !== shooterOf(s)) return s.decoyed.includes(pid) ? null : { type: 'decoy' };
       const cand = s.order.filter((t) => t !== pid);
       return { type: 'assassinate', target: cand[rnd(cand.length)] };
     }
     case 'shot': return pid === s.shot.assassin ? { type: 'continue' } : null;
     default: return null;
   }
+}
+
+/**
+ * The host phone's own buttons (⋯ menu, dispatched as @host): ⏱️ ＋60 秒 while the assassination clock runs or has run
+ * out (decision D8: the Assassin may always take longer; the host can say so on the clock too).
+ */
+function hostActions(state) {
+  const s = state;
+  if (s.phase === 'assassinate' && s.deadline != null && (s.extends ?? 0) < MAX_EXTENDS) {
+    return [{ label: S.T.assassinate.extend, action: { type: 'extend' } }];
+  }
+  return [];
 }
 
 // ---------- result and the "why" ----------
@@ -1155,9 +1301,12 @@ function explain(s) {
         approves: e.approves, rejects: e.rejects,
         yes: names(s, s.order.filter((p) => e.votes[p] === 'approve')),
         no_: names(s, s.order.filter((p) => e.votes[p] === 'reject')),
+        away: names(s, e.absent ?? []),
       }));
     }
   }
+
+  if (s.absent?.length) lines.push(S.RECAP.absent(names(s, s.absent)));
 
   if (s.voids?.length) {
     lines.push(S.RECAP.voidsHead);
@@ -1248,6 +1397,9 @@ function setup({ players, config: cfg, rng, now, carry }) {
     seen: [],
     decoyed: [],
     voids: [],                              // the host's 呢鋪唔計: [{ q, no, phase, leader }] (public)
+    absent: [],                             // 💤 seats the host marked absent (public, D4)
+    leaderSkips: 0,                         // times the leader token moved past a seat that went 💤 in `pick`
+    extends: 0,                             // the host's ⏱️ ＋60 秒 on this assassination clock
     // The Lady starts with the seat to the right of the first leader (the one who will lead last).
     lady: { holder: on ? order[(startIx - 1 + n) % n] : null, held: on ? [order[(startIx - 1 + n) % n]] : [], step: null, log: [] },
     shot: null,
@@ -1261,4 +1413,4 @@ function setup({ players, config: cfg, rng, now, carry }) {
   return s;
 }
 
-export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, result };
+export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, hostActions, result };

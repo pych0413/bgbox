@@ -178,7 +178,7 @@ export function hintFor(c) {
     case 'term':
       if (c.role === 'judge') return '大家睇吓題目：有人已經識就㩒「換題」，冇人識就㩒「開始睇卡」。';
       if (c.role === 'table') return '大家睇題目；有人已經識就換題。';
-      return '睇吓題目。你已經識呢個詞？即刻出聲，諗樣會換題。';
+      return '睇吓題目。已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。';
     case 'read':
       if (c.role === 'table') return c.pass ? '部手機逐個傳，每人睇卡時間一樣。' : '大家望住自己部電話睇卡。';
       if (c.role === 'judge') {
@@ -306,6 +306,32 @@ export function roundBlock(h, nameOf, total) {
   const clipped = (h.changes ?? []).filter((c) => c.delta !== c.nominal).map((c) => nameOf(c.pid));
   if (clipped.length) out.push(`　（分數唔會低過 0：${clipped.join('、')} 實際扣少咗）`);
   return out;
+}
+
+// ---------- 呢輪作廢 / 💤 唔喺度 (public) ----------
+
+/** Above a fresh deal: why it is a fresh deal. `redo` = { how, judge, kept }; `judgeNow` = this deal's 諗樣. */
+export function redoLine(redo, nameOf, judgeNow) {
+  if (!redo) return '';
+  const J = nameOf(redo.judge);
+  const N = nameOf(judgeNow);
+  switch (redo.how) {
+    case 'absent': return `💤 ${J} 唔喺度：呢鋪由 ${N} 做諗樣`;
+    case 'stuck': return redo.kept ? `🗑️ 上一鋪作廢：${J} 遲啲先做諗樣，呢鋪由 ${N} 做` : `🗑️ 上一鋪作廢：呢鋪由 ${N} 做諗樣`;
+    default: return '🗑️ 上一鋪作廢：新題目、重新派身份';
+  }
+}
+
+/** One results line per round thrown away (`x` = a state.voids entry). */
+export function voidLine(x, nameOf) {
+  const J = nameOf(x.judge);
+  const t = x.term ? `（「${x.term}」）` : '';
+  switch (x.how) {
+    case 'skip': return `💤 第 ${x.n} 輪：${J} 唔喺度，冇做諗樣`;
+    case 'absent': return `💤 第 ${x.n} 輪作廢${t}：${J} 唔喺度，換人做諗樣`;
+    case 'stuck': return `🗑️ 第 ${x.n} 輪作廢${t}：${J} ${x.kept ? '遲啲先做諗樣' : '今個圈冇做到諗樣'}`;
+    default: return `🗑️ 第 ${x.n} 輪作廢${t}，重新派過（諗樣 ${J}）`;
+  }
 }
 
 export function summaryLine(winners, score, nameOf) {

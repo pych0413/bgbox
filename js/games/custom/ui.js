@@ -8,7 +8,7 @@
 // open the card) and DOM caches. Everything is drawn from the whitelisted
 // view built by game.js; this file never invents state.
 //
-// Uses only api.components (RoleCard, DiceCup, dieFace), api.send, api.sfx and
+// Uses only api.components (RoleCard, DiceCup, dieFace), api.send, api.sfx, api.confirm and
 // api.players. The role card and the cup own their own sounds (flip, lock,
 // roll chime keyed on rollSeq), so this file only adds game-level ones.
 //
@@ -42,10 +42,6 @@ function h(tag, attrs, ...kids) {
     n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   }
   return n;
-}
-
-function confirmed(text) {
-  return typeof globalThis.confirm === 'function' ? globalThis.confirm(text) : true;
 }
 
 const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -129,13 +125,13 @@ export function mount(root, api) {
 
   // ---------- host controls ----------
   const btns = {
-    rollAll: ctlButton('🎲 全體搖骰', () => rollAll()),
+    rollAll: ctlButton('🎲 全體搖骰', (b) => rollAll(b)),
     unlockDice: ctlButton('🔓 解鎖骰盅', () => send({ type: 'unlock-dice' })),
-    revealDice: ctlButton('👁 開晒啲骰', () => sendHost('reveal-dice')),
-    revealRoles: ctlButton('🔓 開晒角色', () => sendHost('reveal-roles'), 'danger'),
-    redeal: ctlButton('🃏 重新派牌', () => sendHost('redeal')),
+    revealDice: ctlButton('👁 開晒啲骰', (b) => sendHost('reveal-dice', b)),
+    revealRoles: ctlButton('🔓 開晒角色', (b) => sendHost('reveal-roles', b), 'danger'),
+    redeal: ctlButton('🃏 重新派牌', (b) => sendHost('redeal', b)),
     nextRound: ctlButton('➡️ 下一回合（重新派牌）', () => send({ type: 'next-round' }), 'primary'),
-    end: ctlButton('🏁 結束遊戲', () => sendHost('end'), 'quiet'),
+    end: ctlButton('🏁 結束遊戲', (b) => sendHost('end', b), 'quiet'),
   };
   const ctlCard = h('section', { class: 'cu-card', hidden: true },
     h('div', { class: 'cu-head' }, h('h3', { text: '主持控制' })),
@@ -155,18 +151,31 @@ export function mount(root, api) {
   // first screen, instead of below the role card where nobody would scroll to it
   wrap.append(status, noteCard, diceCard, showCard, roleCard, tableCard, ctlCard, deckCard, logCard);
 
+  /** A host button; `onclick(button)` gets the button itself, for the in-page confirm on it. */
   function ctlButton(label, onclick, kind = '') {
-    return h('button', { type: 'button', class: `cu-btn ${kind}`.trim(), onclick }, label);
+    const b = h('button', { type: 'button', class: `cu-btn ${kind}`.trim() }, label);
+    b.addEventListener('click', () => onclick(b));
+    return b;
+  }
+
+  /**
+   * #3: never a native dialog — on the host phone it would freeze the room's server. api.confirm(text, button) is the
+   * shell's arm-then-confirm: the first tap arms the button (「再㩒一次：…」) and returns false, the second returns true.
+   * Without it (an older shell) the action simply goes ahead; globalThis.confirm is never called.
+   */
+  function confirmed(text, node, key) {
+    if (typeof api.confirm !== 'function') return true;
+    try { return api.confirm(text, node, { key: `custom:${key}` }) === true; } catch (err) { console.error(err); return true; }
   }
 
   // ---------- actions ----------
-  function sendHost(type) {
-    if (NEED_CONFIRM[type] && !confirmed(NEED_CONFIRM[type])) return;
+  function sendHost(type, node) {
+    if (NEED_CONFIRM[type] && !confirmed(NEED_CONFIRM[type], node, type)) return;
     send({ type });
   }
 
-  function rollAll() {
-    if (last?.seats.some((s) => s.diceLocked) && !confirmed('有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？')) return;
+  function rollAll(node) {
+    if (last?.seats.some((s) => s.diceLocked) && !confirmed('有人鎖咗骰盅，全體搖骰會一齊解鎖。繼續？', node, 'roll-all')) return;
     if (!last?.me?.playing) sfx('roll');   // a moderator has no cup to rattle
     send({ type: 'roll-all' });
   }

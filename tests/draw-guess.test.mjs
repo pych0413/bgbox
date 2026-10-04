@@ -333,7 +333,7 @@ test('judge: close, near and wrong', () => {
   assert.equal(analyse('', wheel).kind, 'wrong');
   assert.equal(analyse('！！', wheel).kind, 'wrong');
   const tiger = { w: '老虎', alt: [] };
-  assert.equal(analyse('老鼠', tiger).kind, 'close', 'two-character answer: shares a character in the same place');
+  assert.equal(analyse('老鼠', tiger).kind, 'wrong', 'D9: one character in the same place is not close (it would hand out half the word)');
   assert.equal(analyse('虎老', tiger).kind, 'close', 'reversed');
   assert.equal(analyse('獅子', tiger).kind, 'wrong');
   assert.equal(analyse('馬', tiger).kind, 'wrong');
@@ -1012,6 +1012,46 @@ test('draw-guess: the reveal lasts 7 s for every turn (the last one too); a 5 s 
 
 // ============================================================
 // typed mode
+test('judge: D9 (user, 2026-10-04) — 2-character words: no 好接近 from a same-position match, hidden or revealed', () => {
+  const fish = { w: '魚龍', alt: ['鱼龙'] };
+  // before any hint: 恐龍 used to be 好接近 14 s before 龍 was revealed — half the word for free
+  for (const g of ['恐龍', '恐龙', '金魚', '魚蛋']) assert.equal(analyse(g, fish).kind, 'wrong', g);
+  // after the hint revealed 龍: X龍 says nothing new (and steered a whole table into pen types with 筆)
+  for (const g of ['恐龍', '飛龍', '魚蛋']) assert.equal(analyse(g, fish, 'standard', ['', '龍']).kind, 'wrong', `${g} / 龍 public`);
+  const chalk = { w: '粉筆', alt: ['粉笔', 'chalk'] };
+  for (const g of ['鉛筆', '毛筆', '蠟筆', '炭筆', '原子筆']) assert.equal(analyse(g, chalk, 'standard', ['', '筆']).kind, 'wrong', g);
+  // still close: the answer reversed, the answer inside a longer guess, the entry's own `near` list
+  assert.equal(analyse('龍魚', fish).kind, 'close');
+  assert.equal(analyse('龍魚', fish, 'standard', ['', '龍']).kind, 'close', 'shares the hidden 魚');
+  assert.equal(analyse('魚龍化石', fish, 'standard', ['', '龍']).kind, 'close', 'contains the whole answer: never public');
+  assert.equal(analyse('粉筆', chalk, 'standard', ['', '筆']).kind, 'right');
+  assert.equal(analyse('白板筆', { ...chalk, near: ['白板筆'] }, 'standard', ['', '筆']).kind, 'near');
+  // strict: what standard would call wrong stays wrong (public), the rest stays hidden
+  assert.equal(analyse('恐龍', fish, 'strict').kind, 'wrong');
+  assert.equal(analyse('鱼龙', fish, 'strict').kind, 'right', 'an alt spelled exactly');
+});
+
+test('judge: D9 — for every length, a near miss that shares only revealed characters is not 好接近', () => {
+  const idiom = { w: '守株待兔', alt: [] };
+  assert.equal(analyse('守株', idiom).kind, 'close', 'a piece, nothing revealed');
+  assert.equal(analyse('守株', idiom, 'standard', ['守', '株', '', '']).kind, 'wrong', 'a piece made of public characters only');
+  assert.equal(analyse('守株待', idiom, 'standard', ['守', '株', '', '']).kind, 'close', 'shares the hidden 待');
+  const wheel = { w: '摩天輪', alt: ['摩天轮'] };
+  assert.equal(analyse('摩地輪', wheel, 'standard', ['', '', '輪']).kind, 'close', 'edit distance 1: shares the hidden 摩');
+  assert.equal(analyse('摩天', wheel, 'standard', ['摩', '', '']).kind, 'close', 'shares the hidden 天');
+  assert.equal(analyse('天摩輪', wheel, 'standard', ['', '天', '']).kind, 'close', 'scrambled');
+  // an ambiguous character revealed in one spelling is public in every spelling
+  const noodles = { w: '炒麵', alt: [] };
+  assert.equal(analyse('湯麪', noodles, 'standard', ['', '麵']).kind, 'wrong');
+  // property over the real bank: whatever is revealed, a guess that contains the word is never public text
+  let n = 0;
+  for (const e of FLAT) {
+    if (n++ % 4) continue;
+    const cells = Array.from(e.w).map((c, i) => (i % 2 ? c : ''));
+    for (const g of [`${e.w}嘅嘢`, `係咪${e.w}同老虎`]) assert.notEqual(analyse(g, e, 'standard', cells).kind, 'wrong', `${e.w} / ${g}`);
+  }
+});
+
 // ============================================================
 
 const mkTyped = (n = 5, seed = 3, over = {}) => {
@@ -1020,6 +1060,25 @@ const mkTyped = (n = 5, seed = 3, over = {}) => {
   return sim;
 };
 const say = (sim, pid, text, dt = 800) => { sim.now += dt; return sim.act(pid, { type: 'guess', text }); };
+
+test('draw-guess typed: D9 — the engine passes the revealed characters: X龍 is 好接近 neither before nor after 龍 shows', () => {
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const sim = mk(5, seed, typedCfg, bankOf([{ w: '魚龍', alt: [], level: 1, cat: '海洋生物' }, TRIO[1], TRIO[2]]));
+    pick(sim, '魚龍');
+    const [a, b, c] = guessers(sim);
+    const kindOf = (pid) => T(sim).guesses.filter((g) => g.pid === pid).at(-1).kind;
+    say(sim, a, '恐龍');
+    assert.equal(kindOf(a), 'wrong', 'before any reveal: one character in the same place is wrong');
+    while (!view(sim, null).play.mask.cells.some(Boolean) && sim.state.phase === 'play') sim.advance();
+    const shown = view(sim, null).play.mask.cells.find(Boolean);
+    assert.ok(shown, 'the 50 % hint revealed one character');
+    const other = shown === '魚' ? '魚蛋' : '恐龍';
+    say(sim, b, other);
+    assert.equal(kindOf(b), 'wrong', `after ${shown} shows, ${other} says nothing new`);
+    say(sim, c, '龍魚');
+    assert.equal(kindOf(c), 'close', 'the answer reversed is still 好接近');
+  }
+});
 
 test('draw-guess typed: right, close and wrong guesses land in the feed the way each seat may see them', () => {
   const sim = mkTyped(5, 3);

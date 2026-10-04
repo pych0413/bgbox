@@ -868,6 +868,7 @@ export const engine = {
       const role = state.roles.find((r) => r.id === state.seats[id].roleId);
       if (role) carry.roles[id] = role.name;
     }
-    return { winners: [], summary: `通用派牌：玩咗 ${state.round} 回合`, lines, carry };
+    // noScore: the app keeps no score here — the shell says 「邊個贏由你哋講」 instead of a winners list
+    return { winners: [], noScore: true, summary: `通用派牌：玩咗 ${state.round} 回合`, lines, carry };
   },
 };

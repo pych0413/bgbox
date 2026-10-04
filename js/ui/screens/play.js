@@ -6,8 +6,9 @@
 //  - which seat this phone is showing (state.activeSeat) and its view
 //  - when to put a PassGate in front of the phone (focus names another seat
 //    that lives on this device, or the player switched seats by hand)
-//  - when to go dark and silent (that seat's view.night, unless focus names it)
-//  - host-only extras: pause / next / narration mode / auto-act for a stalled seat
+//  - when to go dark and silent (that seat's view.night → logic.nightChrome: between its own steps in 語音 /
+//    讀稿; in 靜音 (D1) the same readable dim on every phone all night, the awake seat included)
+//  - host-only extras: pause / next / narration mode / auto-act for a stalled seat / 💤 mark a seat absent (D4)
 //  - every risky host tap (⏭ 跳過呢步 while somebody would be cut off, 🗑️ 呢輪作廢, 🚪 離開) is the in-page
 //    arm-then-confirm (sh.confirm, playtest #3/#13): never a native dialog on the phone that is the server
 //  - 「輪到你」 only for a real turn (logic.turnBadge, #14); `view.recent` folds under the game UI (#10)
@@ -22,7 +23,11 @@ import { sfx } from '../../core/sfx.js?v=1';
 import { components, NarratorBar, PassGate, RulesSheet, RecentFold, closeAllCovers } from '../components/index.js?v=1';
 import { HintSheet } from '../hints.js?v=1';
 import { textSize, setTextSize } from '../settings.js?v=1';
-import { turnBadge, skipNeedsConfirm, SKIP_CONFIRM } from '../logic.js?v=1';
+import { turnBadge, skipNeedsConfirm, SKIP_CONFIRM, nightChrome } from '../logic.js?v=1';
+
+const NO_VOID = '呢個遊戲唔支援呢輪作廢';
+const NO_SKIP = '跳唔到呢步 — 要等人自己做（⋯ 可以代佢做或者標記缺席）';
+const noSkipFor = (name) => `跳唔到呢步 — 等緊 ${name}（⋯ 可以代佢做或者當佢缺席）`;
 
 /** A failed action, in words a player understands (the core's own short Cantonese message wins). */
 function sendFailedText(err) {
@@ -111,21 +116,56 @@ export function mountPlay(sh) {
     hints.open(game, viewFor(app.state));
   }
 
+  /** engine.canVoid through the core: { ok, message } | null (the game does not say). */
+  function voidCheck() {
+    try { return app.hostCtl?.canVoid?.() ?? null; } catch (err) { console.error(err); return null; }
+  }
+
   /**
    * 🗑️ 呢輪作廢 — `@void-round` for a round a dead phone (or a mix-up) spoilt. Engines opt in.
    * Two taps on `node` (sh.confirm, #3: never a native dialog on the room's server). Returns false while it
-   * is only armed, true once it is done with (acted, or refused with a toast).
+   * is only armed, true once it is done with (acted, or refused with a toast). A game that says why not
+   * (engine.canVoid → 「呢輪已經計咗分…」) is heard at once, without arming.
    */
   function voidRound(node = null, onDisarm = null) {
     const st = app.state;
     if (!st.isHost) return true;
     if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return true; }
+    const can = voidCheck();
+    if (can?.ok === false) { toast(can.message || NO_VOID, 2600); return true; }
     if (!sh.confirm('呢輪作廢、重新嚟過？\n（有人部手機死咗、或者搞錯咗先用）', node, { key: 'void-round', onDisarm })) return false;
     let ok = false;
     try { ok = app.hostCtl?.voidRound?.() === true; } catch (err) { console.error(err); }
     // (no narrator.cancel() here: the app already stopped the old line and may be saying the new one)
-    toast(ok ? '🗑️ 呢輪作廢咗，重新嚟過' : '呢個遊戲唔支援', 2200);
+    toast(ok ? '🗑️ 呢輪作廢咗，重新嚟過' : (voidCheck()?.message || NO_VOID), 2600);
     return true;
+  }
+
+  // ---------- 💤 absent seats (D4) ----------
+  /**
+   * 💤 當佢缺席 — `@absent`: the table stops waiting on this seat for the rest of the game. Two taps on `node`
+   * (sh.confirm). Returns false while it is only armed. A game that cannot do it changes nothing, and says so.
+   */
+  function markAbsent(pid, node = null, onDisarm = null) {
+    const st = app.state;
+    if (!st.isHost) return true;
+    if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return true; }
+    const who = nameOf(st, pid);
+    if (!sh.confirm(`當 ${who} 缺席？\n呢局唔再等佢`, node, { key: `absent:${pid}`, onDisarm })) return false;
+    let ok = false;
+    try { ok = app.hostCtl?.markAbsent?.(pid) === true; } catch (err) { console.error(err); }
+    toast(ok ? `💤 ${who} 缺席 — 呢局唔再等佢` : `而家標記唔到 ${who} 缺席 — 可以代佢做或者呢鋪唔計`, 2600);
+    return true;
+  }
+
+  /** 👋 the absent seat is back (`@present`, optional for engines). One tap: it only undoes 💤. */
+  function markPresent(pid) {
+    const st = app.state;
+    if (!st.isHost) return;
+    if (st.room.paused) { toast('暫停緊 — 先㩒「繼續」', 2200); return; }
+    let ok = false;
+    try { ok = app.hostCtl?.markPresent?.(pid) === true; } catch (err) { console.error(err); }
+    toast(ok ? `👋 ${nameOf(st, pid)} 返咗嚟` : `${nameOf(st, pid)} 要等下一局先入得返`, 2600);
   }
 
   // ---------- ⏭ skip (#13) ----------
@@ -144,7 +184,15 @@ export function mountPlay(sh) {
   function doSkip() {
     ackedCueId = app.state.cue?.id ?? null;
     narrator.cancel();
-    app.hostCtl.next();
+    let moved = true;
+    try { moved = app.hostCtl.next() !== false; } catch (err) { console.error(err); }
+    // #9: a step only a seat can finish (9upper's 揀人) does not move — say so instead of doing nothing, and name
+    // the seat when the room already knows whom the table waits on
+    const st = app.state;
+    if (!moved && st.isHost && !st.room?.paused) {
+      const waitedOn = [...(st.room?.stalled ?? []), ...(st.room?.idle ?? [])];
+      toast(waitedOn.length === 1 ? noSkipFor(nameOf(st, waitedOn[0].pid)) : NO_SKIP, 3200);
+    }
   }
 
   /** ⋯ → ⏭ 跳過呢步. Returns false while it is only armed. */
@@ -342,7 +390,7 @@ export function mountPlay(sh) {
     const panel = menuEl.firstElementChild;
     // a row armed for its second tap (「再㩒一次」) keeps its node until the arm ends (onDisarm refreshes)
     if (panel.querySelector?.('.armed')) return;
-    const nodes = menuKind === 'seats' ? seatMenu(st) : mainMenu(st);
+    const nodes = menuKind === 'seats' ? seatMenu(st) : menuKind === 'absent' ? absentMenu(st) : mainMenu(st);
     // state changes stream in all the time (timers); only touch the DOM when the menu itself changed,
     // so a button is never swapped out from under a finger
     const html = nodes.map((n) => n.outerHTML).join('');
@@ -371,6 +419,29 @@ export function mountPlay(sh) {
     ];
   }
 
+  /** In place: the open sheet turns into another of its pages (the 💤 seat picker and back). */
+  function menuPage(kind) {
+    if (!menuEl) return;
+    menuKind = kind;
+    menuHtml = '';
+    refreshMenu();
+  }
+
+  /** ⋯ → 💤 標記缺席… (D4): every playing seat; an absent one can come back (👋). */
+  function absentMenu(st) {
+    const away = new Set(st.room.absent ?? []);
+    const seats = st.room.players.filter((p) => !p.spectator);
+    return [
+      el('h3', { text: '💤 標記缺席' }),
+      el('p', { class: 'hint', style: { margin: '0 0 .625rem' }, text: '缺席嘅人呢局唔使再等佢。' }),
+      el('div', { class: 'sheet-list absent-pick' },
+        seats.map((p) => (away.has(p.id)
+          ? menuBtnRow(`👋 ${p.name} 返咗嚟`, () => { markPresent(p.id); refreshSoon(); }, 'is-absent')
+          : menuBtnRow(`💤 ${p.name}`, (e) => { if (markAbsent(p.id, e.currentTarget, refreshSoon)) closeMenu(); }))),
+        menuBtnRow('‹ 返回', () => menuPage('main'))),
+    ];
+  }
+
   function mainMenu(st) {
     const room = st.room;
     const meta = sh.gameMeta(room.gameId) ?? {};
@@ -381,6 +452,7 @@ export function mountPlay(sh) {
       list.push(menuBtnRow(room.paused ? '▶ 繼續' : '⏸ 暫停', () => { togglePause(); closeMenu(); }));
       list.push(menuBtnRow('⏭ 跳過呢步', (e) => { if (skipFromMenu(e.currentTarget)) closeMenu(); }));
       list.push(menuBtnRow('🗑️ 呢輪作廢', (e) => { if (voidRound(e.currentTarget, refreshSoon)) closeMenu(); }));
+      list.push(menuBtnRow('💤 標記缺席…', () => menuPage('absent')));
       // the game's own host buttons (engine.hostActions), e.g. 你畫我猜 ＋30 秒 / 呢題作廢
       for (const h of st.hostActions ?? []) {
         list.push(menuBtnRow(`🎛️ ${h.label}`, () => {
@@ -401,11 +473,15 @@ export function mountPlay(sh) {
         }, label))));
       }
 
-      const stalled = room.stalled ?? [];
-      if (stalled.length) {
+      // seats the table waits on: phone gone (room.stalled, also a banner) or connected but silent (room.idle, #9 —
+      // only here: a long talk before a pick looks the same, so it never shouts)
+      const waitedOn = [...(room.stalled ?? []), ...(room.idle ?? [])];
+      if (waitedOn.length) {
         list.push(el('div', { class: 'sec', text: '斷咗線 / 無反應' }));
-        for (const s of stalled) {
-          list.push(menuBtnRow(`🤖 代 ${nameOf(st, s.pid)} 做`, () => { app.hostCtl.autoAct(s.pid); closeMenu(); }));
+        for (const s of waitedOn) {
+          const who = nameOf(st, s.pid);
+          list.push(menuBtnRow(`🤖 代 ${who} 做`, () => { app.hostCtl.autoAct(s.pid); closeMenu(); }));
+          list.push(menuBtnRow(`💤 當 ${who} 缺席`, (e) => { if (markAbsent(s.pid, e.currentTarget, refreshSoon)) closeMenu(); }));
         }
       }
     }
@@ -434,12 +510,14 @@ export function mountPlay(sh) {
   function connectedRows(st) {
     const players = st.room.players.filter((p) => !p.spectator);
     const away = players.filter((p) => !p.connected);
+    const absent = new Set(st.room.absent ?? []);
     return [
       el('div', { class: 'sec', text: away.length ? `連線（${away.length} 個斷咗）` : '連線（全部都喺度）' }),
-      el('ul', { class: 'conn-list' }, players.map((p) => el('li', { class: p.connected ? 'on' : 'off' },
+      el('ul', { class: 'conn-list' }, players.map((p) => el('li', { class: `${p.connected ? 'on' : 'off'}${absent.has(p.id) ? ' absent' : ''}` },
         el('span', { class: 'dot', style: { '--seat': p.color ?? 'var(--cheese)' } }),
         el('span', { class: 'nm', text: p.name }),
         st.mySeats.includes(p.id) ? el('span', { class: 'tag', text: '呢部機' }) : null,
+        absent.has(p.id) ? el('span', { class: 'tag', text: '💤 缺席' }) : null,
         el('span', { class: 'conn-state', text: p.connected ? '🟢 喺度' : '🔴 斷咗線' })))),
       el('p', { class: 'hint conn-tip', text: '🔋 提大家：電量低過 20% 就叉電，或者開「低耗電模式」。房主部機一熄，成個遊戲就停。' }),
     ];
@@ -461,12 +539,14 @@ export function mountPlay(sh) {
     }
 
     if (st.isHost) {
-      for (const s of room.stalled ?? []) {
+      // a seat the table waits on while its phone is gone (a connected, silent one is only listed in ⋯, #9)
+      for (const s of shownStalls) {
         const key = `${s.pid}@${s.since}`;
-        if (dismissedStalled.has(key)) continue;
-        rows.push(el('div', { class: 'banner err' },
-          el('span', { class: 'grow', text: `⚠️ ${nameOf(st, s.pid)} 斷咗線，成個遊戲等緊佢` }),
+        const who = nameOf(st, s.pid);
+        rows.push(el('div', { class: 'banner err stall' },
+          el('span', { class: 'grow', text: `⚠️ ${who} 斷咗線，成個遊戲等緊佢` }),
           el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => app.hostCtl.autoAct(s.pid) }, '代佢做'),
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: (e) => markAbsent(s.pid, e.currentTarget) }, '💤 當佢缺席'),
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: (e) => voidRound(e.currentTarget) }, '呢鋪唔計'),
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => { dismissedStalled.add(key); paintBanners(app.state); } }, '再等')));
       }
@@ -590,9 +670,13 @@ export function mountPlay(sh) {
         recent.update({ recent: view?.recent ?? null, players: room.players });
       } catch (err) { console.error('[play] recent folds failed', err); }
 
-      // dark and silent between this seat's own steps (decoys stay tappable underneath)
-      const inFocus = !!seat && !!st.focus?.pids?.includes(seat);
-      sh.sound.night(!!seat && !!view?.night && !inFocus, { opaque: (st.mySeats?.length ?? 0) > 1 });
+      // dark and silent between this seat's own steps (decoys stay tappable underneath); 靜音 (D1): one readable
+      // dim on every phone all night, the awake seat included — logic.nightChrome
+      const night = nightChrome({
+        seat, night: !!view?.night, inFocus: !!seat && !!st.focus?.pids?.includes(seat),
+        mode: room.narration?.mode ?? 'voice', shared: (st.mySeats?.length ?? 0) > 1,
+      });
+      sh.sound.night(night.on, { level: night.level, words: night.words });
 
       const key = `${room.gameId}|${seat ?? 'table'}`;
       if (key !== uiKey && view) {

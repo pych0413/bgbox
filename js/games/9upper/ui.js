@@ -43,6 +43,9 @@ export function mount(root, api) {
   const nameOf = (pid) => api.players.find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => api.players.find((p) => p.id === pid)?.color ?? 'var(--cheese, #f5c518)';
   const seatName = (pid, me) => nameOf(pid) + (pid === me ? '（你）' : '');
+  // the round as this UI remembers it: a 呢輪作廢 redeal keeps the number but gets a new key
+  const roundKey = (v) => String(v.round.key ?? v.round.n);
+  const away = (v, pid) => (v.absent ?? []).includes(pid);
 
   let view = null;
   let ctx = {};
@@ -110,14 +113,14 @@ export function mount(root, api) {
     termText.textContent = v.term.text;
     termHint.textContent = S.hintText(v.term.hint);
     // 換題: the term just changes under everybody's eyes, so say so on every phone (silent play has no cue)
-    if (v.phase === 'term' && termSeen?.round === v.round.n && termSeen.text !== v.term.text) {
+    if (v.phase === 'term' && termSeen?.round === roundKey(v) && termSeen.text !== v.term.text) {
       swapNote.textContent = v.swapsLeft > 0 ? `🔄 換咗題（仲可以換 ${v.swapsLeft} 次）` : '🔄 換咗題（唔可以再換）';
       swapNote.hidden = false;
       clearTimeout(swapHandle);
       swapHandle = later(() => { swapNote.hidden = true; }, 4000);
     }
     if (v.phase !== 'term') swapNote.hidden = true;
-    termSeen = { round: v.round.n, text: v.term.text };
+    termSeen = { round: roundKey(v), text: v.term.text };
   }
 
   function paintScores(v) {
@@ -134,7 +137,7 @@ export function mount(root, api) {
           style: `--seat:${p.color ?? '#f5c518'}`,
         },
         h('span', { class: 'g9-score-dot' }),
-        h('span', { class: 'g9-score-name', text: (p.id === v.judge ? '🧠 ' : '') + p.name }),
+        h('span', { class: 'g9-score-name', text: (p.id === v.judge ? '🧠 ' : '') + p.name + (away(v, p.id) ? ' 💤' : '') }),
         h('span', { class: 'g9-score-n', text: String(v.scores[p.id]) }),
         d ? h('span', { class: 'g9-score-d ' + (d > 0 ? 'up' : 'down'), text: S.sc(d) }) : null);
       });
@@ -173,7 +176,7 @@ export function mount(root, api) {
    * block of about the same length (S.judgeDecoy / S.bluffDecoy) — never a single short line.
    */
   function faceFor(v) {
-    const key = `${v.round.n}|${v.me}`;
+    const key = `${roundKey(v)}|${v.me}`;
     const full = v.phase === 'read' || (!!v.rePeek && (v.phase === 'explain' || v.phase === 'judge'));
     if (v.me === v.judge) {
       return { role: '你係諗樣 🧠', text: S.judgeDecoy(key), note: '等佢哋睇完，就逐個解釋俾你聽。' };
@@ -317,45 +320,80 @@ export function mount(root, api) {
       });
       return b;
     });
+    const redo = redoNote();
     const el = h('div', { class: 'g9-stack' },
+      redo.el,
       h('h2', { class: 'g9-h', text: '揀題目難度' }),
       h('p', { class: 'g9-sub', text: '分數愈高，提示愈少。' }),
       h('div', { class: 'g9-levels' }, buttons));
-    return { el, update() {}, destroy() {} };
+    return { el, update(v) { redo.update(v); }, destroy() {} };
+  }
+
+  /** A public line over a fresh deal: why it is one (呢輪作廢 / 💤). Hidden when there is nothing to say. */
+  function redoNote() {
+    const el = h('p', { class: 'g9-redo', role: 'status' });
+    return { el, update(v) { const t = S.redoLine(v.redo, nameOf, v.judge); el.textContent = t; el.hidden = !t; } };
   }
 
   function waitingBody(textFn, emoji = '🤔') {
     const w = waitBlock(emoji, '');
-    return { el: w.el, update(v) { w.set(textFn(v)); }, destroy() {} };
+    const redo = redoNote();
+    const el = h('div', { class: 'g9-stack' }, redo.el, w.el);
+    return { el, update(v) { redo.update(v); w.set(textFn(v)); }, destroy() {} };
   }
 
-  /** `term`: the term is on the table; anybody who already knows it says so and the 諗樣 swaps it. */
+  /**
+   * `term`: the term is on the table; anybody who already knows it says so and the 諗樣 swaps it.
+   * 「我識呢條」 (D5) only lights up the 諗樣's 換題 button with the names — the 諗樣 still decides. Every 玩家 has the
+   * same button, and nobody holds a card yet, so pressing it says nothing about a role.
+   */
   function termBody(role) {
     const guard = sendGuard(rerender);
+    const redo = redoNote();
     const startBtn = role === 'judge' ? h('button', { class: 'btn btn-primary btn-lg', type: 'button', text: '開始睇卡' }) : null;
     startBtn?.addEventListener('click', () => {
       guard.fire(() => { startBtn.disabled = true; api.send({ type: 'start' }); });   // the read window sounds on every phone
     });
+    const flagged = () => (view?.knows ?? []).map(nameOf).join('、');
     const swap = role === 'judge' ? confirmButton({
       cls: 'btn btn-ghost btn-sm g9-swap',
-      label: () => `有人識呢條？換題（仲有 ${view?.swapsLeft ?? 0} 次）`,
+      label: () => (flagged() ? `🙋 ${flagged()} 話識 · 換題（仲有 ${view?.swapsLeft ?? 0} 次）`
+        : `有人識呢條？換題（仲有 ${view?.swapsLeft ?? 0} 次）`),
       armedLabel: '確定換題？再㩒一下',
       onConfirm: () => { api.sfx('deal'); api.send({ type: 'swap' }); },
     }) : null;
+    const knowBtn = role === 'player' ? h('button', { class: 'btn btn-ghost btn-sm g9-know', type: 'button' }) : null;
+    knowBtn?.addEventListener('click', () => {
+      const mine = (view?.knows ?? []).includes(view?.me);
+      api.sfx('tap');
+      api.send({ type: 'know', on: !mine });
+    });
     const wait = role !== 'judge' ? waitBlock('👀', '') : null;
     const note = h('p', { class: 'g9-note' });
     const el = h('div', { class: 'g9-stack' },
+      redo.el,
       h('h2', { class: 'g9-h', text: '睇吓題目' }),
-      wait?.el, note, startBtn, swap?.el);
+      wait?.el, note, startBtn, swap?.el, knowBtn);
     return {
       el,
       update(v) {
+        redo.update(v);
         note.textContent = role === 'judge'
           ? '有人已經識呢個詞？出聲就換題，身份唔變。冇人識就開始。'
-          : '已經識呢個詞？即刻出聲，諗樣會換題。';
+          : '已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。';
         wait?.set(`等 ${nameOf(v.judge)} 開始睇卡…`);
         if (startBtn) startBtn.disabled = guard.busy;
-        if (swap) { swap.el.hidden = !v.canSwap; swap.paint(); }
+        if (swap) {
+          swap.el.hidden = !v.canSwap;
+          swap.el.classList.toggle('flagged', (v.knows ?? []).length > 0);
+          swap.paint();
+        }
+        if (knowBtn) {
+          const mine = (v.knows ?? []).includes(v.me);
+          knowBtn.textContent = mine ? '🙋 已話咗識（再㩒取消）' : '🙋 我識呢條';
+          knowBtn.classList.toggle('on', mine);
+          knowBtn.setAttribute('aria-pressed', mine ? 'true' : 'false');
+        }
       },
       destroy() { swap?.destroy(); },
     };
@@ -374,7 +412,7 @@ export function mount(root, api) {
     // did this seat open its card in its window? (the 老實人's reminder must not claim a read that never happened)
     // Only a phone that watched the window from its start can say "never opened": a reload mid-window does not know
     // whether the card was opened before it, so it records nothing and the usual line stays.
-    const key = `${v0.round.n}|${v0.me}`;
+    const key = `${roundKey(v0)}|${v0.me}`;
     if (showCard && role === 'player' && fresh && !readLog.has(key)) readLog.set(key, false);
     const card = showCard ? makeCard('㩒住睇卡', (open) => { if (open && role === 'player') readLog.set(key, true); }) : null;
     const timer = makeTimer();
@@ -497,12 +535,14 @@ export function mount(root, api) {
         const skipped = v.turn?.skipped ?? [];
         const now = v.turn?.pid ?? null;
         if (announce) paintAnnounce(v);
-        const sig = JSON.stringify([v.explainers, spoken, skipped, now, v.callouts.used, v.me]);
+        const sig = JSON.stringify([v.explainers, spoken, skipped, now, v.callouts.used, v.me, v.absent ?? []]);
         if (sig !== listSig) {
           listSig = sig;
           list.replaceChildren(...v.explainers.map((pid, i) => {
             // ⏭ 跳過咗: the turn was ended FOR them — they come back once at the end (and in 諗樣揀 can be called back)
-            const state = pid === now ? 'now' : skipped.includes(pid) ? 'skipped' : spoken.includes(pid) ? 'done' : 'todo';
+            // 💤 唔喺度: the host marked them away — nobody waits for them (public)
+            const state = pid === now ? 'now' : away(v, pid) ? 'away' : skipped.includes(pid) ? 'skipped'
+              : spoken.includes(pid) ? 'done' : 'todo';
             const called = v.callouts.used.includes(pid);
             const act = role !== 'judge' ? null
               : state === 'todo' ? (free ? 'done' : system ? null : 'call')
@@ -514,7 +554,7 @@ export function mount(root, api) {
             h('span', { class: 'g9-speaker-dot' }),
             h('span', { class: 'g9-speaker-name', text: (system ? `${i + 1}. ` : '') + seatName(pid, v.me) }),
             h('span', { class: 'g9-speaker-state',
-              text: state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗') : state === 'done' ? '✅ 已講'
+              text: state === 'away' ? '💤 唔喺度' : state === 'skipped' ? (act ? '⏭ 跳過咗 · 叫返佢' : '⏭ 跳過咗') : state === 'done' ? '✅ 已講'
                 : state === 'now' ? '🎤 講緊' : act === 'call' ? '👉 叫佢講' : act === 'done' ? '👆 講完喇' : '⏳ 等緊' }),
             called ? h('span', { class: 'g9-speaker-call', text: '🛑' }) : null);
             if (act) {
@@ -601,7 +641,8 @@ export function mount(root, api) {
       guard.fire(() => { nextBtn.disabled = true; api.send({ type: 'next' }); });
     });
     later(() => api.sfx('reveal'), 1200);
-    const el = h('div', { class: 'g9-stack g9-reveal' }, pickLine, late, role === 'judge' ? nextBtn : waitTxt);
+    // a 諗樣 marked 💤 cannot press it: then the button is on every seated phone
+    const el = h('div', { class: 'g9-stack g9-reveal' }, pickLine, late, nextBtn, waitTxt);
     return {
       el,
       update(v) {
@@ -615,6 +656,9 @@ export function mount(root, api) {
           h('div', { class: 'g9-truth-text', text: rv.explain }),
           rv.src ? srcLine(rv.src) : null);
         changes.textContent = `分數變動：${S.changeLine(rv.changes, nameOf)}`;
+        const anyone = away(v, v.judge) && !!v.me && !away(v, v.me);
+        nextBtn.hidden = !(role === 'judge' || anyone);
+        waitTxt.hidden = !nextBtn.hidden;
         nextBtn.textContent = v.last ? '睇總結' : '下一輪';
         nextBtn.disabled = guard.busy;
         waitTxt.textContent = `等 ${nameOf(v.judge)} ${v.last ? '睇總結' : '開下一輪'}…`;
@@ -665,12 +709,12 @@ export function mount(root, api) {
 
   function noteNewCallouts(v) {
     const count = v.callouts.used.length;
-    if (callSeen && callSeen.round === v.round.n && count > callSeen.count) {
+    if (callSeen && callSeen.round === roundKey(v) && count > callSeen.count) {
       api.sfx('deny');
       const mine = v.callouts.used[count - 1] === v.me;
       if (mine) api.toast('俾人 call 咗，繼續撐落去。');
     }
-    callSeen = { round: v.round.n, count };
+    callSeen = { round: roundKey(v), count };
   }
 
   return {
@@ -682,9 +726,10 @@ export function mount(root, api) {
       paintScores(view);
       noteNewCallouts(view);
 
-      const role = view.me === view.judge ? 'judge' : view.me ? 'player' : 'table';
+      // a seat that was away at the deal holds no card this round: it sees what the table sees
+      const role = view.me === view.judge ? 'judge' : view.me && view.explainers.includes(view.me) ? 'player' : 'table';
       const sub = view.phase === 'read' ? readSub(view, role) : '';
-      const key = `${view.phase}|${view.round.n}|${role}|${sub}|${view.speakOrder}`;
+      const key = `${view.phase}|${roundKey(view)}|${role}|${sub}|${view.speakOrder}`;
       if (key !== bodyKey) {
         body?.destroy();
         body = makeBody(view, role, sub);

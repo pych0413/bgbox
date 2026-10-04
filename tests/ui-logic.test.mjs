@@ -7,8 +7,13 @@ import {
   headingOf, resultSections, sectionsOpen, turnOrderMatters, TURN_ORDER_GAMES, pictureFileName,
   savedOrderDiffers, savedGroupNames, presetMatches,
   scoreboardMode, resultHero, confettiSet, turnBadge, skipNeedsConfirm, SKIP_CONFIRM, recentFolds,
+  nightChrome, NIGHT_WORDS, hintRoleText,
 } from '../js/ui/logic.js';
 import { paintStrokes, PAPER } from '../js/ui/ink.js';
+import { isIOS, motionWords, motionDeviceName } from '../js/core/shake.js';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 test('ui: picker greys out games that do not fit the head-count, and says why', () => {
   const meta = { players: [6, 12] };
@@ -281,6 +286,80 @@ test('ui #13: the host\'s ⏭ takes two taps only when skipping would cut somebo
   assert.equal(skipNeedsConfirm({ waiting: true, mode: 'read', cueId: null }), true, 'no line: the tap would skip the window');
   assert.equal(skipNeedsConfirm({ waiting: true, mode: 'silent', cueId: 'c1' }), true, '靜音 / 語音 lines finish by themselves');
   assert.ok(SKIP_CONFIRM.length <= 16 && /跳過/.test(SKIP_CONFIRM));
+});
+
+test('ui D1: nightChrome — in 靜音 every seat at night gets the same soft dim and words; 語音 / 讀稿 keep the eyes-closed dark', () => {
+  const awake = { seat: 'p1', night: true, inFocus: true };
+  const asleep = { seat: 'p2', night: true, inFocus: false };
+  for (const mode of ['silent']) {
+    assert.deepEqual(nightChrome({ ...awake, mode }), nightChrome({ ...asleep, mode }), '靜音: the awake phone looks like every other');
+    assert.deepEqual(nightChrome({ ...awake, mode }), { on: true, level: 'soft', words: NIGHT_WORDS.silent });
+  }
+  assert.notEqual(NIGHT_WORDS.silent.title, '閉 眼', '靜音 never says 閉眼 (eyes stay open by design)');
+  for (const mode of ['voice', 'read']) {
+    assert.deepEqual(nightChrome({ ...awake, mode }), { on: false, level: null, words: NIGHT_WORDS.closed }, `${mode}: the called seat is lit`);
+    assert.deepEqual(nightChrome({ ...asleep, mode }), { on: true, level: 'dark', words: NIGHT_WORDS.closed }, `${mode}: everyone else is dark`);
+  }
+  // a shared phone keeps focus for its pass gate: the last holder's screen is covered, the called seat is soft-dimmed
+  assert.equal(nightChrome({ ...asleep, mode: 'silent', shared: true }).level, 'opaque');
+  assert.equal(nightChrome({ ...awake, mode: 'silent', shared: true }).level, 'soft', 'no full-brightness lift even there');
+  assert.equal(nightChrome({ ...asleep, mode: 'voice', shared: true }).level, 'opaque');
+  // no night, or no seat (the table view, a spectator): nothing
+  assert.equal(nightChrome({ seat: 'p1', night: false, mode: 'silent' }).on, false);
+  assert.equal(nightChrome({ seat: null, night: true, mode: 'silent' }).on, false);
+});
+
+test('ui: 💡 role box — view.hintRoleText (this table\'s rule) wins over the generic rules text; nothing else changes', () => {
+  const rules = { roles: [{ id: 'wolf', name: '狼人', emoji: '🐺', team: 'wolf', text: '做乜：夜晚殺人。點贏：睇設定。' }] };
+  assert.equal(roleFor({ roleId: 'wolf' }, rules).text, '做乜：夜晚殺人。點贏：睇設定。');
+  const own = roleFor({ roleId: 'wolf', hintRoleText: '做乜：夜晚殺人。點贏：殺晒所有神（屠邊）。' }, rules);
+  assert.deepEqual(own, { id: 'wolf', name: '狼人', emoji: '🐺', team: 'wolf', text: '做乜：夜晚殺人。點贏：殺晒所有神（屠邊）。' });
+  assert.deepEqual(roleParts(own.text), { what: '夜晚殺人。', win: '殺晒所有神（屠邊）。' });
+  assert.equal(hintRoleText({ hintRoleText: { what: '揾出狼人', win: '所有狼人出局' } }), '做乜：揾出狼人 點贏：所有狼人出局');
+  assert.equal(hintRoleText({ hintRoleText: { win: '所有狼人出局' } }), '點贏：所有狼人出局');
+  assert.equal(hintRoleText({ hintRoleText: '  ' }), '');
+  assert.equal(roleFor({ roleId: 'wolf', hintRoleText: '' }, rules).text, '做乜：夜晚殺人。點贏：睇設定。', 'empty: the rules text');
+  assert.equal(roleFor({ hintRoleText: '做乜：秘密' }, rules), null, 'a text alone never invents a role (undercover)');
+  assert.equal(rules.roles[0].text, '做乜：夜晚殺人。點贏：睇設定。', 'the shared rules object is never touched');
+});
+
+test('ui #38: the motion-permission lines say 「iPhone」 only on a real iPhone / iPad', () => {
+  const iphone = { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1', maxTouchPoints: 5 };
+  const ipad = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.5 Safari/605.1.15', maxTouchPoints: 5 };
+  const mac = { userAgent: ipad.userAgent, maxTouchPoints: 0 };
+  const android = { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36', maxTouchPoints: 5 };
+  assert.equal(isIOS(iphone), true);
+  assert.equal(isIOS(ipad), true, 'iPadOS calls itself a Mac with a touch screen');
+  assert.equal(isIOS(mac), false);
+  assert.equal(isIOS(android), false);
+  assert.equal(motionDeviceName(iphone), 'iPhone');
+  assert.equal(motionDeviceName(ipad), 'iPad');
+  const w = motionWords(iphone);
+  assert.ok(w.denied.includes('iPhone') && w.ask.includes('iPhone') && w.deniedHow.includes('Safari'));
+  for (const nav of [android, mac, null]) {
+    const n = motionWords(nav);
+    for (const line of Object.values(n)) assert.ok(!/iPhone|iPad|Safari/.test(line), `neutral wording: ${line}`);
+    assert.ok(n.denied.includes('部機'));
+  }
+});
+
+test('ui #3: no native prompt / alert anywhere in the shell or core (a blocking dialog freezes the host phone)', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'js');
+  const files = [];
+  const walkDir = (d) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) walkDir(p);
+      else if (f.endsWith('.js')) files.push(p);
+    }
+  };
+  walkDir(join(root, 'ui'));
+  walkDir(join(root, 'core'));
+  assert.ok(files.length > 20);
+  for (const f of files) {
+    const code = readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    assert.ok(!/\b(?:window|globalThis)\.(?:prompt|alert)\s*\(|(?<![.\w])(?:prompt|alert)\s*\(/.test(code), `${f} calls a native prompt / alert`);
+  }
 });
 
 test('ui #10: view.recent → folds; empty ones are dropped, ballots are kept as from → to', () => {
@@ -732,6 +811,257 @@ test('ui #13 #14 #10 #3: the play screen — 輪到你 only for a lone turn, vie
       screen.destroy();
     } finally {
       if (savedRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = savedRaf;
+    }
+  });
+});
+
+// ---------- round 2: the play screen at night (D1), absent seats (D4), why a void / skip did nothing ----------
+
+/**
+ * The play screen on one phone, under the fake DOM (call inside withDom). `seat` is this phone's only seat; `st`
+ * patches the app state; `hostCtl` patches the host controls. Every sh.sound.night(on, opts) call is recorded.
+ */
+async function playPhone(dom, clock, { seat = 'p1', st: patch = {}, hostCtl = {} } = {}) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const calls = [];
+  const nights = [];
+  const players = [
+    { id: 'p1', name: '阿明', seat: 0, color: '#111', connected: true },
+    { id: 'p2', name: '小美', seat: 1, color: '#222', connected: true },
+    { id: 'p3', name: '大熊', seat: 2, color: '#333', connected: true },
+  ];
+  const room = { phase: 'playing', gameId: 'g', players, paused: false, narration: { mode: 'silent' }, stalled: [], absent: [] };
+  const st = {
+    mode: 'host', isHost: seat === 'p1', mySeats: [seat], activeSeat: seat, conn: 'online',
+    views: { [seat]: { phase: 'night', title: '夜晚', subtitle: '大盜揀人', night: true } },
+    focus: null, cue: null, waiting: false, hostActions: [],
+    ...patch,
+    room: { ...room, ...(patch.room ?? {}) },
+  };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => { calls.push('next'); return true; }, voidRound: () => { calls.push('void'); return true; },
+      pause() {}, resume() {}, autoAct: (pid) => calls.push(`auto:${pid}`),
+      markAbsent: (pid) => { calls.push(`absent:${pid}`); return true; },
+      markPresent: (pid) => { calls.push(`present:${pid}`); return true; },
+      ...hostCtl,
+    },
+    narration: { setMode() {} }, act: () => true, ink() {}, clock: { now: () => clock.t }, setActiveSeat() {},
+  };
+  const game = { meta: { id: 'g', name: '測試' }, ui: { mount: () => ({ update() {}, destroy() {} }) } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new FEl('button'), strip: () => new FEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new FEl('button'),
+    sound: { isOn: () => true, toggle() {}, night: (on, opts) => nights.push([on, opts]) },
+    gameMeta: () => ({ id: 'g', name: '測試', emoji: '🧪', narration: 'voice' }),
+    cached: () => game, loadGame: async () => game,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  const screen = mountPlay(sh);
+  fakeDocument.body.append(screen.el);
+  screen.update(st);
+  const menu = () => findAll(fakeDocument.body, (n) => n.cls.has('menu-sheet')).at(-1);
+  const openMenu = () => tap(findAll(screen.el, (n) => n.attrs['aria-label'] === '選項')[0]);
+  const toastText = () => fakeDocument.getElementById('toast')?.textContent ?? '';
+  return { screen, st, app, calls, nights, menu, openMenu, toastText };
+}
+
+async function withRaf(fn) {
+  const saved = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (f) => f();
+  try { return await fn(); } finally {
+    if (saved === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = saved;
+  }
+}
+
+test('ui D1: in 靜音 every seat\'s night chrome is identical — the awake phone gets no lift and the same overlay words', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const { createNightDim } = await import('../js/ui/night.js?v=1');
+    const header = (screen) => findAll(screen.el, (n) => n.tag === 'header')[0].outerHTML;
+    /** What a glance at this phone shows at night: the overlay as painted, and the top bar. */
+    const glance = async (seat, mode, awake) => {
+      const ph = await playPhone(dom, clock, {
+        seat, st: { room: { narration: { mode } }, focus: awake ? { pids: [seat], anonymous: '大盜請醒' } : { pids: [], anonymous: '大盜請醒' } },
+      });
+      const [on, opts] = ph.nights.at(-1);
+      const nd = createNightDim();
+      nd.set({ on, ...opts });
+      const out = { night: [on, opts], overlay: nd.el.outerHTML, cls: nd.el.className, header: header(ph.screen), badge: findAll(ph.screen.el, (n) => n.cls.has('turn-badge')).length };
+      ph.screen.destroy();
+      return out;
+    };
+    // the thief (p2, awake) and a sleepyhead (p3) on their own phones, same view shape
+    const thief = await glance('p2', 'silent', true);
+    const sleepy = await glance('p3', 'silent', false);
+    assert.deepEqual(thief.night, sleepy.night, 'the same dim call on both phones');
+    assert.equal(thief.overlay, sleepy.overlay, 'the overlay is identical, word for word');
+    assert.equal(thief.header, sleepy.header, 'and so is the top bar');
+    assert.equal(thief.badge, 0, 'no 輪到你 pill on the awake phone');
+    assert.equal(thief.night[0], true, 'the awake phone is dimmed too');
+    assert.equal(thief.night[1].level, 'soft', 'a readable ~70 % dim, not the near-black one');
+    assert.ok(thief.overlay.includes('夜 晚') && !thief.overlay.includes('閉 眼'), '靜音 never says 閉眼');
+    assert.deepEqual(thief.cls.split(' ').sort(), ['night-dim', 'on', 'soft'], 'shown, soft, never opaque');
+
+    // 語音 keeps today's behaviour: the called seat is lit, the others dark with 閉 眼
+    const voiceAwake = await glance('p2', 'voice', true);
+    const voiceAsleep = await glance('p3', 'voice', false);
+    assert.equal(voiceAwake.night[0], false);
+    assert.equal(voiceAsleep.night[0], true);
+    assert.equal(voiceAsleep.night[1].level, 'dark');
+    assert.ok(voiceAsleep.overlay.includes('閉 眼'));
+  }));
+});
+
+test('ui D4: a dead phone\'s banner offers 💤 當佢缺席 (two taps) next to 代佢做 · 呢鋪唔計 · 再等; a connected, silent seat is listed in ⋯ only', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await playPhone(dom, clock, { st: { views: { p1: { phase: 'pick', title: '揀人' } }, room: { stalled: [{ pid: 'p2', since: 5 }] } } });
+    const banner = () => findAll(ph.screen.el, (n) => n.cls.has('banner') && n.cls.has('stall'))[0];
+    assert.ok(banner().textContent.includes('小美 斷咗線，成個遊戲等緊佢'));
+    for (const label of ['代佢做', '💤 當佢缺席', '呢鋪唔計', '再等']) assert.ok(btnWith(banner(), label), label);
+    tap(btnWith(banner(), '💤 當佢缺席'));
+    assert.deepEqual(ph.calls, [], 'the first tap only arms');
+    assert.ok(btnWith(banner(), '再㩒一次：當 小美 缺席？'));
+    ph.screen.update(ph.st);
+    assert.ok(btnWith(banner(), '再㩒一次：當 小美 缺席？'), 'a state update keeps the armed button');
+    clock.advance(600);
+    tap(btnWith(banner(), '再㩒一次：當 小美 缺席？'));
+    assert.deepEqual(ph.calls, ['absent:p2']);
+    assert.ok(ph.toastText().includes('💤 小美 缺席'));
+
+    // #9: connected but silent — no banner (a long talk before a pick looks the same), but ⋯ lists it
+    clock.advance(4000);
+    Object.assign(ph.st.room, { stalled: [], idle: [{ pid: 'p3', since: 9 }] });   // app.state is what the screen reads
+    ph.screen.update(ph.st);
+    assert.equal(banner(), undefined, 'never shouts');
+    ph.openMenu();
+    assert.ok(ph.menu().textContent.includes('斷咗線 / 無反應'));
+    tap(btnWith(ph.menu(), '🤖 代 大熊 做'));
+    assert.ok(ph.calls.includes('auto:p3'));
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '💤 當 大熊 缺席'));
+    clock.advance(600);
+    tap(btnWith(ph.menu(), '再㩒一次：當 大熊 缺席？'));
+    assert.ok(ph.calls.includes('absent:p3'));
+    ph.screen.destroy();
+
+    // an engine without @absent: nothing changes, and the host is told
+    const no = await playPhone(dom, clock, { st: { views: { p1: { phase: 'pick' } }, room: { stalled: [{ pid: 'p2', since: 5 }] } }, hostCtl: { markAbsent: () => false } });
+    const b2 = findAll(no.screen.el, (n) => n.cls.has('stall'))[0];
+    clock.advance(4000);
+    tap(btnWith(b2, '💤 當佢缺席'));
+    clock.advance(600);
+    tap(btnWith(b2, '再㩒一次：當 小美 缺席？'));
+    assert.ok(no.toastText().includes('而家標記唔到 小美 缺席'), no.toastText());
+    no.screen.destroy();
+  }));
+});
+
+test('ui D4: ⋯ → 💤 標記缺席… picks a seat in place (two taps, never a native dialog); an absent seat shows 👋 返咗嚟', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await playPhone(dom, clock, { st: { views: { p1: { phase: 'vote', title: '投票' } }, room: { absent: ['p3'] } } });
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '💤 標記缺席…'));
+    assert.ok(ph.menu().textContent.includes('💤 標記缺席'), 'the same sheet turns into the seat picker');
+    assert.ok(btnWith(ph.menu(), '💤 阿明') && btnWith(ph.menu(), '💤 小美'));
+    assert.ok(btnWith(ph.menu(), '👋 大熊 返咗嚟'), 'an absent seat can come back');
+    assert.ok(!btnWith(ph.menu(), '💤 大熊'));
+    tap(btnWith(ph.menu(), '💤 小美'));
+    assert.deepEqual(ph.calls, []);
+    ph.screen.update(ph.st);
+    clock.advance(600);
+    tap(btnWith(ph.menu(), '再㩒一次：當 小美 缺席？'));
+    assert.deepEqual(ph.calls, ['absent:p2']);
+
+    clock.advance(4000);
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '💤 標記缺席…'));
+    tap(btnWith(ph.menu(), '👋 大熊 返咗嚟'));
+    assert.deepEqual(ph.calls, ['absent:p2', 'present:p3'], 'one tap: it only undoes 💤');
+    assert.ok(ph.toastText().includes('👋 大熊 返咗嚟'));
+    tap(btnWith(ph.menu(), '‹ 返回'));
+    assert.ok(btnWith(ph.menu(), '🗑️ 呢輪作廢'), '‹ 返回 goes back to the main menu');
+
+    // the connection list marks the absent seat
+    assert.ok(findAll(ph.menu(), (n) => n.tag === 'li' && n.cls.has('absent'))[0]?.textContent.includes('💤 缺席'));
+    ph.screen.destroy();
+
+    // a guest's ⋯ has no 💤
+    const guest = await playPhone(dom, clock, { seat: 'p2', st: { views: { p2: { phase: 'vote' } } } });
+    guest.openMenu();
+    assert.ok(!btnWith(guest.menu(), '💤 標記缺席…'));
+    guest.screen.destroy();
+  }));
+});
+
+test('ui #9: 呢輪作廢 says why not (engine.canVoid) without arming; ⏭ that changes nothing says so', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const msg = '呢輪已經計咗分，㩒「下一輪」就得';
+    const ph = await playPhone(dom, clock, {
+      st: { views: { p1: { phase: 'result', title: '結果' } } },
+      hostCtl: { canVoid: () => ({ ok: false, message: msg }), next: () => { ph.calls.push('next'); return false; } },
+    });
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '🗑️ 呢輪作廢'));
+    assert.equal(ph.toastText(), msg, 'the game\'s own reason, at once');
+    assert.ok(!ph.calls.includes('void'), 'nothing sent');
+    assert.ok(!findAll(fakeDocument.body, (n) => n.cls.has('armed')).length, 'nothing armed either');
+
+    clock.advance(4000);
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '⏭ 跳過呢步'));
+    assert.deepEqual(ph.calls, ['next']);
+    assert.ok(ph.toastText().startsWith('跳唔到呢步 — 要等人自己做'), `a skip that did nothing says so: ${ph.toastText()}`);
+    clock.advance(4000);
+    Object.assign(ph.st.room, { idle: [{ pid: 'p3', since: 1 }] });
+    ph.screen.update(ph.st);
+    ph.openMenu();
+    tap(btnWith(ph.menu(), '⏭ 跳過呢步'));
+    assert.ok(ph.toastText().includes('等緊 大熊'), `…and names the seat the table waits on: ${ph.toastText()}`);
+    ph.screen.destroy();
+
+    // no reason from the game and the void did nothing: the generic line
+    const plain = await playPhone(dom, clock, { st: { views: { p1: { phase: 'x' } } }, hostCtl: { voidRound: () => false } });
+    clock.advance(4000);
+    plain.openMenu();
+    tap(btnWith(plain.menu(), '🗑️ 呢輪作廢'));
+    clock.advance(600);
+    tap(btnWith(plain.menu(), '再㩒一次：呢輪作廢'));
+    assert.equal(plain.toastText(), '呢個遊戲唔支援呢輪作廢');
+    plain.screen.destroy();
+  }));
+});
+
+test('ui #3: 📋 複製連結 — when the clipboard refuses, the link shows in the page, selected; no native prompt', async () => {
+  await withDom(async ({ dom }) => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const savedPrompt = globalThis.prompt;
+    globalThis.prompt = () => { throw new Error('a native prompt must never run'); };
+    let refuse = true;
+    let copied = null;
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { clipboard: { writeText: async (t) => { if (refuse) throw new Error('NotAllowedError'); copied = t; } } },
+    });
+    try {
+      const box = dom.copyBox();
+      fakeDocument.body.append(box.el);
+      assert.equal(box.el.hidden, true, 'nothing until it is needed');
+      assert.equal(await box.copy('https://example.test/?r=1352'), false);
+      assert.equal(box.el.hidden, false);
+      assert.equal(box.field.value, 'https://example.test/?r=1352');
+      assert.equal(box.field.attrs.readonly, '', 'read-only: nobody edits it by accident');
+      assert.ok(fakeDocument.getElementById('toast').textContent.includes('自動複製唔到'));
+      refuse = false;
+      assert.equal(await box.copy('https://example.test/?r=2461', '連結已複製'), true);
+      assert.equal(copied, 'https://example.test/?r=2461');
+      assert.equal(box.el.hidden, true, 'copied: the field goes away');
+      assert.equal(fakeDocument.getElementById('toast').textContent, '連結已複製');
+    } finally {
+      if (saved) Object.defineProperty(globalThis, 'navigator', saved); else delete globalThis.navigator;
+      if (savedPrompt === undefined) delete globalThis.prompt; else globalThis.prompt = savedPrompt;
     }
   });
 });

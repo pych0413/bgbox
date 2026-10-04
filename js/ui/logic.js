@@ -140,6 +140,34 @@ export function skipNeedsConfirm({ waiting = false, focus = null, night = false,
   return true;
 }
 
+// ---------- the night dim (D1) ----------
+
+/** What the night overlay says. Identical on every phone of a mode: it can never tell who is awake. */
+export const NIGHT_WORDS = Object.freeze({
+  closed: Object.freeze({ title: '閉 眼', hint: '🌙 可以將螢幕調暗啲' }),     // 語音 / 讀稿: eyes shut between your steps
+  silent: Object.freeze({ title: '夜 晚', hint: '🌙 可以將螢幕調暗啲' }),     // 靜音: eyes stay open, every phone alike
+});
+
+/**
+ * How dark this phone is at night (`view.night`), → `{ on, level, words }`:
+ *  - `level` 'dark' (near-black, still tappable) · 'soft' (D1: one readable ~70 % dim, still tappable) ·
+ *    'opaque' (a shared phone: covers the last holder's screen, swallows taps) · null (off).
+ *  - 語音 / 讀稿 (eyes closed): dark between the seat's own steps, lifted while `focus` calls it (`inFocus`).
+ *  - 靜音 (D1, eyes stay open): the SAME soft dim on every single-seat phone all night — the awake seat gets no
+ *    lift, so a glance across a dark table never shows who woke. A shared phone (`shared`, 2+ seats) keeps
+ *    focus for its pass gate: soft for the seat that is called, opaque otherwise.
+ *  - `words` (title + hint) depend on the mode only, never on the seat.
+ * No seat (a spectator, the table view) or no night → off.
+ */
+export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false } = {}) {
+  const silent = mode === 'silent';
+  const words = silent ? NIGHT_WORDS.silent : NIGHT_WORDS.closed;
+  if (!seat || !night) return { on: false, level: null, words };
+  if (silent) return { on: true, level: shared && !inFocus ? 'opaque' : 'soft', words };
+  if (inFocus) return { on: false, level: null, words };
+  return { on: true, level: shared ? 'opaque' : 'dark', words };
+}
+
 // ---------- public "recent events" folds (#10) ----------
 
 const MAX_FOLDS = 4;
@@ -371,10 +399,19 @@ const roleIdOf = (x) => (typeof x === 'string' ? x : x && typeof x === 'object' 
  * carries (custom decks), else null. Only fields the view puts there on
  * purpose are read (`roleId`, `role`, `mine.role`, `my.role`, `me.role`,
  * `my.dealt`), so a game that keeps the role secret even from its holder
- * (undercover) yields null.
+ * (undercover) yields null. `view.hintRoleText` (this table's rule for the
+ * card, e.g. 狼人殺's win condition) replaces the generic rules text.
  */
 export function roleFor(view, rules) {
   if (!view || typeof view !== 'object') return null;
+  const role = ownRole(view, rules);
+  if (!role) return null;
+  // this table's version of the card (e.g. 狼人殺's win rule): the seat's own view may override the rules text
+  const own = hintRoleText(view);
+  return own ? { ...role, text: own } : role;
+}
+
+function ownRole(view, rules) {
   const roles = Array.isArray(rules?.roles) ? rules.roles : [];
   const byId = (id) => roles.find((r) => r && r.id === id) ?? null;
   const mine = view.mine ?? view.my ?? null;
@@ -391,6 +428,22 @@ export function roleFor(view, rules) {
     }
   }
   return null;
+}
+
+/**
+ * `view.hintRoleText` — the seat's own role text for THIS table (a string written 「做乜：… 點贏：…」, or
+ * `{ what, win }`), preferred over the generic `rules.roles` text. '' when the view has none.
+ */
+export function hintRoleText(view) {
+  const t = view?.hintRoleText;
+  if (typeof t === 'string') return t.trim().slice(0, 400);
+  if (t && typeof t === 'object') {
+    const what = typeof t.what === 'string' ? t.what.trim() : '';
+    const win = typeof t.win === 'string' ? t.win.trim() : '';
+    if (!what && !win) return '';
+    return `${what ? `做乜：${what}` : ''}${what && win ? ' ' : ''}${win ? `點贏：${win}` : ''}`.slice(0, 400);
+  }
+  return '';
 }
 
 /**

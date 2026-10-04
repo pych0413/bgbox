@@ -111,7 +111,11 @@ Everyone has the location list, so nobody can tell who is the spy from who opens
 
 **Narration (cue `deal`, 2.5 s):** 「第{n}局，發牌員係{dealer}。每個人㩒住張卡睇自己嘅身分，睇完㩒「準備好」。」
 
-**Transition:** when every seat is ready the clock starts. **Narration (cue `start`):** 「大家準備好，計時{m}分鐘，開始！由{dealer}問第一條問題。」
+**Transition:** when every seat at the table is ready the clock starts (an absent seat, §3.8, is not waited on).
+**Narration (cue `start`):** 「大家準備好，計時{m}分鐘，開始！由{dealer}問第一條問題。」
+
+**A re-dealt round** (the last one was voided, §3.8) shows a banner on every phone: 「🗑️ 上一鋪唔計，重新派過牌」 +
+「阿明 唔喺度，佢係間諜 · 地點係 🏦 銀行 · 冇人得分」 (host void: 「房主話呢鋪唔計」); the deal cue starts 「上一鋪唔計，重新派過牌。」
 
 **Anti-tell:** the clock never starts early or late depending on role; the ready button and the peek are the
 same for all; peeking is local (hold, no sound).
@@ -159,12 +163,13 @@ The clock is stopped. All phones show a banner:
   final-vote suspects, but nobody may name the location or describe card details, because the spy can no longer guess)
 
 **Narration (accusation, cue `accuse`):** 「鐘停咗。{accuser}指控{suspect}，大家投票。」
-**Narration (time up, cue `timeup`):** 「時間到！間諜唔可以再估地點。最後投票由{dealer}開始，可以傾，但唔好講出地點。」
+**Narration (time up, cue `timeup`):** 「時間到！間諜唔可以再估地點。最後投票由{first suspect: the dealer, or the next present seat}開始，可以傾，但唔好講出地點。」
 Later suspects (cue `final`, 1.5 s): 「下一位：{suspect}。」
 
 #### phone mode
-- A voter who has not voted: two big buttons 「👍 贊成」 and 「👎 反對」. After voting: 「你投咗：贊成」 and the list
-  of who has voted (names only, never the choice).
+- A voter who has not voted: two big buttons 「👍 贊成」 and 「👎 反對」. After voting: 「已投 ✓」 — **never which way**
+  (decision D6: a neighbour's glance learns nothing before the tally) — and the list of who has voted (names only,
+  never the choice).
 - The accuser (accusation only): 「你係指控人，自動贊成」.
 - The suspect: 「你被指控，唔使投票」, then waits.
 - When the last vote arrives the result is revealed (3.4). Early "no" votes never end a vote early, so the timing
@@ -218,9 +223,14 @@ The judgement is immediate after the last pick.
 Shown to everyone, no secrets left:
 - location (emoji, name), headline (see 5.6), 「間諜：🕵️ 阿華」
 - the explanation lines (why, point by point)
-- a table: every seat, its role (or 🕵️ 間諜), `+points` this round, running total
-- button 「下一局」 (last round: 「睇總分」), enabled 2 s after the screen appears so a stray tap cannot skip it; until
-  then a line counts down 「睇清楚先，2 秒後先㩒得」. Any seat can press it (who may advance is open decision D5).
+- a table: every seat, its role (or 🕵️ 間諜), `+points` this round, running total; ✓ after the name of each seat that has read it
+- **睇完 (decision D3, 2026-10-04; playtest finding #3):** button 「睇完 ✓」 on every seat's phone, enabled 2 s after the
+  screen appears so a stray tap cannot skip it (until then a line counts down 「睇清楚先，2 秒後先㩒得」); after the tap it
+  reads 「✓ 睇完 · 等緊其他人」. Every phone shows the same line 「睇完 3 / 5 · 等緊：阿明、小美 · 齊人就開下一局」 (last round:
+  「…齊人就睇總分」). The next round (or the end) comes when **every present seat** has tapped; the host's ⏭ forces it
+  (the first press finishes the narration line). One eager friend no longer cuts everybody's reveal short. A tap the host
+  never confirmed comes back as a button after 4 s.
+- On a passed-round phone the tap sends `seats: [the other seats on this phone]`, so the reveal is read once for all of them.
 
 **Narration (cue `end`, 4 s):** 「{headline}。地點係{location}，間諜係{names}。」
 
@@ -233,6 +243,35 @@ one line per round with what was hidden during play — 「第 1 局 🏦 銀行
 of the last round (5.6). The ranking is left to the shell's own points display (`result.points` = running totals).
 The per-round lines also show the spy history, which matters when `antiStreak` is on.
 
+### 3.8 Absent seats and void rounds (D4, decision 2026-10-04; playtest finding #4)
+
+The host can mark a seat absent (`{ type: '@absent', pid }`, e.g. a phone that went to the bathroom) and back (`@present`). Absent
+seats are public — `view.absent`, 💤 next to the name (seat grid, reveal table, 「💤 唔喺度：阿明」 under the ready count) — and are
+never waited on for the rest of the game:
+
+- **reveal**: not waited on to ready (marking the last missing seat absent starts the clock).
+- **play**: cannot be asked or accused (greyed in the seat grid and left out of the accusation picker); the question card moves
+  to the next present seat if it was resting on them (`prev` is cleared). An open accusation **of** a seat that leaves is called
+  off: the accuser keeps the one try and the clock resumes (cue 「阿明唔喺度，指控取消，鐘繼續行。」).
+- **votes**: unanimity counts the **present** voters only (`votersOf` drops absent seats; with two spies the one/two allowed
+  dissenters stay); a vote that was only waiting on the seat closes. Hands mode: the reporter is re-picked (the dealer, else the
+  next present seat that is not the suspect), and the result buttons go up to the number of present voters.
+- **final vote**: absent seats are passed over as suspects; 「最後投票 2/4」 counts present seats.
+- **roundEnd**: their 睇完 is not needed.
+- **later rounds**: never dealt the spy, never the dealer (the rotation passes over them).
+- **An absent spy voids the round** (any phase before roundEnd): nobody scores, the round goes into the history as `code: 'void'`
+  (its location greys out in the list, and its spies and location are public — the round is dead), and **the same round number
+  is dealt again** with a spare location from the game's list (`state.spare`, never a planned or used one), the same dealer
+  (or the next present seat). With no spare left the round simply does not count and the game moves on.
+- **Host 呢鋪唔計 (`@void-round`)** does the same in any live phase; on roundEnd / over it changes nothing and `engine.canVoid`
+  says why (「呢局已經計咗分，㩒「睇完」就得」).
+- **Refused** (state unchanged → the shell says this game cannot) when fewer than `max(3, spies + 2, maxNo + 2)` present seats
+  would be left, for a non-seat, an already-absent seat, or once the game is over.
+- Unavoidable and by decision: when the round goes on after a seat is marked absent, the table learns that seat is not the spy.
+  Absent marks are public, so a host cannot probe quietly.
+- An absent seat's own phone says 「💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。」 instead of its buttons, and the engine ignores
+  its actions until `@present`. It still scores with its side for a round it was dealt into.
+
 ## 4. Single-device play
 
 One phone, `voteMode: hands`.
@@ -244,6 +283,7 @@ One phone, `voteMode: hands`.
   指控 and picks the suspect. The table raises hands; in `hands` mode the accuser taps the result.
 - **spy stop:** the spy takes the phone, taps 「我係間諜」, picks the location. Same flow as a multi-device game.
 - **final vote:** the dealer (or the next seat) taps the result for each suspect.
+- **roundEnd:** one 「睇完」 counts for every seat the phone holds (`seats`), so the table moves on with one tap.
 - In `phone` mode on one device the shell would pass the phone to every voter for every vote; use 舉手.
 
 No paper mode.
@@ -256,13 +296,16 @@ No paper mode.
 cfg            normalised config
 players, order seat order
 list[]         PUBLIC { name, emoji, cat }
-plan[]         PRIVATE { loc, roles[] } one entry per round
+plan[]         PRIVATE { loc, roles[] } one entry per round (a voided round's slot is refilled from `spare`)
+spare[]        PRIVATE { loc, roles[] } the unplanned list entries, for re-dealing a voided round (drawn without rng)
+absent{}       PUBLIC  pid → true: marked absent by the host (D4)
 roundNo, totals{pid:n}
 history[]      finished rounds, public once finished: { n, loc, dealer, spies, code, winTeam, suspect,
                suspectRole (role of a convicted innocent), by, caught, bonusTo, bonusMode,
-               accusations[{by,suspect}], picks, rightSpies, deltas }
+               accusations[{by,suspect}], picks, rightSpies, deltas } — a voided round: code 'void', why
+               ('absent' | 'host'), absent (the spy who left), all deltas 0
 round: {
-  n, dealer,
+  n, dealer, redo (this deal replaces a voided one), seen{} (who tapped 睇完, public)
   loc            PRIVATE index into list
   spies[]        PRIVATE
   roles{pid}     PRIVATE
@@ -286,16 +329,20 @@ All from a seat (`pid` must be one of `players`); anything else is ignored and r
 
 | action | phase | validation | effect |
 |---|---|---|---|
-| `{type:'ready'}` | reveal | not already ready | mark; when all ready → play, start clock |
-| `{type:'ask', target}` | play | target is a seat, ≠ holder, ≠ prev (sender may be any seat) | push floor; `{holder: target, prev: oldHolder}` |
+| `{type:'ready'}` | reveal | not already ready | mark; when all present seats are ready → play, start clock |
+| `{type:'ask', target}` | play | target is a present seat, ≠ holder, ≠ prev (sender may be any seat) | push floor; `{holder: target, prev: oldHolder}` |
 | `{type:'undo-ask'}` | play | history non-empty | pop floor |
-| `{type:'accuse', target}` | play | sender has not accused, target is a seat ≠ sender, clock not at 0:00 | stop clock, open accusation vote (phone: accuser pre-voted yes) |
+| `{type:'accuse', target}` | play | sender has not accused, target is a present seat ≠ sender, clock not at 0:00 | stop clock, open accusation vote (phone: accuser pre-voted yes) |
 | `{type:'spy-stop'}` | play | sender is a spy, clock not at 0:00 | stop clock → guess |
-| `{type:'vote', yes}` | vote (phone) | boolean, sender is not the suspect, has not voted | record; when all voters have voted → tally |
-| `{type:'verdict', no}` | vote (hands) | sender is the reporter, `no` integer in 0..n−1 | tally |
+| `{type:'vote', yes}` | vote (phone) | boolean, sender is a present voter (not the suspect), has not voted | record; when all present voters have voted → tally |
+| `{type:'verdict', no}` | vote (hands) | sender is the reporter, `no` integer in 0..(present voters) | tally |
 | `{type:'guess', loc}` | guess | sender is the current spy, `loc` integer in 0..list−1 | record; next spy, or judge |
-| `{type:'next-round'}` | roundEnd | any seat | next round, or `over` |
-| `@cue-done` / `@next` (host) | any | id matches / a cue is pending | marks the cue done; nothing waits on it |
+| `{type:'next-round', seats?}` | roundEnd | a seat that has not tapped 睇完 | mark it (and `seats`: the other seats of a passed-round phone); every present seat → next round, or `over` |
+| `@cue-done` / `@next` (host) | any | id matches / a cue is pending | marks the cue done; on roundEnd with no cue pending `@next` forces the next round (D3) |
+| `@void-round` (host) | reveal / play / vote / tally / guess | — | void the round and deal it again (§3.8) |
+| `@absent {pid}` / `@present {pid}` (host) | before over | §3.8 | mark absent / back |
+
+An absent seat's own actions are ignored (`legalActions` is empty for it).
 
 ### 5.3 advance / deadline
 
@@ -308,16 +355,18 @@ A timer that fires up to 250 ms early is ignored.
 
 ### 5.4 focus
 
-- reveal: seats not ready
-- vote, phone: seats that have not voted (accuser and suspect excluded); hands: `[reporter]`
+- reveal: present seats not ready
+- vote, phone: present seats that have not voted (accuser and suspect excluded); hands: `[reporter]`
+- roundEnd: `null` (no pass gate for reading); stall detection still sees the unread seats through `legalActions`
 - guess: the spy whose turn it is
 - otherwise `null`
 
 ### 5.5 autoAct (stalled seat)
 
 reveal → `ready`; phone vote → `no`; hands reporter → `maxNo + 1` "no" votes (one dissenter too many to convict);
-guess → a random location; roundEnd → `next-round`; play → `null` (never moves the question). An automatic action
-never convicts. (A stalled voter therefore blocks every conviction — see §8, disconnects.)
+guess → a random location; roundEnd → `next-round` (a seat that has not tapped 睇完); play → `null` (never moves the
+question). An automatic action never convicts — so a missing phone is marked **absent** instead (§3.8), which takes it out
+of the vote rather than voting 反對 for it. Absent seats get nothing.
 
 ### 5.6 Results and explanation
 
@@ -368,7 +417,8 @@ is unchanged. ≤ 50 characters, never a location or role name.
 | vote (hands) | reporter / others | 「叫大家一齊舉手（覺得{X}係間諜先舉），數吓幾多人冇舉，㩒結果。」 / 「覺得{X}係間諜就舉手，等{reporter}㩒結果。」 |
 | tally | all | 「睇吓投票結果，幾秒後自動繼續。」 |
 | guess | guessing spy / others | 「喺地點清單揀你估嘅地點，再㩒「就係…」確定。」 / 「等{spy}喺清單揀地點：估中間諜贏，估錯大家贏。」 |
-| roundEnd / over | all | 「睇吓地點、間諜同點計分，睇完㩒「下一局」。」 (last: 「睇總分」) / 「打完喇！睇吓總分同每局發生咩事。」 |
+| roundEnd / over | all | 「睇吓地點、間諜同點計分，睇完㩒「睇完」。」; after the tap 「等其他人睇完，齊人就開下一局。」 (last: 「…睇總分。」) / 「打完喇！睇吓總分同每局發生咩事。」 |
+| any (absent seat) | that seat | 「房主當咗你唔喺度；返咗嚟就叫房主加返你。」 |
 
 `view.mine.role` = `'spy' | 'agent'` (a `rules.roles` id) so the 💡 sheet can show 「你嘅角色」. It is as secret as
 the card. `rules.quick` is 6 short lines; each role's `text` says what you do and 「點贏」.
@@ -430,7 +480,11 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 | two-spy threshold option `n-3` | `option twoSpyThreshold=n-3…` |
 | spy may accuse | `a spy may accuse as a feint…` |
 | hands mode | `hands mode — …` (three tests) |
-| game end, ties, result | `next-round needs the round to be over…`, `totals are the sum…` |
+| game end, ties, result; 睇完 from every present seat (D3) | `next-round needs the round to be over…`, `totals are the sum…` |
+| D3: the host's 下一步 forces the reveal on; `seats` from a shared phone; autoAct reads | `D3: the host’s 下一步 finishes the narration first…` |
+| D4: absent — ready, floor, ask / accuse refused, @present; present-only unanimity; accusation of a leaver called off; final vote passes over; hands reporter re-picked; absent spy voids in every live phase and re-deals; host @void-round + canVoid; no spare → not counted; refusals; never spy / dealer later; fuzz with random @absent / @present / @void-round | `D4: …` (9 tests) |
+| D6: own vote shows 已投 ✓ only | `D6: your own phone says 已投 ✓…` |
+| UI: 睇完 countdown, 睇完 n / m, shared-phone `seats`, retry; 💤, the absent phone, the re-deal banner | `spyfall ui: 睇完 …`, `spyfall ui D4: …` |
 | cues never leak, unique ids | `cues never speak a secret…` |
 | autoAct | `autoAct readies, votes no…` |
 | junk input | `act never throws and ignores junk…` |
@@ -445,8 +499,11 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 - **Travel-flavoured bank**: 日本 / 香港 / 亞洲旅遊 / 節日活動 categories; the category filter makes a Japan-only
   game one tap.
 - **Hands mode** and the PassGate walk make one-phone play practical; the question tracker works from any seat.
-- **Undo** for a mistaken question pass; **confirm** for the spy stop and the accusation; the reveal button is
-  delayed 2 s, with the countdown on screen.
+- **Undo** for a mistaken question pass; **confirm** for the spy stop and the accusation; the 睇完 button is
+  delayed 2 s, with the countdown on screen, and the table moves on only when everyone has read the reveal.
+- **A phone that walks off is fair to everyone**: mark it 💤 — votes count the people at the table, and if it was the spy
+  the round is dealt again instead of handing anybody points.
+- **Your own vote is not on your screen** (「已投 ✓」, never 👍 / 👎) until the tally shows everybody's at once.
 - **The clock and 🙋 stay in reach**: a compact clock bar sticks under the header while the location list scrolls.
 - The clock is **exact across pauses**; the Timer beeps at 60 s, 10 s and zero; the host's pause freezes it.
 - **No tells**: same card and button layout for spy and non-spy, the spy button exists on every phone and opens the
@@ -474,10 +531,9 @@ Game end: highest total wins, ties share (`winners` has all of them). `result.po
 - **💡 sheet (U1, shell owner):** `view.hint` is per seat and exists in every phase. `view.mine.role` is the
   `rules.roles` id for 「你嘅角色」 — it is secret in this game, so the sheet must show it behind hold-to-peek (or
   not at all on a shared phone), never as plain text.
-- **Disconnects (doc edge case, not done):** the rules doc wants the host to mark a seat absent (unanimity over the
-  connected seats) or void the round (always void if the spy left). There is no host action for that in §4;
-  today a stalled voter's auto-vote is 「反對」, so a missing phone blocks every conviction. Needs a generic
-  host-internal action (e.g. `{ type: '@absent', pid }`) before the engine can support it.
+- **Disconnects — done (D4).** The engine takes `{ type: '@absent', pid }` / `@present` as HOST (§3.8) and publishes
+  `view.absent: [pid]` (the same in every view, so the shell may show 💤 on its own seat chips). It also supports
+  `@void-round` (re-deal) and `engine.canVoid(state)` for the shell's message.
 - **Bank (data owner):** the rules doc asks for ≥ 11 roles per location so a 12-seat table never repeats a role;
   `js/data/spyfall-locations.js` has 7 for all 174 locations.
 - Not implemented (variants the doc lists as options only): Cryptozoic accuser-rotation and German majority final

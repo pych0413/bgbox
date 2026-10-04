@@ -28,7 +28,9 @@
 //   app.canNetwork()            PeerJS loaded (multi-phone needs it; local never does)
 //   state.saveFailed            the host snapshot could not be written (storage full) (G9)
 //   lobby.keepSeat(pid)         keep an offline lobby seat past the 180 s grace (G3)
-//   hostCtl.voidRound()         `@void-round` for engines that support it
+//   hostCtl.voidRound()         `@void-round` for engines that support it; hostCtl.canVoid() → engine.canVoid's why-not
+//   hostCtl.markAbsent(pid) / markPresent(pid)   D4 `@absent` / `@present`; state.room.absent (public)
+//   state.room.idle             host: [{ pid, since }] connected seats the table has waited on for stallMs (#9)
 //   resumeInfo() / forgetResume()  what 「返去上一局」 would resume (read through THIS app's store, so a
 //                               `?as=` testing identity sees its own), and dropping it
 //   prefs.get/set               small per-identity preferences (the name draft) in the same store
@@ -77,8 +79,8 @@ function emptyRoom() {
     phase: 'lobby', players: [], gameId: null, config: {}, configSummary: [],
     configValid: { ok: false, message: '未揀遊戲', warnings: [] },
     scoreboard: {}, history: [], narration: { mode: 'voice' }, paused: false,
-    stalled: [], lastResult: null, loading: null,
-    timer: null, claims: [], versionMismatch: [], singleDevice: false,
+    stalled: [], idle: [], lastResult: null, loading: null,
+    timer: null, claims: [], versionMismatch: [], singleDevice: false, absent: [],
   };
 }
 
@@ -1167,6 +1169,14 @@ export function createApp(opts = {}) {
     hostAction(i, label) { return isHostish() ? room.hostAction(i, label) : false; },
     /** `@void-round`: engines that support it discard the current round (a phone died); others ignore it → false. */
     voidRound() { return isHostish() ? room.voidRound() : false; },
+    /** Would voidRound() do anything? `{ ok, message }` from engine.canVoid, or null when the game does not say. */
+    canVoid() { return isHostish() ? room.canVoid() : null; },
+    /**
+     * D4 `@absent` / `@present`: stop waiting on a seat for the rest of this game, or take it back. True iff the
+     * engine changed state (false: this game cannot, already so, paused, not playing). state.room.absent lists them.
+     */
+    markAbsent(pid) { return isHostish() ? room.markAbsent(pid) : false; },
+    markPresent(pid) { return isHostish() ? room.markPresent(pid) : false; },
     /**
      * T1 — the table timer, in every phase, on every phone (state.room.timer). Host only; all return booleans.
      * start(ms 1 s–3 h, label?) replaces any running timer; add(ms) after it rang starts a new countdown.

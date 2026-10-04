@@ -7,7 +7,7 @@
 // narrator and Web Audio are primed there, as the very first thing.
 // ============================================================
 
-import { el, dieFace, sig, toast } from '../dom.js?v=1';
+import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=1';
 import { sfx, primeAudio } from '../../core/sfx.js?v=1';
 import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
 import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=1';
@@ -62,19 +62,19 @@ export function mountLobby(sh) {
   const qrWrap = el('div', { class: 'qr-wrap' }, qrBox);
   qrWrap.hidden = true;
   const qrBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '📱 QR Code');
+  // the clipboard can refuse (an in-app browser, no permission): the link then shows in the page to copy by
+  // hand — never window.prompt, which freezes the host's phone (the room's server, #3)
+  const linkCopy = copyBox();
   const codeCard = el('div', { class: 'card code-card' },
     el('span', { class: 'field-label', text: '房間號碼 — 講俾朋友聽' }),
     bigCode,
     el('div', { class: 'code-actions' },
       el('button', {
         class: 'btn btn-ghost btn-sm', type: 'button',
-        onclick: async () => {
-          const url = sh.roomLink(last.code);
-          try { await navigator.clipboard.writeText(url); toast('連結已複製'); }
-          catch { window.prompt('複製呢條連結：', url); }
-        },
+        onclick: () => linkCopy.copy(sh.roomLink(last.code)),
       }, '📋 複製連結'),
       qrBtn),
+    linkCopy.el,
     qrWrap);
 
   qrBtn.addEventListener('click', async () => {

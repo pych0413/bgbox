@@ -14,6 +14,10 @@ export const ACT = Object.freeze({
   AUTO: '@auto',           // { type, pid } host asked to auto-act a stalled seat
   VOID_ROUND: '@void-round', // { type } host discards the current round (a phone died mid-round). Optional:
                              // an engine that does not support it returns the state unchanged.
+  ABSENT: '@absent',         // { type, pid } host marks a seat absent (D4): stop waiting on it for the rest of this
+                             // game — votes, unanimity, ready checks and turn order count present seats only.
+                             // Optional: unchanged state = "this game cannot do it" (the shell says so).
+  PRESENT: '@present',       // { type, pid } the absent seat is back. Optional, even for engines that take @absent.
 });
 
 // ---------- randomness ----------
