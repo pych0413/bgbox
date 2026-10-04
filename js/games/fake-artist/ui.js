@@ -23,8 +23,8 @@
 // Flow and wording: docs/games/fake-artist.md.
 // ============================================================
 
-import * as S from './script.js?v=1';
-import { COUNT_MS, MIN_STROKE_LEN, TALLY_MS, checkEntry, penColor, strokeLength, textLen } from './game.js?v=1';
+import * as S from './script.js?v=20261004224709';
+import { COUNT_MS, MIN_STROKE_LEN, TALLY_MS, checkEntry, penColor, strokeLength, textLen } from './game.js?v=20261004224709';
 
 const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
 

@@ -24,7 +24,7 @@
 //    rule for speech) and every timer carries on from where it was.
 // ============================================================
 
-import { ACT, HOST, clone } from './engine-kit.js?v=20261004005209';
+import { ACT, HOST, clone } from './engine-kit.js?v=20261004224709';
 
 const MAX_TIMEOUT = 2 ** 31 - 1;       // setTimeout overflows (fires at once) beyond this
 const MAX_STROKES = 3000;

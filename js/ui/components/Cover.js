@@ -22,8 +22,8 @@
 //    a card is never left face-up when the phone is put down or handed over.
 // ============================================================
 
-import { el, fromHTML, restartAnim, toast, labelDice } from '../dom.js?v=20261004005209';
-import { sfx } from '../../core/sfx.js?v=20261004005209';
+import { el, fromHTML, restartAnim, toast, labelDice } from '../dom.js?v=20261004224709';
+import { sfx } from '../../core/sfx.js?v=20261004224709';
 
 const covers = new Set();
 let hooked = false;

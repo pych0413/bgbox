@@ -31,8 +31,8 @@
 // script.js. Flow and wording: docs/games/werewolf.md.
 // ============================================================
 
-import { el } from '../../ui/dom.js?v=20261004005209';
-import * as S from './script.js?v=20261004005209';
+import { el } from '../../ui/dom.js?v=20261004224709';
+import * as S from './script.js?v=20261004224709';
 
 const sig = (x) => JSON.stringify(x ?? null);
 const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };

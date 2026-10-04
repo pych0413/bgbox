@@ -27,8 +27,8 @@
 // the shell's night-time mute like every other sound.
 // ============================================================
 
-import { el, fmtClock } from '../dom.js?v=20261004005209';
-import { sfx } from '../../core/sfx.js?v=20261004005209';
+import { el, fmtClock } from '../dom.js?v=20261004224709';
+import { sfx } from '../../core/sfx.js?v=20261004224709';
 
 /** U10: the host time the room's held clock stands at (set by the play screen), or null. */
 let roomHeldAt = null;

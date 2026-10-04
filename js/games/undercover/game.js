@@ -44,12 +44,12 @@
 //  - result.points = { pid: n } for winners only.
 // ============================================================
 
-import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=20261004005209';
+import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=20261004224709';
 
 // D4 host actions (the literals, so this engine does not depend on engine-kit having them)
 const ABSENT = ACT.ABSENT ?? '@absent';
 const PRESENT = ACT.PRESENT ?? '@present';
-import WORDS from '../../data/undercover-words.js?v=20261004005209';   // only to list the categories; words are drawn through ctx.bag
+import WORDS from '../../data/undercover-words.js?v=20261004224709';   // only to list the categories; words are drawn through ctx.bag
 
 // ---------- constants ----------
 

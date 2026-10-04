@@ -15,11 +15,11 @@
 //    navigator.share (iOS only allows it inside a real tap).
 // ============================================================
 
-import { el, sig, toast } from '../dom.js?v=20261004005209';
-import { sfx } from '../../core/sfx.js?v=20261004005209';
-import { Scoreboard, Canvas } from '../components/index.js?v=20261004005209';
-import { resultSections, sectionsOpen, pictureFileName, resultHero, confettiSet } from '../logic.js?v=20261004005209';
-import { paintStrokes } from '../ink.js?v=20261004005209';
+import { el, sig, toast } from '../dom.js?v=20261004224709';
+import { sfx } from '../../core/sfx.js?v=20261004224709';
+import { Scoreboard, Canvas } from '../components/index.js?v=20261004224709';
+import { resultSections, sectionsOpen, pictureFileName, resultHero, confettiSet } from '../logic.js?v=20261004224709';
+import { paintStrokes } from '../ink.js?v=20261004224709';
 
 const PNG_PX = 1080;              // the picture itself; a strip underneath says what and when
 const PNG_FOOTER = 96;

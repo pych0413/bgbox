@@ -52,10 +52,10 @@
 // and nobody there is listed as idle (#18).
 // ============================================================
 
-import { HOST, ACT, clone, cryptoRng, needsEyesClosed } from './engine-kit.js?v=1';
-import { Session } from './session.js?v=1';
-import { PROTOCOL } from './transport.js?v=1';
-import { uid } from './util.js?v=1';
+import { HOST, ACT, clone, cryptoRng, needsEyesClosed } from './engine-kit.js?v=20261004224709';
+import { Session } from './session.js?v=20261004224709';
+import { PROTOCOL } from './transport.js?v=20261004224709';
+import { uid } from './util.js?v=20261004224709';
 
 export const PALETTE = ['#f5c518', '#4ec97a', '#4aa3ff', '#ff7a59', '#c084fc', '#f472b6',
   '#2dd4bf', '#facc15', '#a3e635', '#fb923c', '#60a5fa', '#e879f9', '#94a3b8', '#fda4af', '#86efac', '#fde68a'];

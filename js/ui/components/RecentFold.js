@@ -18,8 +18,8 @@
 // Everything in here must be PUBLIC — the play screen renders `view.recent` the same way on every phone.
 // ============================================================
 
-import { el, sig } from '../dom.js?v=20261004005209';
-import { recentFolds } from '../logic.js?v=20261004005209';
+import { el, sig } from '../dom.js?v=20261004224709';
+import { recentFolds } from '../logic.js?v=20261004224709';
 
 export function RecentFold(props = {}) {
   let p = props;

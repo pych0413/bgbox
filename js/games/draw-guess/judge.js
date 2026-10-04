@@ -38,7 +38,7 @@
 // message ("老虎？獅子？") would hand the word to everybody.
 // ============================================================
 
-import { FROM, TO } from './fold.js?v=20261004005209';
+import { FROM, TO } from './fold.js?v=20261004224709';
 
 const FOLD = new Map();
 for (let i = 0; i < FROM.length; i++) FOLD.set(FROM[i], TO[i]);

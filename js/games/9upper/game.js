@@ -9,8 +9,8 @@
 // 諗樣 is the stuck seat; 💤 (@absent / @present) stops waiting on a seat.
 // ============================================================
 
-import { HOST, ACT, rint, shuffle, sample, seatOrder } from '../../core/engine-kit.js?v=20261004005209';
-import * as S from './script.js?v=20261004005209';
+import { HOST, ACT, rint, shuffle, sample, seatOrder } from '../../core/engine-kit.js?v=20261004224709';
+import * as S from './script.js?v=20261004224709';
 
 // ---------- constants ----------
 

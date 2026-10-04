@@ -13,7 +13,7 @@
 // The phases and the wording: docs/games/undercover.md.
 // ============================================================
 
-import { el, restartAnim } from '../../ui/dom.js?v=20261004005209';
+import { el, restartAnim } from '../../ui/dom.js?v=20261004224709';
 
 const ROLE = {
   civilian: { emoji: '🧑', name: '平民' },

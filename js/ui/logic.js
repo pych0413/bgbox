@@ -3,7 +3,7 @@
 // they run (and are tested) under Node.
 // ============================================================
 
-import { needsEyesClosed } from '../core/engine-kit.js?v=1';
+import { needsEyesClosed } from '../core/engine-kit.js?v=20261004224709';
 
 /**
  * Does a game fit the table right now? { ok, reason }.

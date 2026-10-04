@@ -32,7 +32,7 @@
 // state.list is the PUBLIC location list (name, emoji, category only).
 // ============================================================
 
-import { HOST, ACT, pick, rint, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=20261004005209';
+import { HOST, ACT, pick, rint, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=20261004224709';
 
 // D4 host actions (the literals, so this engine does not depend on engine-kit having them)
 const ABSENT = ACT.ABSENT ?? '@absent';

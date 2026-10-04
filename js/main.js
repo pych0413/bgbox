@@ -83,9 +83,9 @@ function testIdentityStorage() {
 }
 
 async function boot() {
-  const { createNarrator } = await load(() => import('./core/narrator.js?v=20261004005209'), '旁白');
-  const { createApp } = await load(() => import('./core/client.js?v=20261004005209'), '房間核心 core/client.js');
-  const { startShell } = await load(() => import('./ui/shell.js?v=20261004005209'), '介面 ui/shell.js');
+  const { createNarrator } = await load(() => import('./core/narrator.js?v=20261004224709'), '旁白');
+  const { createApp } = await load(() => import('./core/client.js?v=20261004224709'), '房間核心 core/client.js');
+  const { startShell } = await load(() => import('./ui/shell.js?v=20261004224709'), '介面 ui/shell.js');
 
   const narrator = createNarrator();
   const app = createApp({ narrator, storage: testIdentityStorage() });

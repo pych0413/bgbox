@@ -15,9 +15,9 @@
 // A team foul flag freezes that clock (`turn.ruling`, deadline null) until the host rules.
 // ============================================================
 
-import { HOST, ACT, rint, sample, shuffle, seatOrder } from '../../core/engine-kit.js?v=20261004005209';
-import * as S from './script.js?v=20261004005209';
-import { analyse } from './judge.js?v=20261004005209';
+import { HOST, ACT, rint, sample, shuffle, seatOrder } from '../../core/engine-kit.js?v=20261004224709';
+import * as S from './script.js?v=20261004224709';
+import { analyse } from './judge.js?v=20261004224709';
 
 // ---------- constants ----------
 

@@ -19,8 +19,8 @@
 // leaves this file through view(), which is built field by field.
 // ============================================================
 
-import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=1';
-import { narrate, stepTitle, anonymousPrompt, cueMinMs, headCountNote, VOTE_CALL, VOTE_CALL_PASS, CLOCK, HINT } from './script.js?v=1';
+import { ACT, HOST, seatOrder, shuffle, rollDie, pick, sample, tally } from '../../core/engine-kit.js?v=20261004224709';
+import { narrate, stepTitle, anonymousPrompt, cueMinMs, headCountNote, VOTE_CALL, VOTE_CALL_PASS, CLOCK, HINT } from './script.js?v=20261004224709';
 
 // ---------- meta / rules ----------
 

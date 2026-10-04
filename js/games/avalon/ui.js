@@ -30,7 +30,7 @@
 //  - #20: the leader's public screen names the leader, never 「你係隊長」
 // ============================================================
 
-import * as S from './script.js?v=20261004005209';
+import * as S from './script.js?v=20261004224709';
 
 const T = S.T;
 /** U9 (decision 2026-10-04): one shared phone — every holder keeps the role card ≥ 8 s and the quest card ≥ 4 s. */

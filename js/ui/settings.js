@@ -9,9 +9,9 @@
 // grows evenly. main.js applies the saved size before the first paint.
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261004005209';
-import { lsGet, lsSet } from '../core/util.js?v=20261004005209';
-import { openSheet } from './sheet.js?v=20261004005209';
+import { el, toast } from './dom.js?v=20261004224709';
+import { lsGet, lsSet } from '../core/util.js?v=20261004224709';
+import { openSheet } from './sheet.js?v=20261004224709';
 
 export const TEXT_KEY = 'bgb:text';
 

@@ -22,8 +22,8 @@
 // drawer sends { type: 'done' } after drawing on the real paper.
 // ============================================================
 
-import { HOST, ACT, rint, seatOrder, tally, nextSeat } from '../../core/engine-kit.js?v=20261004005209';
-import * as S from './script.js?v=20261004005209';
+import { HOST, ACT, rint, seatOrder, tally, nextSeat } from '../../core/engine-kit.js?v=20261004224709';
+import * as S from './script.js?v=20261004224709';
 
 // D4 host actions (the literals, so this engine does not depend on engine-kit having them)
 const ABSENT = ACT.ABSENT ?? '@absent';

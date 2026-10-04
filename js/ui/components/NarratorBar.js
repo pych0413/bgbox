@@ -37,7 +37,7 @@
 // button opens it for this turn; the next time `compact` switches on it folds again.
 // ============================================================
 
-import { el, confirmTap, isArmed, disarmConfirm } from '../dom.js?v=20261004005209';
+import { el, confirmTap, isArmed, disarmConfirm } from '../dom.js?v=20261004224709';
 
 /** Why the line did not come out (app.state.narration.reason) → what the host is told. */
 const STALL_TEXT = {

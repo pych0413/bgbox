@@ -31,8 +31,8 @@
 // resolved promise is still the gate it asked for.
 // ============================================================
 
-import { el, lockScroll, unlockScroll } from '../dom.js?v=20261004005209';
-import { sfx } from '../../core/sfx.js?v=20261004005209';
+import { el, lockScroll, unlockScroll } from '../dom.js?v=20261004224709';
+import { sfx } from '../../core/sfx.js?v=20261004224709';
 
 const KINDS = ['private', 'switch', 'anon', 'public', 'table'];
 const PUBLIC = new Set(['public', 'table']);

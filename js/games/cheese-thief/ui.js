@@ -20,9 +20,9 @@
 //  - view.hint is never drawn here: the shell shows it only behind 💡 (U1).
 // ============================================================
 
-import { el } from '../../ui/dom.js?v=20261004005209';
-import { rules } from './game.js?v=20261004005209';
-import { CLOCK } from './script.js?v=20261004005209';
+import { el } from '../../ui/dom.js?v=20261004224709';
+import { rules } from './game.js?v=20261004224709';
+import { CLOCK } from './script.js?v=20261004224709';
 
 const ROLES = Object.fromEntries(rules.roles.map((r) => [r.id, r]));
 

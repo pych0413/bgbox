@@ -13,7 +13,7 @@
 // Flow and wording: docs/games/9upper.md.
 // ============================================================
 
-import * as S from './script.js?v=20261004005209';
+import * as S from './script.js?v=20261004224709';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
