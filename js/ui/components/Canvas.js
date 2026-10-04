@@ -39,14 +39,14 @@
 //    the canvas works stand-alone (own strokes stay, undo/clear are local).
 // ============================================================
 
-import { el, restartAnim, sig, toast } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
+import { el, restartAnim, sig, toast } from '../dom.js?v=20261004005209';
+import { sfx } from '../../core/sfx.js?v=20261004005209';
 import {
   PALETTE, WIDTHS, ERASER_MULT, PAPER, DEFAULT_COLOR, DEFAULT_WIDTH, BATCH_MS,
   MAX_PTS_PER_STROKE, MAX_PTS_TOTAL, MAX_STROKES,
   toLogical, strokeLength, backingSize, edgeInset, safeColor, resolveStyle, makeStrokeIds,
   pathState, advancePath, finishPath, paceCount, createOutbox, syncPlan,
-} from '../ink.js?v=20261003171423';
+} from '../ink.js?v=20261004005209';
 
 export { PALETTE, WIDTHS, PAPER };
 

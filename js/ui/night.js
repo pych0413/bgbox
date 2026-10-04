@@ -9,8 +9,8 @@
 // mode only — never on the seat — so two phones side by side look the same whoever is awake.
 // ============================================================
 
-import { el } from './dom.js?v=1';
-import { NIGHT_WORDS } from './logic.js?v=1';
+import { el } from './dom.js?v=20261004005209';
+import { NIGHT_WORDS } from './logic.js?v=20261004005209';
 
 const LEVELS = ['dark', 'soft', 'opaque'];
 

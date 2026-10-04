@@ -21,7 +21,7 @@
 //    Assassin's confirm is real, everybody else's records a decoy
 // ============================================================
 
-import * as S from './script.js?v=20261003171423';
+import * as S from './script.js?v=20261004005209';
 
 const T = S.T;
 

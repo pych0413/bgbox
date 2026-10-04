@@ -7,13 +7,13 @@
 // narrator and Web Audio are primed there, as the very first thing.
 // ============================================================
 
-import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=1';
-import { sfx, primeAudio } from '../../core/sfx.js?v=1';
-import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
-import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=1';
+import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=20261004005209';
+import { sfx, primeAudio } from '../../core/sfx.js?v=20261004005209';
+import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=20261004005209';
+import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=20261004005209';
 
 const ORDER_HINT = '座位次序＝輪流次序，開局前用換位排好';
-import { wantsPreflight } from '../preflight.js?v=1';
+import { wantsPreflight } from '../preflight.js?v=20261004005209';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
 let qrLoading = null;

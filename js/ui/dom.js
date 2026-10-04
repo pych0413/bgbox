@@ -60,7 +60,7 @@ export function restartAnim(node, cls) {
 let idSeq = 0;
 export const uniqueId = (prefix = 'u') => `${prefix}${++idSeq}`;
 
-export { fmtClock } from './logic.js?v=20261003171423';
+export { fmtClock } from './logic.js?v=20261004005209';
 
 // ---------- modal scroll lock (counted: a sheet and a gate may overlap) ----------
 let scrollLocks = 0;

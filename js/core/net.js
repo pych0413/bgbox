@@ -29,7 +29,7 @@
 // shortened there and no token ever is.
 // ============================================================
 
-import { makeRoomCode } from './util.js?v=20261003171423';
+import { makeRoomCode } from './util.js?v=20261004005209';
 
 export const PEER_NS = 'bgbox-v2-';
 export const peerIdFor = (code) => PEER_NS + String(code);

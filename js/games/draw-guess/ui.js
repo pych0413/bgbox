@@ -29,8 +29,8 @@
 // Only api.components (Cover, Timer, Canvas) and plain DOM are used.
 // ============================================================
 
-import * as S from './script.js?v=1';
-import { maskAnswer } from './judge.js?v=1';
+import * as S from './script.js?v=20261004005209';
+import { maskAnswer } from './judge.js?v=20261004005209';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);

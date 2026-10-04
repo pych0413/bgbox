@@ -4,11 +4,11 @@
 // drops in), then your name.
 // ============================================================
 
-import { el, dieFace, addPips, toast } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
-import { isRoomCode, CODE_LEN } from '../../core/util.js?v=20261003171423';
-import { friendlyError } from './home.js?v=20261003171423';
-import { inAppNotice, peerLooksDown } from '../status.js?v=20261003171423';
+import { el, dieFace, addPips, toast } from '../dom.js?v=20261004005209';
+import { sfx } from '../../core/sfx.js?v=20261004005209';
+import { isRoomCode, CODE_LEN } from '../../core/util.js?v=20261004005209';
+import { friendlyError } from './home.js?v=20261004005209';
+import { inAppNotice, peerLooksDown } from '../status.js?v=20261004005209';
 
 const NAME_MAX = 12;
 

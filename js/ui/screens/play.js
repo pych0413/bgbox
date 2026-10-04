@@ -18,12 +18,12 @@
 // half-picked target can leak from one seat's screen to the next on a shared phone.
 // ============================================================
 
-import { el, toast, lockScroll, unlockScroll, sig } from '../dom.js?v=1';
-import { sfx } from '../../core/sfx.js?v=1';
-import { components, NarratorBar, PassGate, RulesSheet, RecentFold, closeAllCovers } from '../components/index.js?v=1';
-import { HintSheet } from '../hints.js?v=1';
-import { textSize, setTextSize } from '../settings.js?v=1';
-import { turnBadge, skipNeedsConfirm, SKIP_CONFIRM, nightChrome } from '../logic.js?v=1';
+import { el, toast, lockScroll, unlockScroll, sig } from '../dom.js?v=20261004005209';
+import { sfx } from '../../core/sfx.js?v=20261004005209';
+import { components, NarratorBar, PassGate, RulesSheet, RecentFold, closeAllCovers } from '../components/index.js?v=20261004005209';
+import { HintSheet } from '../hints.js?v=20261004005209';
+import { textSize, setTextSize } from '../settings.js?v=20261004005209';
+import { turnBadge, skipNeedsConfirm, SKIP_CONFIRM, nightChrome } from '../logic.js?v=20261004005209';
 
 const NO_VOID = '呢個遊戲唔支援呢輪作廢';
 const NO_SKIP = '跳唔到呢步 — 要等人自己做（⋯ 可以代佢做或者標記缺席）';
@@ -41,7 +41,7 @@ const cssLoaded = new Set();
 function ensureGameCss(id) {
   if (cssLoaded.has(id)) return;
   cssLoaded.add(id);
-  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=1` }));
+  document.head.append(el('link', { rel: 'stylesheet', href: `js/games/${id}/style.css?v=20261004005209` }));
 }
 
 export function mountPlay(sh) {

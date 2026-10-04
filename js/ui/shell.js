@@ -31,19 +31,19 @@
 //    the same thing as a safety net. The connection bar pushes the page down (body.has-netbar, #4).
 // ============================================================
 
-import { el, toast, confirmTap, installConfirmShim } from './dom.js?v=1';
-import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=1';
-import * as sfxMod from '../core/sfx.js?v=1';
-import { createTableTimer } from './timer.js?v=1';
-import { createNightDim } from './night.js?v=1';
-import { createStatus } from './status.js?v=1';
-import { openSettings, applyTextSize } from './settings.js?v=1';
-import { openPreflight } from './preflight.js?v=1';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=1';
-import { mountJoin } from './screens/join.js?v=1';
-import { mountLobby } from './screens/lobby.js?v=1';
-import { mountPlay } from './screens/play.js?v=1';
-import { mountResults } from './screens/results.js?v=1';
+import { el, toast, confirmTap, installConfirmShim } from './dom.js?v=20261004005209';
+import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=20261004005209';
+import * as sfxMod from '../core/sfx.js?v=20261004005209';
+import { createTableTimer } from './timer.js?v=20261004005209';
+import { createNightDim } from './night.js?v=20261004005209';
+import { createStatus } from './status.js?v=20261004005209';
+import { openSettings, applyTextSize } from './settings.js?v=20261004005209';
+import { openPreflight } from './preflight.js?v=20261004005209';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261004005209';
+import { mountJoin } from './screens/join.js?v=20261004005209';
+import { mountLobby } from './screens/lobby.js?v=20261004005209';
+import { mountPlay } from './screens/play.js?v=20261004005209';
+import { mountResults } from './screens/results.js?v=20261004005209';
 
 const MUTE_KEY = 'ct:muted';             // v1 key, so the preference survives the upgrade
 const NARR_KEY = 'bgb:narr';
@@ -68,7 +68,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=1');
+    const m = await import('../games/registry.js?v=20261004005209');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);

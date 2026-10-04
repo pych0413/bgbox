@@ -31,8 +31,8 @@
 // between press and release (#15).
 // ============================================================
 
-import { el, sig } from '../dom.js?v=1';
-import { sfx } from '../../core/sfx.js?v=1';
+import { el, sig } from '../dom.js?v=20261004005209';
+import { sfx } from '../../core/sfx.js?v=20261004005209';
 
 const ABSTAIN = '@abstain';
 

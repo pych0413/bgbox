@@ -13,8 +13,8 @@
 // these fields simply shows nothing.
 // ============================================================
 
-import { el, toast, copyBox } from './dom.js?v=1';
-import { inAppBrowser } from './logic.js?v=1';
+import { el, toast, copyBox } from './dom.js?v=20261004005209';
+import { inAppBrowser } from './logic.js?v=20261004005209';
 
 const OUTBOX_GRACE_MS = 1500;
 const SYNC_CHIP_MS = 1800;

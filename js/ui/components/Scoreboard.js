@@ -17,8 +17,8 @@
 // 「唔計輸贏」).
 // ============================================================
 
-import { el, sig } from '../dom.js?v=1';
-import { rankRows, scoreboardMode } from '../logic.js?v=1';
+import { el, sig } from '../dom.js?v=20261004005209';
+import { rankRows, scoreboardMode } from '../logic.js?v=20261004005209';
 
 const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
