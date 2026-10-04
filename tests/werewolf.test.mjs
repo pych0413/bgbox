@@ -2336,9 +2336,12 @@ test('werewolf: focus — who must look at their phone: unready seats, every hol
   drive(sim, (s) => s.phase === 'final');
   assert.equal(sim.focus(), null, 'cue stage');
   sim.cueDone();
-  assert.deepEqual(sim.focus(), { pids: [cur(sim).pid] });
+  // the one-phone hints (a shared phone's hand-over card: 「其他人唔好望 · 最後行動」) ride along; a phone of its own ignores them
+  assert.deepEqual(sim.focus(), { pids: [cur(sim).pid], label: '最後行動', step: `final:${sim.state.seq}` });
   drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
   assert.deepEqual(sim.focus().pids, cur(sim).voters);
+  assert.equal(sim.focus().label, `第 ${sim.state.d} 日投票`);
+  assert.equal(sim.focus().open, undefined, 'a ballot is never a public step');
   sim.act(cur(sim).voters[0], { type: 'vote', target: null });
   assert.deepEqual(sim.focus().pids, cur(sim).voters.slice(1));
 });
@@ -4260,5 +4263,681 @@ test('werewolf ui: with seats marked 💤 and back through whole random games, e
       pushViews(sim, seats, undefined, true);
       for (const seat of Object.values(seats)) seat.handle.destroy();
     }
+  });
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest #8 #10 #19 #20 #22, decisions U1 U2)
+// ============================================================
+
+/** A forced-role game as a whole-table room deals it: the hidden passPhone flag and the one-phone defaults. */
+const mkOne = (map, over = {}, seed = 1) => mk(map, { passPhone: true, pace: 'slow', voteSecs: 0, ...over }, seed);
+
+test('werewolf one phone: defaults set the hidden passPhone flag both ways; it is no form field, must be a boolean, and the lobby says so; U1 — eyes closed', async () => {
+  const { needsEyesClosed } = await import('../js/core/engine-kit.js');
+  assert.equal(meta.eyesClosed, true);
+  assert.equal(needsEyesClosed(meta), true, 'U1: a whole-table room offers no 靜音 for this night');
+  for (let n = 6; n <= 13; n++) {
+    const one = config.defaults(n, undefined, { singleDevice: true });
+    assert.equal(one.passPhone, true);
+    assert.ok(config.validate(one, n).ok);
+    assert.ok(!config.fields(one, n).some((f) => f.key === 'passPhone'), 'not a form field');
+    assert.ok(config.summary(one, n).some((l) => l.startsWith('📱')), 'the lobby line');
+    const many = config.defaults(n, one, { singleDevice: false });
+    assert.equal(many.passPhone, false, 'a second phone joining turns it off');
+    assert.ok(!config.summary(many, n).some((l) => l.startsWith('📱')));
+    assert.equal(config.defaults(n, one).passPhone, true, 'without env the flag is kept');
+    assert.equal(config.defaults(n).passPhone, false);
+  }
+  assert.equal(config.validate({ ...config.defaults(9), passPhone: 'yes' }, 9).ok, false, 'passPhone is a boolean');
+  // the 📖 rules no longer point at controls that do not exist, and say 靜音 is not for one phone
+  const one = rules.sections.find((x) => x.title === '一部機玩').body;
+  assert.ok(!one.includes('⋯ → 換人') && !one.includes('⋯ → 下一步'), one);
+  assert.ok(one.includes('一齊') && one.includes('我講完') && one.includes('冇靜音'), one);
+  // device-neutral wording (the human moderator's section is about phones of their own by definition)
+  assert.ok(!rules.sections.filter((x) => !x.title.startsWith('人手主持')).some((x) => x.body.includes('自己部手機')), 'device-neutral wording');
+});
+
+test('werewolf one phone: a human moderator needs a phone of their own — on one phone validate warns why and the 上帝 chip is not offered', () => {
+  for (let n = 7; n <= 12; n++) {
+    const cfg = { ...config.defaults(n, undefined, { singleDevice: true }), moderator: 'human' };
+    const v = config.validate(cfg, n, { singleDevice: true });
+    assert.equal(v.ok, true, `n=${n}: a warning, the host decides`);
+    assert.ok(v.warnings.includes(S.MSG.humanOnePhone), v.warnings.join(' / '));
+    assert.ok(!config.validate(cfg, n, { singleDevice: false }).warnings.includes(S.MSG.humanOnePhone), 'phones of their own: unchanged');
+    assert.ok(!config.validate({ ...cfg, moderator: 'app' }, n, { singleDevice: true }).warnings.includes(S.MSG.humanOnePhone));
+    assert.ok(!config.presets(n, { singleDevice: true }).some((p) => p.id === 'god'));
+    assert.ok(config.presets(n, { singleDevice: false }).some((p) => p.id === 'god'));
+    for (const p of config.presets(n, { singleDevice: true })) {
+      assert.ok(config.validate({ ...config.defaults(n, undefined, { singleDevice: true }), ...p.cfg }, n, { singleDevice: true }).ok, `${n} ${p.id}`);
+    }
+  }
+});
+
+test('werewolf one phone: speeches and 遺言 are public steps that hand the phone to the speaker (#10) — phones of their own get no speech focus', () => {
+  for (const pass of [true, false]) {
+    const sim = deal(pass ? mkOne(R9) : mk(R9));
+    nightKill(sim, 'p7');                                       // night 1: p7 dies → 遺言 (night-1 deaths speak)
+    drive(sim, (s) => s.phase === 'words');
+    assert.equal(cur(sim).stage, 'cue');
+    const w = sim.focus();
+    if (!pass) { assert.equal(w, null, 'a phone of its own: 遺言 calls nobody (unchanged)'); continue; }
+    assert.deepEqual(w, { pids: ['p7'], open: true, label: '遺言', step: `words:${sim.state.seq}`, hold: true }, 'during the opening line already');
+    sim.cueDone();
+    assert.deepEqual(sim.focus(), w, 'the same step while it runs (no second card)');
+    sim.act('p7', { type: 'done' });
+    // every speech of the day: the speaker alone, public, a new step key each time
+    const seen = new Set();
+    let speeches = 0;
+    for (let g = 0; g < 200 && phase(sim) !== 'vote'; g++) {
+      if (phase(sim) === 'speech') {
+        const c = cur(sim);
+        const f = sim.focus();
+        assert.deepEqual(f, { pids: [c.pid], open: true, label: '發言', step: `speech:${sim.state.seq}`, hold: true });
+        if (c.stage === 'run') {
+          assert.ok(!seen.has(f.step), 'a new key for every speech');
+          seen.add(f.step);
+          assert.equal(engine.blocking(sim.state, c.pid), false, 'a speech with a clock never blocks');
+          sim.act(c.pid, { type: 'done' });
+          speeches++;
+          continue;
+        }
+      }
+      if (sim.cue()) sim.cueDone(); else sim.advance();
+    }
+    assert.equal(speeches, alive(sim).length, 'every living player held the phone once');
+  }
+});
+
+test('werewolf one phone: a PK speech is a public step too (「PK 發言」); the explode stays a living wolf\'s, during his speech', () => {
+  const sim = deal(mkOne(R9));
+  nightKill(sim, 'p7');
+  toVote(sim);
+  castVotes(sim, { p2: 'p1', p3: 'p1', p5: 'p4', p6: 'p4' });   // p1 and p4 tie
+  drive(sim, (s) => s.phase === 'speech' && s.cur.pk);
+  assert.equal(sim.focus().label, 'PK 發言');
+  assert.equal(sim.focus().open, true);
+  assert.ok(['p1', 'p4'].includes(sim.focus().pids[0]));
+  // a day speech: the wolf who holds the phone may explode
+  const d = deal(mkOne(R9));
+  nightKill(d, 'p7');
+  drive(d, (s) => s.phase === 'speech' && s.cur.stage === 'run' && s.role[s.cur.pid] === 'werewolf');
+  const wolf = cur(d).pid;
+  assert.deepEqual(d.focus().pids, [wolf]);
+  assert.equal(d.act(wolf, { type: 'explode' }), true);
+  assert.equal(phase(d), 'say');
+});
+
+test('werewolf one phone: the night calls the role once its window runs (never over the 讀稿 narrator\'s line); the wolves\' focus is the living, first — a dead wolf never takes the phone (#8)', () => {
+  for (const sim of [deal(mkOne(R9)), deal(mk(R9))]) {
+    drive(sim, (s) => s.phase === 'night' && s.cur.step === 'wolves');
+    assert.equal(cur(sim).stage, 'cue');
+    assert.equal(sim.focus(), null, 'the opening line: an eyes-closed card would cover the 讀稿 line and its 下一步');
+    sim.cueDone();
+    assert.deepEqual(sim.focus(), { pids: ['p1', 'p2', 'p3'], anonymous: '狼人請拎起部手機' }, 'the window: called');
+  }
+  // a dead wolf: never on one phone; on phones of their own still called (a dark phone would tell), after the living
+  for (const [s, want] of [[deal(mkOne(R9)), ['p2', 'p3']], [deal(mk(R9)), ['p2', 'p3', 'p1']]]) {
+    s.state.alive.p1 = false;
+    toStep(s, 'wolves');
+    assert.deepEqual(s.focus().pids, want);
+  }
+  // other roles keep their dead holder on one phone too (the phone is passed at the same moment whether alive or not)
+  const seer = deal(mkOne(R9));
+  seer.state.alive.p4 = false;
+  toStep(seer, 'seer');
+  assert.deepEqual(seer.focus().pids, ['p4']);
+  seer.advance();
+  assert.equal(cur(seer).stage, 'tail');
+  assert.equal(seer.focus(), null, 'the tail: nobody');
+});
+
+test('werewolf one phone: co-wakers — one tap with `seats` picks and confirms for every wolf it names (U2), never for anybody else, never outside the wolves\' step', () => {
+  const sim = deal(mkOne(R9));
+  toStep(sim, 'wolves');
+  assert.equal(sim.act('p1', { type: 'night', pick: 'p7', seats: ['p1', 'p2', 'p3'] }), true);
+  for (const w of ['p1', 'p2', 'p3']) assert.deepEqual(sim.state.nt.sel[w], { pick: 'p7', lock: false });
+  // every wolf's panel shows all three dots on the chip: they see each other's pointing
+  assert.equal(sim.view('p2').nt.chips.find((c) => c.pid === 'p7').by.length, 3);
+  assert.equal(sim.act('p2', { type: 'night', pick: 'p7', lock: true, seats: ['p1', 'p2', 'p3'] }), true);
+  for (const w of ['p1', 'p2', 'p3']) assert.deepEqual(sim.state.nt.sel[w], { pick: 'p7', lock: true });
+  assert.deepEqual(sim.focus(), { pids: [], anonymous: '狼人請拎起部手機' }, 'one 確定 ends their part; the step itself keeps its clock');
+  assert.equal(cur(sim).stage, 'run', 'the window never ends early');
+  night(sim);
+  assert.deepEqual(sim.state.lastNight.deaths, ['p7'], 'the shared pick is the kill (never a silent 空刀)');
+  assert.equal(sim.state.rec[0].wolves.how, 'agree');
+
+  // anybody else in `seats` is ignored; `seats` from a non-wolf or in another step does nothing for the others
+  const b = deal(mkOne(R9));
+  toStep(b, 'wolves');
+  b.act('p1', { type: 'night', pick: 'p8', seats: ['p4', 'p5', 'p1', 'nobody', 42] });
+  assert.equal(b.state.nt.sel.p4, undefined);
+  assert.equal(b.state.nt.sel.p5, undefined);
+  assert.deepEqual(b.state.nt.sel.p1, { pick: 'p8', lock: false });
+  b.act('p4', { type: 'night', pick: 'p9', seats: ['p1', 'p2'] });   // a decoy tap from the seer's seat
+  assert.deepEqual(b.state.nt.sel.p1, { pick: 'p8', lock: false }, 'a non-wolf cannot tick for a wolf');
+  assert.equal(b.state.nt.sel.p2, undefined);
+  toStep(b, 'seer');
+  b.act('p4', { type: 'night', pick: 'p1', lock: true, seats: ['p5'] });
+  assert.equal(b.state.nt.sel.p5, undefined, 'only the wolves\' step shares a tap');
+  // a dead wolf on the same phone (two seats on one phone in a room of phones): the shared tap is harmless for him
+  const c = deal(mk(R9));
+  c.state.alive.p3 = false;
+  toStep(c, 'wolves');
+  c.act('p1', { type: 'night', pick: 'p7', lock: true, seats: ['p1', 'p2', 'p3'] });
+  assert.deepEqual(c.focus().pids, [], 'everybody on that screen is done');
+  night(c);
+  assert.deepEqual(c.state.lastNight.deaths, ['p7']);
+});
+
+test('werewolf one phone: 最後行動 — the dead player gets the phone during the opening line and keeps it the whole window (confirmed or not), the clock held at the card; the same for a hunter and anybody else', () => {
+  const shapes = [];
+  for (const victim of ['p6', 'p7']) {                           // the hunter, a villager
+    const sim = deal(mkOne(R9));
+    nightKill(sim, victim);
+    drive(sim, (s) => s.phase === 'final');
+    assert.equal(cur(sim).stage, 'cue');
+    const f = sim.focus();
+    assert.deepEqual(f, { pids: [victim], label: '最後行動', step: `final:${sim.state.seq}`, hold: true });
+    shapes.push(JSON.stringify({ ...f, pids: null, step: null }));
+    sim.cueDone();
+    assert.deepEqual(sim.focus().pids, [victim]);
+    sim.act(victim, finSkip);
+    // an early hand-back would time the decision (the panel tells everybody but a hunter to wait the window out)
+    assert.deepEqual(sim.focus(), f, 'confirmed: still theirs until the window ends — never handed back early');
+    assert.equal(cur(sim).stage, 'run', 'the window keeps its fixed length');
+    sim.advance();
+    assert.notEqual(phase(sim) === 'final' && cur(sim).pid === victim, true, 'the window over: the step has moved on');
+  }
+  assert.equal(new Set(shapes).size, 1, 'a hunter\'s hand-over looks exactly like anybody else\'s');
+});
+
+test('werewolf one phone: a 💤 dead seat\'s 最後行動 calls nobody (a held clock would wait on nobody); 出局後睇到全場 never applies, so the public 遺言 screen shows no role', () => {
+  // the absent seat's final window runs on its own clock — no card, no held clock, nobody sent into its screen
+  const sim = deal(mkOne(R9));
+  nightKill(sim, 'p7');
+  drive(sim, (s) => s.phase === 'dawn');
+  assert.equal(sim.host(ABSENT('p7')), true);
+  drive(sim, (s) => s.phase === 'final');
+  assert.equal(cur(sim).pid, 'p7');
+  assert.equal(sim.focus(), null, 'cue: nobody');
+  sim.cueDone();
+  assert.equal(sim.focus(), null, 'run: nobody');
+  const own = deal(mk(R9));
+  nightKill(own, 'p7');
+  drive(own, (s) => s.phase === 'dawn');
+  own.host(ABSENT('p7'));
+  drive(own, (s) => s.phase === 'final' && s.cur.stage === 'run');
+  assert.deepEqual(own.focus(), { pids: ['p7'], label: '最後行動', step: `final:${own.state.seq}` }, 'phones of their own: unchanged');
+
+  // spectate on one phone: the dead speaker's 遺言 is the table's screen — no role of anybody on it
+  const sp = deal(mkOne(R9, { spectate: true }));
+  nightKill(sp, 'p7');
+  drive(sp, (s) => s.phase === 'words');
+  assert.equal(sp.focus().open, true);
+  const v = sp.view('p7');
+  assert.equal(v.all, undefined, 'no 全場身份 for a dead seat on one phone');
+  assert.deepEqual(v.seats.filter((x) => x.role).map((x) => x.pid), [], 'no role on the roster');
+  assert.ok(!config.fields(sp.state.cfg, 9).some((f) => f.key === 'spectate'), 'not offered on one phone');
+  assert.ok(!config.summary({ ...config.defaults(9, undefined, { singleDevice: true }), spectate: true }, 9).some((l) => l.startsWith('👻')));
+  // phones of their own: unchanged
+  const many = deal(mk(R9, { spectate: true }));
+  nightKill(many, 'p7');
+  drive(many, (s) => s.phase === 'words');
+  assert.equal(Object.keys(many.view('p7').all ?? {}).length, 9);
+  assert.ok(config.fields(many.state.cfg, 9).some((f) => f.key === 'spectate'));
+});
+
+/**
+ * ONE phone: only the seats the focus names may touch it (co-wakers together, with `seats`), everything else is the
+ * narrator and the clocks. Returns how many times the host had to press ⏭ (a stalled table needs it).
+ */
+function playOnePhone(sim, rng, { maxSteps = 6000 } = {}) {
+  let nexts = 0;
+  for (let i = 0; i < maxSteps && !sim.result(); i++) {
+    const f = sim.focus();
+    const called = f?.pids ?? [];
+    const holder = called[0];
+    const legal = holder ? sim.legal(holder) : [];
+    if (holder && legal.length) {
+      let a = legal[Math.floor(rng() * legal.length)];
+      if (phase(sim) === 'speech') a = legal.find((x) => x.type === 'done') ?? a;   // keep the day going
+      if (called.length > 1 && f.anonymous) a = { ...a, seats: called.slice() };    // co-wakers: one combined screen
+      if (sim.act(holder, a)) continue;
+    }
+    if (sim.cue()) { sim.cueDone(); continue; }
+    if (sim.state.deadline != null && sim.advance()) continue;
+    nexts++;
+    sim.host({ type: ACT.NEXT });
+  }
+  assert.ok(sim.result(), `one-phone game stuck in ${phase(sim)}/${cur(sim)?.k}/${cur(sim)?.stage}`);
+  return nexts;
+}
+
+test('werewolf one phone: 新手慢慢嚟 (no speech, 遺言 or vote clock) finishes with only the handed-over seat tapping — no speech ever stalls (#10, minor #8)', () => {
+  const beginner = config.presets(9).find((p) => p.id === 'beginner').cfg;
+  assert.deepEqual([beginner.speakSecs, beginner.wordsSecs, beginner.voteSecs], [0, 0, 0]);
+  for (let seed = 1; seed <= 12; seed++) {
+    const sim = new Sim(game, { n: 9, seed, config: { ...config.defaults(9, undefined, { singleDevice: true }), ...beginner } });
+    assert.equal(sim.state.cfg.passPhone, true);
+    const nexts = playOnePhone(sim, mulberry32(seed * 13));
+    assert.equal(nexts, 0, `seed ${seed}: the host never had to skip a step (${nexts} × ⏭)`);
+  }
+  // a phone of its own with the same preset: a speech names nobody (the speaker's own phone has the button)
+  const own = deal(mk(R9, { speakSecs: 0 }));
+  nightKill(own, 'p7');
+  drive(own, (s) => s.phase === 'speech' && s.cur.stage === 'run');
+  assert.equal(own.focus(), null);
+  assert.equal(engine.blocking(own.state, cur(own).pid), true, 'the untimed speaker is what the table waits on');
+});
+
+test('werewolf one phone: the first night\'s line says the phone lies in the middle; phones of their own keep 「放喺面前」 (#19)', () => {
+  const one = deal(mkOne(R9));
+  assert.ok(one.cue().text.includes('枱中間') && !one.cue().text.includes('面前'), one.cue().text);
+  const own = deal(mk(R9));
+  assert.ok(own.cue().text.includes('放喺面前'), own.cue().text);
+});
+
+test('werewolf: the table view (engine.view(state, null)) is a complete public screen — the night flag, the dawn, the speaking order, the 票型; nothing private', () => {
+  const sim = deal(mkOne(R9));
+  const priv = ['my', 'roleId', 'hintRoleText', 'god', 'all', 'nt'];
+  toStep(sim, 'wolves');
+  assert.equal(sim.view(null).night, true, 'the shell reads night from the table view too (dawn detection)');
+  assertNoKeys(sim.view(null), priv, 'table at night');
+  night(sim, { wolves: { p1: pk('p7'), p2: pk('p7'), p3: pk('p7') } });
+  assert.equal(phase(sim), 'dawn');
+  const dawn = sim.view(null);
+  assert.equal(dawn.night, false);
+  assert.deepEqual(dawn.dawn.deaths.map((d) => d.pid), ['p7']);
+  drive(sim, (s) => s.phase === 'speech');
+  assert.deepEqual(sim.view(null).speech.order, sim.state.speechOrder);
+  assert.deepEqual(sim.view(null).lastNight, { n: 1, deaths: ['p7'] });
+  toVote(sim);
+  castVotes(sim, { p2: 'p1', p3: 'p1', p4: 'p1', p5: 'p1', p6: 'p2' });
+  const t = sim.view(null);
+  assert.equal(t.sayInfo.kind, 'tally');
+  assert.equal(t.sayInfo.votes.length, cur(sim).votes.length);
+  assert.ok(t.recent?.length, 'the 票型 fold');
+  for (const v of [dawn, t]) assertNoKeys(v, priv, 'table by day');
+});
+
+// ---------- one phone: the UI (fake DOM) ----------
+
+/** The api a shared phone's shell hands a game UI (DESIGN 15.8), driven by a Sim; `calls` records the one-phone calls. */
+function sharedApi(sim, me, sent, calls, { shared = true, comps = stubComponents({ sfx: [], timers: 0 }) } = {}) {
+  return {
+    me, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
+    shared, wholeTable: shared, atTable: shared && me === null, mySeats: shared ? sim.players.map((p) => p.id) : [me],
+    send: (a) => { const changed = me ? sim.act(me, a) : false; sent.push({ pid: me, a, changed }); return changed; },
+    sendAs: (pid, a) => { const changed = sim.act(pid, a); sent.push({ pid, a, changed }); return changed; },
+    tableSend: (a) => { calls.push({ tableSend: a }); return true; },
+    toTable: (o) => { calls.push({ toTable: o ?? {} }); return true; },
+    handTo: () => false, askWho: async () => null,
+    ink() {}, now: () => sim.now, sfx() {}, toast() {}, confirm: () => true, components: comps,
+  };
+}
+const ctxOne = (sim, extra = {}) => ({
+  focus: sim.focus(), paused: false, narrationMode: 'voice', shared: true, wholeTable: true, atTable: false, tableLocked: false,
+  coWakers: [], views: {}, asked: null, clockHeld: false, ...extra,
+});
+
+test('werewolf ui, one phone: wolves awake together share ONE screen — all named, one pick and one 確定 count for every wolf (U2); the panel keeps the night shape', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mkOne(R9));
+    toStep(sim, 'wolves');
+    const sent = []; const calls = [];
+    const root = new FEl('div');
+    const handle = ui.mount(root, sharedApi(sim, 'p1', sent, calls));
+    const co = ['p1', 'p2', 'p3'];
+    const paint = () => handle.update(sim.view('p1'), ctxOne(sim, { coWakers: co, views: Object.fromEntries(co.map((p) => [p, sim.view(p)])) }));
+    paint();
+    const info = findAll(root, (n) => hasCls(n, 'ww-info'))[0].textContent;
+    assert.ok(info.includes('你哋一齊揀') && ['1號玩家1', '2號玩家2', '3號玩家3'].every((x) => info.includes(x)), info);
+    assert.ok(info.includes('一齊指一個人'), info);
+    // the same night shape as a sleeper's panel (two info lines, the grid, two buttons)
+    const decoy = new FEl('div');
+    const dh = ui.mount(decoy, sharedApi(sim, 'p7', [], []));
+    dh.update(sim.view('p7'), ctxOne(sim));
+    assert.equal(nightShape(root), nightShape(decoy), 'the combined screen has the night panel\'s one shape');
+    // one tap on 玩家7: every wolf points at him
+    clickN(findAll(root, (n) => hasCls(n, 'ww-chip') && n.textContent.includes('玩家7'))[0]);
+    assert.deepEqual(sent.at(-1).a, { type: 'night', pick: 'p7', seats: co });
+    for (const w of co) assert.equal(sim.state.nt.sel[w].pick, 'p7');
+    paint();
+    const ok = findAll(root, (n) => hasCls(n, 'ww-ok'))[0];
+    assert.equal(ok.disabled, false);
+    clickN(ok);
+    assert.deepEqual(sent.at(-1).a, { type: 'night', pick: 'p7', lock: true, seats: co }, 'the shown pick goes with the 確定');
+    for (const w of co) assert.deepEqual(sim.state.nt.sel[w], { pick: 'p7', lock: true });
+    assert.deepEqual(sim.focus().pids, [], 'nobody on this phone is called any more: the shell lays it in the middle under the dim');
+    // 空刀 together: the skip counts for all of them as well
+    const b = deal(mkOne(R9));
+    toStep(b, 'wolves');
+    const bs = []; const br = new FEl('div');
+    const bh = ui.mount(br, sharedApi(b, 'p1', bs, []));
+    bh.update(b.view('p1'), ctxOne(b, { coWakers: co }));
+    clickN(findAll(br, (n) => hasCls(n, 'ww-skip'))[0]);
+    assert.deepEqual(bs.at(-1).a, { type: 'night', pick: null, lock: true, seats: co });
+    for (const w of co) assert.deepEqual(b.state.nt.sel[w], { pick: null, lock: true });
+    // a phone of its own (no coWakers): the old single-seat taps, no `seats`
+    const own = deal(mk(R9));
+    toStep(own, 'wolves');
+    const os = []; const or = new FEl('div');
+    const oh = ui.mount(or, sharedApi(own, 'p1', os, [], { shared: false }));
+    oh.update(own.view('p1'), { focus: own.focus(), paused: false, narrationMode: 'voice' });
+    clickN(findAll(or, (n) => hasCls(n, 'ww-chip') && n.textContent.includes('玩家7'))[0]);
+    assert.deepEqual(os.at(-1).a, { type: 'night', pick: 'p7' });
+    for (const h of [handle, dh, bh, oh]) h.destroy();
+  });
+});
+
+test('werewolf ui, one phone: a seat that has confirmed gets 「📱 睇完，放返中間」 on the same button (real or decoy alike); a phone of its own keeps 「已確定 ✓」', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mkOne(R9));
+    toStep(sim, 'seer');
+    const read = (root) => findAll(root, (n) => hasCls(n, 'ww-ok'))[0];
+    const out = {};
+    for (const [pid, a] of [['p4', pk('p1')], ['p7', skipA]]) {           // the real seer, a decoy
+      const calls = []; const root = new FEl('div');
+      const h = ui.mount(root, sharedApi(sim, pid, [], calls));
+      h.update(sim.view(pid), ctxOne(sim));
+      assert.notEqual(read(root).textContent, S.PANEL.okHome, 'not before confirming');
+      sim.act(pid, a);
+      h.update(sim.view(pid), ctxOne(sim));
+      assert.equal(read(root).textContent, S.PANEL.okHome);
+      assert.equal(read(root).disabled, false);
+      clickN(read(root));
+      assert.deepEqual(calls, [{ toTable: { card: false } }], 'back to the middle, silently (it is night)');
+      out[pid] = nightShape(root);
+      h.destroy();
+    }
+    assert.equal(out.p4, out.p7, 'the real seer and a decoy look the same');
+    // a phone of its own: unchanged
+    const own = deal(mk(R9));
+    toStep(own, 'seer');
+    own.act('p4', pk('p1'));
+    const root = new FEl('div');
+    const h = ui.mount(root, sharedApi(own, 'p4', [], [], { shared: false }));
+    h.update(own.view('p4'), { focus: own.focus(), paused: false, narrationMode: 'voice' });
+    assert.equal(read(root).textContent, S.PANEL.okDone);
+    assert.equal(read(root).disabled, true);
+    h.destroy();
+  });
+});
+
+test('werewolf ui, one phone: the speaker holds the phone — 我講完 and 💥 on their screen, their name instead of 「輪到你」 / 「（你）」, no role card or 📓 cover on the public screen (#10 #20 #22)', async () => {
+  await withFakeDom(async (ui) => {
+    for (const shared of [true, false]) {
+      const sim = deal(shared ? mkOne(R9) : mk(R9));
+      nightKill(sim, 'p7');
+      drive(sim, (s) => s.phase === 'speech' && s.cur.stage === 'run');
+      const who = cur(sim).pid;
+      const sent = []; const root = new FEl('div');
+      const h = ui.mount(root, sharedApi(sim, who, sent, [], { shared }));
+      h.update(sim.view(who), shared ? ctxOne(sim) : { focus: sim.focus(), paused: false, narrationMode: 'voice' });
+      const done = findAll(root, (n) => hasCls(n, 'ww-done'))[0];
+      assert.ok(visible(done) && !done.disabled, '我講完 is in the speaker\'s hands');
+      assert.ok(visible(findAll(root, (n) => hasCls(n, 'ww-explode-box'))[0]), 'and their own 💥');
+      const me = findAll(root, (n) => hasCls(n, 'ww-me'))[0];
+      const text = root.textContent;
+      const no = sim.players.findIndex((p) => p.id === who) + 1;
+      if (shared) {
+        assert.equal(me.hidden, true, 'no role card or 📓 cover on the table\'s screen');
+        assert.ok(!text.includes('（你）') && !text.includes('輪到你'), text);
+        assert.ok(text.includes(`${no}號玩家${no} 發言緊`), 'the line names the speaker');
+        assert.ok(text.includes(S.UI.day.explodeNoteShared));
+      } else {
+        assert.equal(me.hidden, false, 'a phone of its own keeps 我嘅身份 (folded)');
+        assert.ok(text.includes('（你）') && text.includes(S.HINT.day.speech.me));
+      }
+      clickN(done);
+      assert.deepEqual(sent.at(-1), { pid: who, a: { type: 'done' }, changed: true });
+      h.destroy();
+    }
+  });
+});
+
+test('werewolf ui, one phone: the table screen (api.atTable) — the deal says the phone goes round (never 「旁觀」); dawn, speeches and the 票型 render without a seat', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = mkOne(R9);
+    const root = new FEl('div');
+    const h = ui.mount(root, sharedApi(sim, null, [], []));
+    const paint = () => h.update(sim.view(null), ctxOne(sim, { atTable: true }));
+    paint();
+    assert.ok(root.textContent.includes(S.UI.deal.table) && !root.textContent.includes(S.UI.deal.spectator));
+    deal(sim);
+    night(sim, { wolves: { p1: pk('p7'), p2: pk('p7'), p3: pk('p7') } });
+    paint();
+    assert.ok(root.textContent.includes('玩家7'), 'the dawn list');
+    drive(sim, (s) => s.phase === 'speech' && s.cur.stage === 'run');
+    paint();
+    assert.equal(findAll(root, (n) => hasCls(n, 'ww-speaker')).length, sim.state.speechOrder.length, 'the speaking order');
+    assert.ok(!root.textContent.includes('（你）'));
+    assert.equal(findAll(root, (n) => hasCls(n, 'ww-done') && visible(n)).length, 0, 'no seat\'s controls at the table');
+    h.destroy();
+  });
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and the real werewolf UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim. This checks that the engine's focus, the shell's gates and this UI fit together.
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false;
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. */
+async function onePhoneShell(dom, sim) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const { mount } = await import('../js/games/werewolf/ui.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: 'werewolf', players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: { next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true, holdClock: () => true },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  return {
+    st, acts, render,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => { shTap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]); await shSettle(); await render(); },
+    game: () => shFind(screen.el, (n) => n.cls.has('play-game'))[0],
+    tapIn: async (pred) => { shTap(shFind(screen.el, (n) => n.tag === 'button' && shShown(n) && pred(n))[0]); await shSettle(); await render(); },
+    destroy: () => screen.destroy(),
+  };
+}
+
+test('werewolf, one phone through the real play screen: the wolves share ONE gate and ONE screen (U2); every speaker gets a public card and their own 我講完 (#10); dawn is the same 天光 card', async () => {
+  await withShell(async (dom) => {
+    const sim = deal(mkOne(R9));
+    const ph = await onePhoneShell(dom, sim);
+    assert.equal(ph.st.activeSeat, null, 'the phone starts in the middle');
+    // the wolves' step: no card during the opening line (the 📜 讀稿 narrator's line and 下一步 stay in reach)…
+    drive(sim, (s) => s.phase === 'night' && s.cur.step === 'wolves');
+    await ph.render();
+    assert.equal(ph.gate(), null, 'the opening line: nobody called yet');
+    // …then, once the window runs, one eyes-closed card, no name
+    sim.cueDone();
+    await ph.render();
+    assert.equal(ph.gate(), 'anon');
+    assert.ok(ph.gateText().includes('狼人請拎起部手機') && !ph.gateText().includes('玩家'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p1', 'the first wolf is mounted…');
+    assert.equal(ph.gate(), null, '…and nobody else needs a card: no chained walk');
+    const text = ph.game().textContent;
+    assert.ok(text.includes('你哋一齊揀') && text.includes('2號玩家2') && text.includes('3號玩家3'), text);
+    // one tap on 玩家7, one 確定 — for all three wolves
+    await ph.tapIn((n) => n.cls.has('ww-chip') && n.textContent.includes('玩家7'));
+    assert.deepEqual(ph.acts.at(-1), { pid: 'p1', action: { type: 'night', pick: 'p7', seats: ['p1', 'p2', 'p3'] } });
+    await ph.tapIn((n) => n.cls.has('ww-ok'));
+    for (const w of ['p1', 'p2', 'p3']) assert.deepEqual(sim.state.nt.sel[w], { pick: 'p7', lock: true });
+    assert.equal(ph.st.activeSeat, null, 'done: back in the middle under the dim');
+    // the rest of the night by the clock (nobody else acts), then dawn: the 天光 card, the dawn list on the table screen
+    drive(sim, (s) => s.phase === 'dawn');
+    await ph.render();
+    assert.equal(ph.gate(), 'table');
+    assert.ok(ph.gateText().includes('天光喇'));
+    assert.equal(ph.st.activeSeat, null);
+    await ph.tapGate();
+    assert.ok(ph.game().textContent.includes('玩家7'), 'the dawn on the table screen');
+    // 遺言 and every speech: a public card for the speaker, then their screen with 我講完
+    for (let g = 0; g < 40 && phase(sim) !== 'vote'; g++) {
+      if ((phase(sim) === 'words' || phase(sim) === 'speech')) {
+        const who = cur(sim).pid;
+        const name = sim.players.find((p) => p.id === who).name;
+        await ph.render();
+        if (ph.gate() === 'table') await ph.tapGate();
+        assert.equal(ph.gate(), 'public', `${phase(sim)}: a public card, never 「其他人唔好望」`);
+        assert.ok(ph.gateText().includes(`輪到 ${name}`) && !ph.gateText().includes('其他人唔好望'), ph.gateText());
+        await ph.tapGate();
+        assert.equal(ph.st.activeSeat, who);
+        if (sim.cue()) { sim.cueDone(); await ph.render(); }
+        assert.ok(!ph.game().textContent.includes('（你）'));
+        await ph.tapIn((n) => n.cls.has('ww-done'));
+        assert.deepEqual(ph.acts.at(-1), { pid: who, action: { type: 'done' } });
+        continue;
+      }
+      if (sim.cue()) sim.cueDone(); else sim.advance();
+    }
+    assert.equal(phase(sim), 'vote');
+    ph.destroy();
+  });
+});
+
+test('werewolf ui, two seats on one phone in a room of phones: a dead wolf on the combined screen is named apart, and the shared tap still kills the target', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mk(R9));                                      // no passPhone: a dead wolf is still called (after the living)
+    sim.state.alive.p3 = false;
+    toStep(sim, 'wolves');
+    assert.deepEqual(sim.focus().pids, ['p1', 'p2', 'p3']);
+    const sent = []; const root = new FEl('div');
+    const h = ui.mount(root, sharedApi(sim, 'p1', sent, []));
+    const co = ['p1', 'p2', 'p3'];
+    h.update(sim.view('p1'), ctxOne(sim, { coWakers: co }));
+    const info = findAll(root, (n) => hasCls(n, 'ww-info'))[0].textContent;
+    assert.ok(info.includes('你哋一齊揀：1號玩家1、2號玩家2（已出局：3號玩家3）'), info);
+    clickN(findAll(root, (n) => hasCls(n, 'ww-chip') && n.textContent.includes('玩家8'))[0]);
+    h.update(sim.view('p1'), ctxOne(sim, { coWakers: co }));
+    clickN(findAll(root, (n) => hasCls(n, 'ww-ok'))[0]);
+    assert.deepEqual(sim.focus().pids, [], 'everybody on that screen is done');
+    night(sim);
+    assert.deepEqual(sim.state.lastNight.deaths, ['p8']);
+    h.destroy();
   });
 });

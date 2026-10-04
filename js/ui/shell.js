@@ -170,6 +170,13 @@ export async function startShell(app, root, opts = {}) {
         applyMute();
         document.body.classList.toggle('is-night', nightMuted);
       },
+      /**
+       * U8 (§7.1): the night's neutral noise bed on a whole-table phone (play.js decides: night + the game asks,
+       * not in 靜音). The user's mute silences it; the night suppression does not. Safe to call repeatedly.
+       */
+      ambient(on) {
+        if (typeof sfxMod.ambient === 'function') sfxMod.ambient(!!on);
+      },
     },
     soundButton() {
       const b = el('button', { class: 'icon-btn sound-btn', type: 'button', onclick: () => sh.sound.toggle() });
@@ -288,7 +295,7 @@ export async function startShell(app, root, opts = {}) {
       soundButtons.clear();   // the old screen's buttons die with it
       sh.timer.forgetScreen();
       // leaving play: nothing may stay dimmed or muted
-      if (current?.key === 'play') sh.sound.night(false);
+      if (current?.key === 'play') { sh.sound.night(false); sh.sound.ambient(false); }
       // leaving the room altogether: no clock may keep ringing or covering the screen
       if (!st.mode) sh.timer.reset();
       sh.cameFrom = current?.key ?? null;

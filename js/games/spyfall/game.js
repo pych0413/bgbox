@@ -139,7 +139,7 @@ export const rules = {
       body: [
         '問一個人一條問題，可以問任何同地點有關（或者無關）嘅嘢。答嘢隨便點答，但係唔准反問。',
         '答完嘅人要問另一個人，但係唔可以問返剛剛問自己嘅人（所以三個人玩就係 A 問 B、B 問 C、C 問 A）。',
-        '畫面會顯示輪到邊個問、唔可以問返邊個。問完㩒一下被問嘅人，輪到佢。㩒錯可以「撤銷」。',
+        '開咗「顯示邊個問緊」，畫面會顯示輪到邊個問、唔可以問返邊個：問完㩒一下被問嘅人，輪到佢；㩒錯可以「撤銷」。一部手機玩預設關，口講就得。',
       ].join('\n'),
     },
     {
@@ -150,7 +150,7 @@ export const rules = {
         '一個間諜：所有人都贊成先成立。兩個間諜：最多可以有一個人反對。',
         '成立：被指控嘅人亮牌 — 係間諜就非間諜贏，唔係間諜就間諜贏。',
         '唔成立：鐘由停低嗰一刻繼續行，指控人用咗佢嘅一次機會；間諜又可以再停鐘估地點。',
-        '唔好俾人睇你部手機證明身分：要講服大家，就靠把口。',
+        '唔好攞手機出嚟證明身分：要講服大家，就靠把口。',
       ].join('\n'),
     },
     {
@@ -214,8 +214,17 @@ export const rules = {
       body: [
         '做間諜：答嘢要似知道，但唔好太肯定。將問題問向有破綻嘅人。',
         '做平民：問題要夠刁，令自己人聽得明、間諜聽唔明。',
-        '地點清單可以㩒一下劃走（淨係你部手機見到），用嚟排除。',
+        '地點清單可以㩒一下劃走（淨係呢部機見到；一部機輪流玩，換人會清返），用嚟排除。',
         '舊局用過嘅地點唔會再出，清單會顯示灰色。',
+      ].join('\n'),
+    },
+    {
+      title: '一部手機玩',
+      body: [
+        '投票方式揀「舉手」。開局逐個傳部機睇身分，每次都有交接卡。',
+        '問答嗰陣部機放喺枱中間，大家望住個鐘同地點清單，口講問答就得，唔使傳機。',
+        '要指控或者亮間諜身分：㩒枱中間嘅「🛑 停鐘」，鐘即刻停，再揀返自己個名，部機交俾你揀 🙋 指控、🕵️ 我係間諜或者取消。人人都係咁㩒，唔會露底。',
+        '一局完咗，部機擺喺中間大家一齊睇結果，㩒一下「大家睇完」就得。',
       ].join('\n'),
     },
   ],
@@ -262,7 +271,13 @@ function standardReason(n) {
 const maxNoFor = (spies, threshold) => (spies === 2 ? (threshold === 'n-3' ? 2 : 1) : 0);
 
 export const config = {
-  defaults(n, prev) {
+  /**
+   * `env.singleDevice` (one phone holds every seat, one-phone playtest #21 / U11): 舉手 voting — even over a 手機投票
+   * carried over from the last game, since passing the phone to every voter for every vote does not work — and no
+   * question tracker (the table just talks). The hidden `passPhone` remembers that these came from the one phone, so
+   * a later multi-phone room gets the multi-phone defaults back.
+   */
+  defaults(n, prev, env) {
     n = clampN(n);
     const cfg = {
       rounds: 3,
@@ -274,6 +289,7 @@ export const config = {
       accuserBonus: 'first-midround',
       twoSpyThreshold: 'n-2',
       antiStreak: false,
+      tracker: true,
     };
     // Carry over what is a taste, not a head-count decision.
     if (prev && typeof prev === 'object') {
@@ -284,6 +300,15 @@ export const config = {
       if (BONUS_MODES.includes(prev.accuserBonus)) cfg.accuserBonus = prev.accuserBonus;
       if (THRESHOLDS.includes(prev.twoSpyThreshold)) cfg.twoSpyThreshold = prev.twoSpyThreshold;
       if (typeof prev.antiStreak === 'boolean') cfg.antiStreak = prev.antiStreak;
+      if (typeof prev.tracker === 'boolean') cfg.tracker = prev.tracker;
+    }
+    if (env && env.singleDevice) {
+      cfg.voteMode = 'hands';
+      cfg.tracker = false;
+      cfg.passPhone = true;
+    } else if (env && prev && prev.passPhone === true) {
+      cfg.voteMode = 'phone';          // the one phone's defaults go when a second phone joins
+      cfg.tracker = true;
     }
     return cfg;
   },
@@ -315,7 +340,7 @@ export const config = {
     return out;
   },
 
-  validate(cfg, n) {
+  validate(cfg, n, env) {
     const warnings = [];
     const fail = (message) => ({ ok: false, message, warnings });
     if (!cfg || typeof cfg !== 'object') return fail('設定唔啱');
@@ -331,6 +356,8 @@ export const config = {
     if (cfg.accuserBonus !== undefined && !BONUS_MODES.includes(cfg.accuserBonus)) return fail('指控獎勵設定唔啱');
     if (cfg.twoSpyThreshold !== undefined && !THRESHOLDS.includes(cfg.twoSpyThreshold)) return fail('兩個間諜嘅門檻設定唔啱');
     if (cfg.antiStreak !== undefined && typeof cfg.antiStreak !== 'boolean') return fail('「唔好連續做間諜」設定唔啱');
+    if (cfg.tracker !== undefined && typeof cfg.tracker !== 'boolean') return fail('「顯示邊個問緊」設定唔啱');
+    if (env && env.singleDevice && cfg.voteMode === 'phone') warnings.push('一部手機玩建議揀舉手，唔係要逐個人傳部機投票');
 
     if (n === 3) warnings.push('3 個人玩間諜好易估到，5–8 人先最好玩');
     if (cfg.spies === 1 && n >= 9) warnings.push(`${n} 人建議 2 個間諜，1 個間諜太易俾人揪出`);
@@ -371,7 +398,11 @@ export const config = {
           { value: 'phone', label: '各自用手機投' },
           { value: 'hands', label: '舉手（一部手機玩就揀呢個）' },
         ],
-        help: '舉手：大家同時舉手，由一個人㩒結果。',
+        help: '各自用手機投：每人喺自己部手機㩒。舉手：大家一齊舉手，一個人㩒結果（一部手機玩揀呢個）。',
+      },
+      {
+        key: 'tracker', label: '顯示邊個問緊', type: 'bool',
+        help: '開咗：畫面顯示輪到邊個問、唔可以問返邊個，問完㩒被問嗰個。一部手機玩預設關，大家口講就得。',
       },
       {
         key: 'listSize', label: '地點清單長度', type: 'select',
@@ -409,6 +440,7 @@ export const config = {
     if (cfg.accuserBonus === 'successful') lines.push('指控獎勵：成功嗰個');
     if (cfg.accuserBonus === 'first-any') lines.push('指控獎勵：最後投票都有');
     if (cfg.antiStreak === true) lines.push('唔會連續做間諜');
+    if (cfg.tracker === false) lines.push('唔顯示邊個問緊');
     return lines;
   },
 };
@@ -426,6 +458,8 @@ function normalizeConfig(cfg, n) {
   c.accuserBonus = BONUS_MODES.includes(c.accuserBonus) ? c.accuserBonus : d.accuserBonus;
   c.twoSpyThreshold = THRESHOLDS.includes(c.twoSpyThreshold) ? c.twoSpyThreshold : d.twoSpyThreshold;
   c.antiStreak = c.antiStreak === true;
+  c.tracker = c.tracker !== false;
+  c.passPhone = c.passPhone === true;
   return c;
 }
 
@@ -489,6 +523,8 @@ const T = {
   timeUp: (s, first) => `時間到！間諜唔可以再估地點。最後投票由${nameOf(s, first)}開始，可以傾，但唔好講出地點。`,
   finalNext: (s, suspect) => `下一位：${nameOf(s, suspect)}。`,
   accuseOff: (s, suspect) => `${nameOf(s, suspect)}唔喺度，指控取消，鐘繼續行。`,
+  halt: () => '有人停鐘，鐘停咗。',
+  resume: () => '鐘繼續行。',
   guess: (s, pid) => `${nameOf(s, pid)}話佢係間諜！鐘停咗，等佢喺地點清單揀一個。`,
   guessNext: (s, pid) => `另一個間諜${nameOf(s, pid)}都要企出嚟，輪到佢揀。`,
   roundEnd: (s, h) => `${headlineOf(s, h)}。地點係${locOf(s, h.loc).name}，間諜係${namesOf(s, h.spies)}。`,
@@ -1102,8 +1138,9 @@ export function act(state, msg, ctx) {
     case 'vote': return voteAct(s, pid, action, ctx);
     case 'guess': return action.type === 'guess' ? doGuess(s, pid, action, ctx) : s;
     case 'roundEnd': {
-      // 睇完. `seats` = the other seats this same phone holds (a passed-round phone reads the reveal once for all)
-      if (action.type !== 'next-round' || s.round.seen?.[pid]) return s;
+      // 睇完. `seats` = the other seats this same phone holds (a passed-round phone reads the reveal once for all); a
+      // whole-table tap (`table: true`, DESIGN §7.1) counts them even when the carrier's own seat was already in
+      if (action.type !== 'next-round' || (s.round.seen?.[pid] && action.table !== true)) return s;
       const also = Array.isArray(action.seats) ? action.seats.filter((x) => typeof x === 'string') : [];
       return markSeen(s, [pid, ...also], ctx);
     }
@@ -1155,20 +1192,42 @@ function playAct(s, pid, a, ctx) {
       return s;
     case 'accuse': {
       if (r.accUsed[pid] || !isPlayer(s, a.target) || isAbsent(s, a.target) || a.target === pid) return s;
-      if (ctx.now >= clockEnd(s)) return s;          // 0:00 already passed, the final vote is coming
+      if (!r.halted && ctx.now >= clockEnd(s)) return s;   // 0:00 already passed, the final vote is coming
       r.accUsed[pid] = true;
       r.accusations.push({ by: pid, suspect: a.target, result: null });
-      stopClock(s, ctx.now);
+      if (!r.halted) stopClock(s, ctx.now);                // (🛑 already froze it: keep that time)
+      r.halted = false;
       openVote(s, 'accuse', a.target, pid);
       setCue(s, 'accuse', T.accuse(s, pid, a.target));
       return s;
     }
     case 'spy-stop': {
-      if (!r.spies.includes(pid) || ctx.now >= clockEnd(s)) return s;
-      stopClock(s, ctx.now);
+      if (!r.spies.includes(pid) || (!r.halted && ctx.now >= clockEnd(s))) return s;
+      if (!r.halted) stopClock(s, ctx.now);
+      r.halted = false;
       r.guess = { order: [pid, ...r.spies.filter((x) => x !== pid)], idx: 0, picks: {} };
       s.phase = 'guess';
       setCue(s, 'guess', T.guess(s, pid));
+      return s;
+    }
+    case 'stop': {
+      // U3 (one-phone playtest #13): 🛑 停鐘 on the table screen of a shared phone freezes the clock the moment it is
+      // tapped; then whoever tapped picks their own name and takes the phone to accuse, reveal as the spy, or cancel.
+      // Only a shared phone's whole-table tap can do it (`seats` holds 2+ of its own seats, kept by the room), so a
+      // multi-phone table plays exactly as before. Every stop looks the same: it says nothing about who tapped.
+      const seats = Array.isArray(a.seats) ? a.seats.filter((x) => isPlayer(s, x)) : [];
+      if (a.table !== true || seats.length < 2 || r.halted || ctx.now >= clockEnd(s)) return s;
+      stopClock(s, ctx.now);
+      r.halted = true;
+      setCue(s, 'halt', T.halt(), 1200);
+      return s;
+    }
+    case 'resume': {
+      // 取消 after a 🛑 (or the table's 「▶ 繼續計時」): the clock goes on from the exact time it stopped at
+      if (!r.halted) return s;
+      r.halted = false;
+      runClock(s, ctx.now, r.frozen);
+      setCue(s, 'resume', T.resume(), 1200);
       return s;
     }
     default: return s;
@@ -1265,6 +1324,7 @@ export function legalActions(state, pid) {
       if (r.askHist.length) out.push({ type: 'undo-ask' });
       if (!r.accUsed[pid]) for (const id of here) if (id !== pid) out.push({ type: 'accuse', target: id });
       if (r.spies.includes(pid)) out.push({ type: 'spy-stop' });
+      if (r.halted) out.push({ type: 'resume' });
       break;
     }
     case 'vote': {
@@ -1306,20 +1366,27 @@ export function autoAct(state, pid, ctx) {
   }
 }
 
+/**
+ * Who must look at or touch their phone now. The one-phone hints (DESIGN §7.1, read only by a shared phone):
+ * `label` names the step on the pass gate; `open` marks a public one-person step — the 舉手 reporter tapping what
+ * the whole table showed, a revealed spy naming a place — so the phone is handed over with the public card and the
+ * screen stays in view (the UI hides the role card there); `step` re-gates the same seat for a new suspect.
+ */
 export function focus(state) {
   const s = state;
   const r = s.round;
   if (s.phase === 'reveal') {
     const wait = presentOf(s).filter((id) => !r.ready[id]);
-    return wait.length ? { pids: wait } : null;
+    return wait.length ? { pids: wait, label: `第 ${r.n} 局睇身分` } : null;
   }
   if (s.phase === 'vote') {
     const v = r.vote;
-    if (v.mode === 'hands') return { pids: [v.reporter] };
+    const label = v.kind === 'accuse' ? '指控投票' : `最後投票 ${finalPos(s).index}/${finalPos(s).of}`;
+    if (v.mode === 'hands') return { pids: [v.reporter], open: true, label: `${label} · 報舉手結果` };
     const wait = votersOf(s).filter((id) => !(id in v.votes));
-    return wait.length ? { pids: wait } : null;
+    return wait.length ? { pids: wait, step: `vote:${r.accusations.length}:${r.finalIdx}`, label } : null;
   }
-  if (s.phase === 'guess') return { pids: [r.guess.order[r.guess.idx]] };
+  if (s.phase === 'guess') return { pids: [r.guess.order[r.guess.idx]], open: true, label: '間諜揀地點' };
   return null;
 }
 
@@ -1350,7 +1417,9 @@ function subtitleOf(s) {
   const r = s.round;
   switch (s.phase) {
     case 'reveal': return '睇身分';
-    case 'play': return `${nameOf(s, r.floor.holder)} 發問`;
+    case 'play':
+      if (r.halted) return '鐘停咗';
+      return s.cfg.tracker === false ? '問答中' : `${nameOf(s, r.floor.holder)} 發問`;
     case 'vote': {
       if (r.vote.kind === 'accuse') return `${nameOf(s, r.vote.by)} 指控 ${nameOf(s, r.vote.suspect)}`;
       const pos = finalPos(s);
@@ -1378,8 +1447,10 @@ function hintOf(s, pid) {
       if (!me) return '大家睇緊身分，齊人準備好就開始。';
       return r.ready[me] ? '等其他人睇完，齊人就開始計時。' : '㩒住張卡睇自己身分，睇完㩒「準備好」。';
     case 'play':
+      if (r.halted) return '有人停咗鐘：等佢揀返自己個名，指控、亮間諜身分或者取消。';
+      if (s.cfg.tracker === false) return '輪流問答：答完就問另一個人，唔可以即刻問返轉頭。覺得邊個係間諜，可以停鐘指控。';
       if (me && r.floor.holder === me) return '輪到你：揀一個人問一條關於地點嘅問題，再㩒佢個名。';
-      return `聽${nameOf(s, r.floor.holder)}問同大家答；覺得邊個係間諜，可以㩒「🙋 指控」。`;
+      return `聽${nameOf(s, r.floor.holder)}問同大家答；覺得邊個係間諜，可以停鐘指控。`;
     case 'vote': {
       const sus = nameOf(s, v.suspect);
       const final = v.kind === 'final';
@@ -1495,7 +1566,8 @@ function viewMine(s, pid) {
 export function view(state, pid) {
   const s = state;
   const r = s.round;
-  const running = s.phase === 'play';
+  const halted = s.phase === 'play' && !!r.halted;          // U3: 🛑 froze the clock, somebody is picking their name
+  const running = s.phase === 'play' && !halted;
   const pastRounds = s.history.map((h) => h.loc);
   const f = r.floor;
   const here = presentOf(s);
@@ -1506,12 +1578,13 @@ export function view(state, pid) {
     subtitle: subtitleOf(s),
     hint: hintOf(s, pid),
     round: { n: r.n, of: s.cfg.rounds },
-    rules: { minutes: s.cfg.minutes, spies: s.cfg.spies, voteMode: s.cfg.voteMode, maxNo: maxNo(s) },
+    rules: { minutes: s.cfg.minutes, spies: s.cfg.spies, voteMode: s.cfg.voteMode, maxNo: maxNo(s), tracker: s.cfg.tracker !== false },
     seats: s.order.slice(),
     dealer: r.dealer,
     locations: s.list.map((e, i) => ({ i, name: e.name, emoji: e.emoji, cat: e.cat, used: pastRounds.includes(i) })),
     deadline: running ? clockEnd(s) : null,
-    frozen: !running && r.frozen != null && ['vote', 'tally', 'guess'].includes(s.phase) ? r.frozen : null,
+    frozen: !running && r.frozen != null && (halted || ['vote', 'tally', 'guess'].includes(s.phase)) ? r.frozen : null,
+    halted,
     ready: s.phase === 'reveal'
       ? { done: here.filter((id) => r.ready[id]).length, total: here.length, who: s.order.filter((id) => r.ready[id]) }
       : null,

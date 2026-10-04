@@ -2011,7 +2011,7 @@ test('spyfall ui: 🕵️ 我係間諜 is the same silent panel on every phone; 
       for (const s of seats) s.handle.destroy();
     }
     const section = game.rules.sections.find((x) => x.title === '指控同投票');
-    assert.ok(section.body.includes('唔好俾人睇你部手機證明身分'), 'the rules sheet says not to use the phone as proof');
+    assert.ok(section.body.includes('唔好攞手機出嚟證明身分'), 'the rules sheet says not to use the phone as proof');
   });
 });
 
@@ -2505,4 +2505,500 @@ test('spyfall D4: a dealer marked away at the reveal hands the first question on
   assert.ok(sim.legal('p1').some((a) => a.type === 'next-round'));
   allSeen(sim);
   assert.equal(phase(sim), 'reveal', 'every 睇完 still moves the table on');
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest spyfall C1–C9, #13, #21, #22, #31, U3, U11)
+// ============================================================
+
+const unchangedSf = (sim, pid, action) => {
+  const before = JSON.stringify(sim.state);
+  assert.equal(sim.act(pid, action), false, `${JSON.stringify(action)} by ${pid} should do nothing in ${sim.state.phase}`);
+  assert.equal(JSON.stringify(sim.state), before);
+};
+
+test('spyfall one phone: #21 / U11 — a one-phone room defaults to 舉手 (even over a carried 手機投票) and no question tracker; a second phone brings them back', () => {
+  const prev = { ...game.config.defaults(5), voteMode: 'phone', rounds: 4 };
+  const one = game.config.defaults(5, prev, { singleDevice: true });
+  assert.equal(one.voteMode, 'hands');
+  assert.equal(one.tracker, false, 'U11: the table just talks');
+  assert.equal(one.rounds, 4, 'other tastes are kept');
+  assert.ok(game.config.validate(one, 5, { singleDevice: true }).ok);
+  const multi = game.config.defaults(5, one, { singleDevice: false });
+  assert.deepEqual([multi.voteMode, multi.tracker], ['phone', true], 'the one phone’s defaults go when a second phone joins');
+  assert.deepEqual(game.config.defaults(5, prev, { singleDevice: false }), game.config.defaults(5, prev), 'multi-phone: unchanged');
+  assert.equal(game.config.defaults(5).tracker, true, 'the tracker stays on by default with a phone each');
+  // validate: a warning for 手機投票 on one phone, an error for a non-boolean tracker
+  const w = game.config.validate({ ...one, voteMode: 'phone' }, 5, { singleDevice: true }).warnings;
+  assert.ok(w.some((x) => x.includes('一部手機玩建議揀舉手')), w.join(' | '));
+  assert.ok(!game.config.validate({ ...one, voteMode: 'phone' }, 5, { singleDevice: false }).warnings.some((x) => x.includes('舉手')));
+  assert.equal(game.config.validate({ ...one, tracker: 'no' }, 5).ok, false);
+  const help = game.config.fields(one, 5).find((f) => f.key === 'voteMode').help;
+  assert.ok(help.includes('各自用手機投') && help.includes('舉手'), 'the help covers both options');
+  assert.ok(game.config.fields(one, 5).some((f) => f.key === 'tracker'));
+  assert.ok(game.config.summary(one, 5).includes('唔顯示邊個問緊'));
+});
+
+test('spyfall one phone: U3 — 🛑 stop from the table freezes the clock at once; only a shared phone’s whole-table tap can do it', () => {
+  const sim = playing(5, { seed: 470 });
+  const all = ids(sim);
+  const end0 = sim.view(null).deadline;
+  sim.now += 30_000;
+  unchangedSf(sim, 'p1', { type: 'stop' });
+  unchangedSf(sim, 'p1', { type: 'stop', table: true, seats: ['p1'] });          // a single-seat phone has no table screen
+  unchangedSf(sim, 'p1', { type: 'stop', seats: all });                          // a seat's own tap is not the table's
+  assert.ok(!sim.legal('p1').some((a) => a.type === 'stop'), 'the fuzzer and autoAct never stop the clock');
+  assert.ok(sim.act('p1', { type: 'stop', table: true, seats: all }));
+  const v = sim.view(null);
+  assert.equal(phase(sim), 'play');
+  assert.equal(v.halted, true);
+  assert.equal(v.deadline, null, 'no clock runs while somebody picks their name');
+  assert.equal(v.frozen, end0 - sim.now, 'frozen at the exact time left');
+  assert.equal(v.subtitle, '鐘停咗');
+  sim.now += 10 * 60_000;
+  assert.equal(sim.advance(), false, 'time cannot run out while it is stopped');
+  unchangedSf(sim, 'p2', { type: 'stop', table: true, seats: all });            // already stopped
+  // 取消: the clock goes on from where it stopped
+  assert.ok(sim.legal('p3').some((a) => a.type === 'resume'));
+  assert.ok(sim.act('p3', { type: 'resume' }));
+  assert.equal(sim.view(null).halted, false);
+  assert.equal(sim.view(null).deadline, sim.now + (end0 - (sim.now - 10 * 60_000)), 'not a second was lost');
+  unchangedSf(sim, 'p3', { type: 'resume' });
+});
+
+test('spyfall one phone: U3 — after 🛑 the picked seat accuses or reveals as the spy with the frozen time kept', () => {
+  // accuse: the vote keeps the time 🛑 froze, and a failed accusation resumes it exactly
+  const a = playing(5, { seed: 471, config: { voteMode: 'hands' } });
+  const all = ids(a);
+  a.now += 12_000;
+  const left = a.view(null).deadline - a.now;
+  assert.ok(a.act('p1', { type: 'stop', table: true, seats: all }));
+  a.now += 40_000;                                                             // picking a name takes a while
+  const x = nonSpies(a)[0];
+  const sus = nonSpies(a).find((id) => id !== x);
+  assert.ok(a.act(x, { type: 'accuse', target: sus }));
+  assert.equal(phase(a), 'vote');
+  assert.equal(a.view(null).frozen, left, 'the accusation keeps the time 🛑 froze');
+  assert.equal(a.view(null).halted, false);
+  // hands mode: the accuser reports, and on one phone that is a public step (no role card on screen)
+  assert.deepEqual(a.focus(), { pids: [x], open: true, label: '指控投票 · 報舉手結果' });
+  a.act(x, { type: 'verdict', no: 1 });
+  settle(a);
+  assert.equal(phase(a), 'play');
+  assert.equal(a.view(null).deadline - a.now, left, 'resumed with exactly the frozen time');
+  // spy-stop while stopped
+  const b = playing(5, { seed: 472 });
+  assert.ok(b.act('p2', { type: 'stop', table: true, seats: ids(b) }));
+  b.now += 60_000;
+  unchangedSf(b, nonSpies(b)[0], { type: 'spy-stop' });
+  assert.ok(b.act(spyOf(b), { type: 'spy-stop' }));
+  assert.equal(phase(b), 'guess');
+  assert.deepEqual(b.focus(), { pids: [spyOf(b)], open: true, label: '間諜揀地點' }, 'the revealed spy picks in front of everybody');
+});
+
+test('spyfall one phone: the private steps are named for the gate, and a whole-table 睇完 counts every listed seat', () => {
+  const sim = mk(5, { seed: 473, config: { rounds: 2 } });
+  assert.deepEqual(sim.focus(), { pids: ids(sim), label: '第 1 局睇身分' });
+  readyAll(sim);
+  const x = nonSpies(sim)[0];
+  sim.act(x, { type: 'accuse', target: spyOf(sim) });
+  const f = sim.focus();
+  assert.equal(f.label, '指控投票');
+  assert.equal(f.open, undefined, 'phone ballots stay private');
+  voteAll(sim, true);
+  settle(sim);
+  assert.equal(phase(sim), 'roundEnd');
+  const all = ids(sim);
+  assert.ok(sim.act('p1', { type: 'next-round' }));
+  unchangedSf(sim, 'p1', { type: 'next-round', seats: all });
+  assert.ok(sim.act('p1', { type: 'next-round', seats: all, table: true }), 'the table screen reads it for everybody');
+  assert.equal(phase(sim), 'reveal');
+  assert.equal(sim.focus().label, '第 2 局睇身分');
+});
+
+test('spyfall one phone: rules have a 一部手機玩 section; no copy assumes a phone each', () => {
+  const one = game.rules.sections.find((s) => s.title === '一部手機玩');
+  assert.ok(one, 'the missing section (#19)');
+  for (const bit of ['舉手', '枱中間', '🛑 停鐘', '大家睇完']) assert.ok(one.body.includes(bit), bit);
+  const all = game.rules.sections.map((s) => s.body).join('\n');
+  assert.ok(!all.includes('淨係你部手機見到'));
+  assert.ok(!all.includes('唔好俾人睇你部手機'));
+});
+
+/** A shared phone's mount (pid null = the table screen) with the §7.1 api members faked and logged. */
+function mountSpyfallShared(ui, sim, pid, { wholeTable = true, ctx = {}, askAnswer = null } = {}) {
+  const root = new FEl('div');
+  const log = { sent: [], table: [], asks: [], toTable: 0, sfx: [], toast: [] };
+  const all = ids(sim);
+  const handle = ui.mount(root, {
+    me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
+    send: (a) => { log.sent.push(a); return Promise.resolve(true); }, ink() {}, now: () => sim.now,
+    sfx: (n) => log.sfx.push(n), toast: (t) => log.toast.push(t), components: stubSpyfallComponents(),
+    shared: true, wholeTable, atTable: pid == null, mySeats: wholeTable ? all : all.slice(0, 2),
+    tableSend: (a) => { log.table.push(a); return Promise.resolve(true); },
+    askWho: (o) => { log.asks.push(o); return Promise.resolve(askAnswer); },
+    toTable: () => { log.toTable += 1; return true; },
+  });
+  const show = (extra = {}) => handle.update(sim.view(pid), {
+    focus: sim.focus(), paused: false, shared: true, wholeTable, atTable: pid == null, tableLocked: false, asked: null, ...ctx, ...extra,
+  });
+  show();
+  return { root, handle, log, show };
+}
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test('spyfall ui one phone: the play phase lives on the table screen — clock, list without strikes, one 🛑 停鐘 that asks who (U3, #1, #22)', async () => {
+  await withSpyfallUi(async (ui) => {
+    const sim = playing(5, { seed: 480, config: { voteMode: 'hands', tracker: true } });
+    const t = mountSpyfallShared(ui, sim, null);
+    assert.ok(!shown(boxOf(t.root, 'sf-card')), 'no role card on the table');
+    assert.ok(!btnText(t.root, '🙋 指控') && !btnText(t.root, '🕵️ 我係間諜'), 'nobody accuses as the seat on screen');
+    assert.equal(findEls(boxOf(t.root, 'sf-clock'), (n) => n.tag === 'button').length, 0, 'no 🙋 shortcut on the clock bar');
+    // the public list stays open; a tap strikes nothing
+    const locs = findEls(t.root, (n) => n.cls.has('sf-loc') && shown(n));
+    assert.ok(locs.length > 0, 'the location list is open on the table');
+    clickEl(locs[0]);
+    t.show();
+    assert.equal(findEls(t.root, (n) => n.cls.has('struck')).length, 0, 'no strikes on the phone everybody reads');
+    assert.ok(!boxOf(t.root, 'sf-list').textContent.includes('劃走'), 'no strike hint on the table');
+    // the tracker (on here): the table records a pass for whoever is asked, as a whole-table tap
+    const dealer = R(sim).dealer;
+    const askBtn = findEls(t.root, (n) => n.cls.has('sf-seat') && !isOff(n))[0];
+    clickEl(askBtn);
+    assert.equal(t.log.table[0].type, 'ask');
+    assert.ok(sim.act(dealer, t.log.table[0]), 'the engine takes the pass from the table');
+    t.show();
+    assert.ok(boxOf(t.root, 'sf-floor').textContent.includes('輪到'), '#31: 「輪到」, not 「發問中」');
+    assert.ok(!boxOf(t.root, 'sf-floor').textContent.includes('發問中'));
+    // 🛑: freeze first, then 「邊個要停鐘？」
+    clickEl(btnText(t.root, '🛑 停鐘'));
+    assert.deepEqual(t.log.table.at(-1), { type: 'stop' });
+    await tick();
+    assert.deepEqual(t.log.asks.map((a) => [a.key, a.title]), [['stop', '邊個要停鐘？']]);
+    await tick();
+    assert.deepEqual(t.log.table.at(-1), { type: 'resume' }, 'closed without a name: the clock goes on');
+    // the engine side of the same tap, then the halted table screen
+    assert.ok(sim.act('p1', { type: 'stop', seats: ids(sim), table: true }));
+    t.show();
+    assert.ok(boxOf(t.root, 'sf-frozen').textContent.includes('有人停咗鐘'));
+    assert.ok(btnText(t.root, '▶ 繼續計時') && btnText(t.root, '🙋 揀返我個名'));
+    t.show({ tableLocked: true });
+    assert.ok(isOff(btnText(t.root, '▶ 繼續計時')), 'locked while the table card is up (U5)');
+    t.handle.destroy();
+    // U11: without the tracker there is no question card at all
+    const quiet = playing(5, { seed: 481, config: { tracker: false } });
+    const q = mountSpyfallShared(ui, quiet, null);
+    assert.ok(!shown(boxOf(q.root, 'sf-floor')));
+    assert.equal(quiet.view(null).subtitle, '問答中');
+    q.handle.destroy();
+  });
+});
+
+test('spyfall ui one phone: the seat handed the phone after 🛑 chooses 🙋 / 🕵️ / 取消; any other seat screen sends people back to the middle (#13)', async () => {
+  await withSpyfallUi(async (ui) => {
+    const sim = playing(5, { seed: 482 });
+    sim.act('p1', { type: 'stop', seats: ids(sim), table: true });
+    const spy = spyOf(sim);
+    const agent = nonSpies(sim)[0];
+    const asked = (pid) => mountSpyfallShared(ui, sim, pid, { ctx: { asked: { key: 'stop', pid } } });
+    const a = asked(agent);
+    const s = asked(spy);
+    const acts = (m) => serializeEl(boxOf(m.root, 'sf-actions'));
+    assert.equal(acts(a), acts(s), 'the same three choices for the spy and anybody else');
+    assert.ok(btnText(a.root, '🙋 指控') && btnText(a.root, '🕵️ 我係間諜') && btnText(a.root, '取消 · 繼續計時'));
+    clickEl(btnText(a.root, '取消 · 繼續計時'));
+    assert.deepEqual(a.log.sent, [{ type: 'resume' }]);
+    assert.equal(a.log.toTable, 1, 'and the phone goes back to the middle');
+    // the spy's reveal goes out as the spy
+    clickEl(btnText(s.root, '我係間諜'));
+    clickEl(btnText(s.root, '我係間諜，停鐘'));
+    assert.deepEqual(s.log.sent, [{ type: 'spy-stop' }]);
+    assert.ok(sim.act(spy, s.log.sent[0]));
+    // a seat screen reached any other way (換人 to look at the card): no accusing as whoever is on screen
+    const sim2 = playing(5, { seed: 483 });
+    const o = mountSpyfallShared(ui, sim2, 'p2');
+    assert.ok(shown(boxOf(o.root, 'sf-card')), 'the card can be looked at (it took a hand-over card)');
+    assert.ok(!btnText(o.root, '🙋 指控') && !btnText(o.root, '🕵️ 我係間諜'));
+    assert.equal(findEls(boxOf(o.root, 'sf-clock'), (n) => n.tag === 'button').length, 0);
+    assert.ok(o.root.textContent.includes('🛑 停鐘'));
+    clickEl(btnText(o.root, '📱 擺返中間'));
+    assert.equal(o.log.toTable, 1);
+    assert.ok(!o.root.textContent.includes('（你）'), '#20: no 「（你）」 on a shared phone');
+    for (const m of [a, s, o]) m.handle.destroy();
+  });
+});
+
+test('spyfall ui one phone: a public step hides the role card; the round reveal closes for everybody with one tap (#4, #5)', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = playing(5, { seed: 484, config: { voteMode: 'hands', rounds: 2 } });
+    const x = nonSpies(sim)[0];
+    sim.act(x, { type: 'accuse', target: nonSpies(sim)[1] });
+    const r = mountSpyfallShared(ui, sim, x);
+    assert.equal(sim.focus().open, true);
+    assert.ok(!shown(boxOf(r.root, 'sf-card')), 'the reporter’s screen is the table’s: no role card on it');
+    assert.ok(findEls(r.root, (n) => n.cls.has('sf-hands-btns') && shown(n)).length === 1, 'the result buttons are there');
+    r.handle.destroy();
+    sim.act(x, { type: 'verdict', no: 1 });
+    settle(sim);
+    wrongGuess(sim);
+    assert.equal(phase(sim), 'roundEnd');
+    const e = mountSpyfallShared(ui, sim, null);
+    const seen = () => btnText(e.root, '大家睇完 ✓（一下就得）');
+    assert.ok(isOff(seen()), 'the 2-second lock, as on every phone');
+    while (t.step()) { /* countdown */ }
+    e.show({ tableLocked: true });
+    assert.ok(isOff(seen()), 'locked while the table card is up (U5)');
+    e.show();
+    assert.ok(!isOff(seen()));
+    assert.ok(!e.root.textContent.includes('等緊：'), 'no waiting list on the one phone');
+    assert.ok(!findEls(e.root, (n) => n.cls.has('is-me')).length, 'nobody is 「me」 on the table');
+    clickEl(seen());
+    assert.deepEqual(e.log.table, [{ type: 'next-round' }]);
+    assert.ok(sim.act('p1', { ...e.log.table[0], seats: ids(sim), table: true }));
+    assert.equal(phase(sim), 'reveal', 'one tap read the reveal for the whole table');
+    e.handle.destroy();
+  }));
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
+// seat). This checks that the engine's focus, the shell's gates and this UI fit together (DESIGN §7.1).
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false; this.value = '';
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstChild() { return this.children[0] ?? null; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  get outerHTML() { return `<${this.tag} ${JSON.stringify([...this.cls])} ${JSON.stringify(this.attrs)} ${this.hidden} ${this.disabled}>${this.children.map((c) => (c instanceof ShEl ? c.outerHTML : c.data)).join('')}</${this.tag}>`; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  setPointerCapture() {}
+  releasePointerCapture() {}
+  getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; }
+  scrollIntoView() {}
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+  focus() {}
+  blur() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** What a person could read: hidden subtrees left out. */
+const shText = (n) => (n instanceof ShText ? n.data : !n || n.hidden ? '' : n.children.map(shText).join(''));
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. `mount` = this game's real ui.mount. */
+async function onePhoneShell(dom, sim, mount) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: game.meta.id, players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false, config: sim.config,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true,
+      holdClock: () => true,
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gameEl = () => shFind(screen.el, (n) => n.cls.has('play-game'))[0];
+  const tap = async (n) => { shTap(n); await shSettle(); await render(); };
+  return {
+    st, acts, render, tap,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => tap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]),
+    game: gameEl,
+    text: () => shText(gameEl()),
+    find: (pred) => shFind(gameEl(), pred),
+    button: (text) => shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && n.textContent.includes(text))[0],
+    tapIn: async (text) => tap(shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && n.textContent.includes(text))[0]),
+    sheetButton: (text) => shFind(shDoc.body, (n) => n.cls.has('menu-sheet')).flatMap((m) => shFind(m, (n) => n.tag === 'button' && n.textContent.includes(text)))[0],
+    destroy: () => screen.destroy(),
+  };
+}
+
+const shWait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('spyfall, one phone through the real play screen: the look walk, play on the table, 🛑 freezes at once and goes by name, 取消 resumes, the spy reveals in public, one tap reads the reveal (#1, #2, #13, U3)', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/spyfall/ui.js?v=1');
+    const sim = mk(4, { seed: 490, config: { ...game.config.defaults(4, undefined, { singleDevice: true }), rounds: 2 } });
+    const ph = await onePhoneShell(dom, sim, mount);
+    const name = (pid) => sim.players.find((p) => p.id === pid).name;
+    assert.equal(ph.st.activeSeat, null, 'the phone starts in the middle');
+    // the look: one private gate per seat, named for the step
+    while (phase(sim) === 'reveal') {
+      assert.equal(ph.gate(), 'private', ph.gateText());
+      assert.ok(ph.gateText().includes('第 1 局睇身分'), ph.gateText());
+      await ph.tapGate();
+      await ph.tapIn('睇完喇 — 準備好');
+    }
+    assert.equal(phase(sim), 'play');
+    // play: the phone goes to the middle — the clock, the list, one 🛑, nobody's card
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, null);
+    assert.ok(!ph.find((n) => n.cls.has('sf-card')).some(shShown), 'no role card on the table');
+    assert.ok(!ph.button('🙋 指控'), 'nobody accuses as the seat on screen');
+    // 🛑: the clock freezes at once, then 「邊個要停鐘？」
+    const left = sim.view(null).deadline - sim.now;
+    await ph.tapIn('🛑 停鐘');
+    assert.equal(sim.view(null).halted, true);
+    assert.equal(sim.view(null).frozen, left, 'frozen the moment it was tapped');
+    const spy = spyOf(sim);
+    const agent = nonSpies(sim)[0];
+    await ph.tap(ph.sheetButton(name(agent)));
+    assert.equal(ph.gate(), 'switch', 'a private hand-over card to the name picked');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, agent);
+    assert.ok(ph.button('🙋 指控') && ph.button('🕵️ 我係間諜'), ph.text());
+    await ph.tapIn('取消 · 繼續計時');
+    assert.equal(sim.view(null).halted, false, 'the clock goes on');
+    assert.equal(sim.view(null).deadline - sim.now, left, 'from exactly where it stopped');
+    assert.equal(ph.st.activeSeat, null, 'and the phone goes back to the middle');
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    // 🛑 again: this time the spy takes the phone and reveals
+    await ph.tapIn('🛑 停鐘');
+    await ph.tap(ph.sheetButton(name(spy)));
+    await ph.tapGate();
+    await ph.tapIn('🕵️ 我係間諜');
+    await ph.tapIn('我係間諜，停鐘');
+    assert.equal(phase(sim), 'guess');
+    assert.equal(ph.gate(), 'public', 'the revealed spy picks in front of everybody');
+    assert.ok(!ph.gateText().includes('其他人唔好望'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, spy);
+    assert.ok(!ph.find((n) => n.cls.has('sf-card')).some(shShown), 'no role card on a public step');
+    sim.act(spy, { type: 'guess', loc: R(sim).loc });
+    await ph.render();
+    assert.equal(phase(sim), 'roundEnd');
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    await shWait(2200);                                          // the 2-second lock every reveal has
+    await ph.render();
+    assert.ok(!ph.text().includes('等緊：'), ph.text());
+    await ph.tapIn('大家睇完 ✓（一下就得）');
+    assert.equal(phase(sim), 'reveal');
+    // the next round's look opens behind a private gate (#2)
+    assert.equal(ph.gate(), 'private');
+    assert.ok(ph.gateText().includes('第 2 局睇身分'), ph.gateText());
+    ph.destroy();
+  });
 });

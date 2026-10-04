@@ -124,3 +124,14 @@ export function note(state, text, max = 80) {
   if (state.log.length > max) state.log.splice(0, state.log.length - max);
   return state;
 }
+
+// ---------- one phone (DESIGN §7.1) ----------
+
+/**
+ * U1: does this game's night need eyes closed? `meta.eyesClosed` (true / false) wins; absent, a game whose
+ * narration is 'required' does. On a whole-table phone such a game offers no 靜音 (nobody could hear the calls).
+ */
+export function needsEyesClosed(meta) {
+  if (typeof meta?.eyesClosed === 'boolean') return meta.eyesClosed;
+  return meta?.narration === 'required';
+}

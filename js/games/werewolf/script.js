@@ -165,7 +165,8 @@ export const RULES = {
     {
       title: '自爆',
       body: '白天發言嗰陣，狼人可以㩒住「自爆」掣：佢即刻出局（有 30 秒遺言），剩低嘅發言同投票全部取消，直接入夜。\n'
-        + '投票開始之後唔可以自爆。每個人畫面都有一樣嘅自爆掣；唔係狼人㩒咗冇任何反應。預設淨係日頭發言可以自爆，PK 發言可以喺設定打開。',
+        + '投票開始之後唔可以自爆。每個人畫面都有一樣嘅自爆掣；唔係狼人㩒咗冇任何反應。預設淨係日頭發言可以自爆，PK 發言可以喺設定打開。\n'
+        + '一部手機玩：發言緊嗰個先拎住部手機，所以只可以喺自己發言嗰陣自爆。',
     },
     {
       title: '勝負',
@@ -178,9 +179,9 @@ export const RULES = {
     {
       title: '手機點做主持',
       body: '手機係上帝：派牌、叫夜晚、結算、報死訊、計時、計票、判勝負。\n'
-        + '你嘅身份、女巫嘅藥、預言家嘅結果、狼人隊友同狼刀，只會喺自己部手機出現，其他人收唔到。\n'
+        + '你嘅身份、女巫嘅藥、預言家嘅結果、狼人隊友同狼刀，只會喺你自己嘅畫面出現，其他人睇唔到。\n'
         + '房主部手機都係一部普通玩家手機（技術上存住全場資料，但畫面唔會顯示）。如果你唔信得過房主，可以揀「人手主持」。\n'
-        + '旁白（語音／讀稿／靜音）喺選單揀：靜音嘅話，每一步都會喺畫面上寫出嚟。',
+        + '旁白（語音／讀稿／靜音）喺選單揀：靜音嘅話，每一步都會喺畫面上寫出嚟。一部手機玩冇靜音（大家閉埋眼，冇聲就唔知叫緊邊個）。',
     },
     {
       title: '人手主持（上帝模式）',
@@ -190,10 +191,11 @@ export const RULES = {
     },
     {
       title: '一部機玩',
-      body: '手機放枱中間，夜晚旁白叫到邊個角色，嗰個人拎起部手機做嘢，做完放返低。畫面只會寫「預言家請拎起部手機」，唔會寫名。\n'
-        + '就算角色出局咗或者喺配置入面冇人用，旁白照叫，持有嗰個人照拎機，咁就冇人露底。\n'
-        + '狼人多過一個嘅話，逐個傳（選單 ⋯ → 換人）。夜晚節奏建議揀「慢」。\n'
-        + '投票逐個傳機；發言完用選單 ⋯ → 下一步，或者設發言限時。',
+      body: '手機擺喺枱中間，旁白要開聲：揀 🔊 語音，或者搵個唔玩嘅人 📜 讀稿（一部機冇靜音）。夜晚節奏會自動用「慢」。\n'
+        + '夜晚叫到邊個角色，嗰個人拎起部手機做嘢，做完㩒「睇完，放返中間」再放低。卡上面只會寫「預言家請拎起部手機」，唔會寫名；角色出局咗都照叫、照拎機，咁就冇人露底。\n'
+        + '狼人多過一隻：叫到狼人，未出局嘅狼人一齊睇同一部手機，一齊指一個人，㩒一下「確定」就計晒。出咗局嘅狼人唔使拎。\n'
+        + '天光部手機擺返中間，大家一齊睇。發言同遺言：輪到邊個講，部手機就交俾邊個，講完佢自己㩒「我講完」；自爆都係講緊嗰個先㩒得。\n'
+        + '投票逐個交部手機，每人一張交接卡。',
     },
     {
       title: '呢個版本未有',
@@ -387,6 +389,7 @@ export const MSG = {
   badCount: (min, max) => `狼人殺要 ${min}–${max} 個人（座位）。`,
   appMax: '手機做主持最多 12 個玩家。13 個人要揀「人手主持」（1 個主持 + 12 個玩家）。',
   humanMin: (min) => `人手主持要 ${min + 1} 個人或以上（1 個主持 + ${min} 個玩家）。`,
+  humanOnePhone: '人手主持要自己拎一部手機（佢睇到全場身份）：一部手機玩請揀「手機做主持」，或者主持用另一部手機入房。',
   badValue: (label) => `「${label}」設定唔啱。`,
   noWolf: '最少要 1 個狼人。',
   tooMany: (fixed, p) => `指定咗 ${fixed} 個角色，多過 ${p} 個玩家，減少啲。`,
@@ -421,7 +424,8 @@ export function summaryLines(e) {
   if (e.selfExplode === 'off') lines.push('💥 唔准自爆');
   else if (e.selfExplode === 'pk') lines.push('💥 PK 都可以自爆');
   if (e.open) lines.push('🂠 出局亮牌');
-  if (e.spectate) lines.push('👻 出局後睇到全場');
+  if (e.spectate && !e.passPhone) lines.push('👻 出局後睇到全場');
+  if (e.passPhone) lines.push('📱 一部手機：發言交俾講緊嗰個，狼人一齊睇');
   if (e.reasonTag) lines.push(`💡 ${e.reasonTag}`);
   return lines;
 }
@@ -453,6 +457,20 @@ export function stepClosed(step) {
   }
 }
 
+/**
+ * The public names of the named steps, for a shared phone's hand-over card (focus.label, ≤ 24 characters, DESIGN §7.1):
+ * 「交俾 阿明 · 其他人唔好望 · 第 1 日投票 · 搞掂 2/6」 / 「輪到 阿明 · 發言」.
+ */
+export const FOCUS = {
+  deal: '睇身份',
+  vote: (d) => `第 ${d} 日投票`,
+  votePk: (d) => `第 ${d} 日 PK 投票`,
+  speech: '發言',
+  pk: 'PK 發言',
+  words: '遺言',
+  final: '最後行動',
+};
+
 /** What a shared phone shows (never a name) while a role is awake. */
 export function anonymousPrompt(step) {
   switch (step) {
@@ -476,10 +494,12 @@ export function cueDeal({ mod }) {
     : '派咗牌喇。每人㩒住張牌睇自己身份，睇完就㩒「睇完喇」。全部人睇完，就會天黑。';
 }
 
-export function cueBegin(n) {
-  return n === 1
-    ? '天黑請閉眼。大家將部手機放喺面前，閉埋眼，唔好偷望。'
-    : `第${numZh(n)}晚，天黑請閉眼。`;
+/** `pass` = one phone in the middle of the table (cfg.passPhone): nobody has a phone of their own to put down. */
+export function cueBegin(n, { pass = false } = {}) {
+  if (n !== 1) return `第${numZh(n)}晚，天黑請閉眼。`;
+  return pass
+    ? '天黑請閉眼。部手機擺喺枱中間，大家閉埋眼，叫到你嘅角色先拎起佢。'
+    : '天黑請閉眼。大家將部手機放喺面前，閉埋眼，唔好偷望。';
 }
 
 export function cueOpen(step, n) {
@@ -593,6 +613,8 @@ export const PANEL = {
   skipDefault: '跳過',
   ok: '確定',
   okDone: '已確定 ✓',
+  /** A shared phone, once this seat has confirmed (real or decoy alike): the same button puts the phone back in the middle. */
+  okHome: '📱 睇完，放返中間',
   decoy: [
     '呢一步同你冇關係，繼續閉眼。',
     '想㩒就㩒：揀個人、㩒確定，扮有嘢做都得。',
@@ -615,6 +637,9 @@ export const PANEL = {
     matesAlone: '🐺 你係獨狼，冇隊友。',
     deadMates: (names) => `（已出局：${names}）`,
     pick: '揀今晚要殺邊個。你揀嘅同隊友揀嘅會即時顯示。',
+    // U2: every living wolf on ONE shared phone looks at one combined screen (these replace the two info lines)
+    together: (names) => `🐺 你哋一齊揀：${names}`,
+    togetherPick: '一齊指一個人，㩒一下「確定」就計晒你哋。',
     rulePlurality: '意見唔一致：票數最多嘅人被殺，同票隨機。',
     ruleUnanimous: '一定要全部狼人揀同一個人先殺到人，否則空刀。',
     first: '第一晚：認清楚你嘅隊友。',
@@ -739,6 +764,7 @@ export const UI = {
     hint: '配置同入面有咩角色係公開嘅。',
     modNote: '你係上帝：唔攞牌，睇到全場身份。',
     spectator: '你喺度旁觀，下一局先加入到。',
+    table: '部手機逐個交，大家輪流睇自己嘅身份牌。',
   },
   night: {
     title: (n) => `🌙 第 ${n} 夜`,
@@ -755,6 +781,9 @@ export const UI = {
     wordsHead: '🗣 遺言',
     wordsWho: (who) => `${who} 講遺言`,
     speakDone: '我講完',
+    // a shared phone: the speaker's screen is the table's screen (#20: names, never 「輪到你」)
+    speakShared: (who) => `🎙 ${who} 發言緊 — 講完㩒「我講完」`,
+    wordsShared: (who) => `🗣 ${who} 講緊遺言 — 講完㩒「我講完」`,
     speakWait: '等緊發言…',
     speakNow: '🎙 講緊',
     speakNext: '⏳ 等緊',
@@ -763,6 +792,7 @@ export const UI = {
     explode: '💥 自爆',
     explodeHold: '㩒住 1 秒自爆',
     explodeNote: '白天發言嗰陣，狼人可以自爆（即刻出局，今日完結）。人人都有呢粒掣，唔係狼人㩒咗冇反應。',
+    explodeNoteShared: '一部手機：發言緊嗰個先自爆得（即刻出局，今日完結）。每個發言嘅人都有呢粒掣，唔係狼人㩒咗冇反應。',
     explodeNoReaction: '（冇反應）',
     voteHead: '🗳 投票',
     voteHeadPk: '🗳 PK 投票',

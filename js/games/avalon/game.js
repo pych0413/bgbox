@@ -371,6 +371,11 @@ const wins = (s) => countOf(s.results, true);
 const losses = (s) => countOf(s.results, false);
 const roleOwner = (s, role) => s.order.find((p) => s.role[p] === role) ?? null;
 const evilSeats = (s) => s.order.filter((p) => isEvil(s.role[p]));
+/** Who Merlin cannot see, from the PUBLIC deck and setup only: Mordred in play, Oberon hidden by the setting (#28). */
+const merlinBlind = (s) => ({
+  mordred: s.deck.some((d) => d.role === 'mordred'),
+  oberon: s.deck.some((d) => d.role === 'oberon') && !s.cfg.oberonSeenByMerlin,
+});
 
 /**
  * Who takes the shot: the Assassin — or, if the host marked the Assassin 💤, the next evil seat at the table (in seat
@@ -550,10 +555,14 @@ function startAssassinate(s, ctx) {
   s.phase = 'assassinate';
   s.decoyed = [];
   s.extends = 0;
+  s.talk = false;
   if (!shooterOf(s)) {   // every evil seat is 💤: nobody is left to point at Merlin
     s.pendingEnd = { winner: 'good', reason: 'no-shot' };
     return toOver(s);
   }
+  // #27, one phone in the middle: evil talks it over first, out loud and face up (the clock shows), and only a tap on
+  // 「傾好喇」 calls the Assassin behind the eyes-closed card — never eyes closed before evil has talked
+  if (s.cfg.passPhone) s.talk = true;
   setTimer(s, ctx, s.cfg.assassinSecs, S.T.assassinate.timerLabel);
   return s;
 }
@@ -591,7 +600,7 @@ function rawCue(s) {
   const redo = (ph) => ph === s.phase && redoing(s);
   switch (s.phase) {
     case 'reveal':
-      return text(S.cueReveal({ n: s.n, deck: s.deck, secs: s.cfg.revealSecs }), 'reveal');
+      return text(S.cueReveal({ n: s.n, deck: s.deck, secs: s.cfg.revealSecs, pass: !!s.cfg.passPhone }), 'reveal');
     case 'pick':
       return text(S.cuePick({
         q: s.questNo, size: sizeOf(s), need: needOf(s), leader: nm(s, leaderOf(s)), rejects: s.rejects, redo: redo('pick'),
@@ -622,7 +631,9 @@ function rawCue(s) {
     case 'lady-peek':
       return text(S.cueLadyPeek({ holder: nm(s, s.lady.step.holder), target: nm(s, s.lady.step.target) }), `ladypeek:${s.lady.log.length}`);
     case 'assassinate':
-      return text(S.cueAssassinate({ flip: s.cfg.flipEvil }), 'assassinate');
+      // one phone: the talk is announced first; once the table taps 傾好喇, the eyes-closed call for the Assassin
+      if (s.cfg.passPhone && !s.talk) return text(S.cueAssassinPick(), 'assassinate:pick');
+      return text(S.cueAssassinate({ flip: s.cfg.flipEvil, talk: !!s.talk }), 'assassinate');
     case 'shot':
       return text(S.cueShot({
         assassin: nm(s, s.shot.assassin), target: nm(s, s.shot.target), hit: s.shot.hit, merlin: nm(s, s.shot.merlin),
@@ -642,7 +653,8 @@ function skipStep(s, ctx) {
     case 'quest-result': afterQuest(s, ctx); break;
     case 'lady-peek': finishLady(s, ctx); break;
     case 'shot': toOver(s); break;
-    default: break;   // pick / vote / lady / assassinate need a real decision: use autoAct for a stalled seat
+    case 'assassinate': s.talk = false; break;   // ends evil's talk (one phone); the shot itself needs the Assassin
+    default: break;   // pick / vote / lady need a real decision: use autoAct for a stalled seat
   }
   return s;
 }
@@ -848,6 +860,11 @@ function act(state, msg, ctx = {}) {
       return s;
 
     case 'assassinate': {
+      if (s.talk) {
+        // anybody at the table says the talk is over (one phone: a table tap); nobody can shoot or decoy before that
+        if (a.type === 'talked') s.talk = false;
+        return s;
+      }
       const assassin = shooterOf(s);
       if (a.type === 'assassinate' && pid === assassin && isStr(a.target) && s.order.includes(a.target)) {
         toShot(s, ctx, a.target);
@@ -944,7 +961,7 @@ function hintOf(s, seat) {
     case 'quest-result': return isLeader ? H.resultLeader : H.result;
     case 'lady': return seat !== null && seat === s.lady.step.holder ? H.ladyHolder : H.ladyOthers;
     case 'lady-peek': return seat !== null && seat === s.lady.step.holder ? H.peekHolder : H.peekOthers;
-    case 'assassinate': return H.assassinate;
+    case 'assassinate': return s.talk ? H.assassinateTalk : H.assassinate;
     case 'shot': return H.shot;
     default: return H.over;
   }
@@ -1010,11 +1027,13 @@ function view(state, pid) {
   if (redoing(s)) v.redo = true;   // the host's 呢鋪唔計 restarted this step: every screen says so
 
   if (seat) {
-    v.mine = {
-      role: s.role[seat],
-      knows: { kind: s.knows[seat].kind, pids: s.knows[seat].pids.slice() },
-      seen: s.seen.includes(seat),
-    };
+    const knows = { kind: s.knows[seat].kind, pids: s.knows[seat].pids.slice() };
+    // #28: Merlin is told who he CANNOT see from the public deck and setup only (never a seat): Mordred in play, Oberon
+    // hidden by the setting, or nobody — so a deck without Mordred never sends him looking for a third evil. Every role
+    // gets the same two flags (both false for the others), so the card still travels in one shape to every phone, and
+    // no role name ever appears in a view outside the deck and the seat's own card.
+    knows.blind = knows.kind === 'seesEvil' ? merlinBlind(s) : { mordred: false, oberon: false };
+    v.mine = { role: s.role[seat], knows, seen: s.seen.includes(seat) };
   }
 
   switch (s.phase) {
@@ -1083,6 +1102,7 @@ function view(state, pid) {
         tapped: seat !== null && s.decoyed.includes(seat),
         candidates: s.order.filter((p) => p !== seat),
         flipped: s.cfg.flipEvil ? evilSeats(s).map((p) => ({ pid: p, role: s.role[p] })) : null,
+        talk: !!s.talk,   // one phone: evil is still talking, face up (public, the same in every view)
       };
       break;
     }
@@ -1107,28 +1127,46 @@ function cue(state) {
   return c && c.id !== state.cueAck ? c : null;
 }
 
+/**
+ * Who must look at or touch their phone now (DESIGN §4). The one-phone hints only change what a SHARED phone does
+ * (DESIGN §7.1; a phone of its own ignores them):
+ *   open   — the public one-person steps (#4): the leader's pick, the vote reveal with names, the quest result, the Lady's
+ *            choice, the shot. A shared phone shows a light card 「輪到 X · 投票結果 · 大家一齊睇」, never 「其他人唔好望」.
+ *   step   — a new key for the same seat gates again (#2): pick → the leader's own ballot, voted → their own quest card,
+ *            lady → lady-peek, and a re-run after 呢鋪唔計.
+ *   label  — the step's public name on the hand-over card (#33).
+ */
 function focus(state) {
   const s = state;
+  const L = S.FOCUS;
+  const redo = `~${(s.voids ?? []).length}`;
   switch (s.phase) {
     case 'reveal': {
       const pids = votersOf(s).filter((p) => !s.seen.includes(p));
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, label: L.reveal } : null;
     }
-    case 'pick': return { pids: [leaderOf(s)] };
+    case 'pick': return { pids: [leaderOf(s)], open: true, step: `pick:${s.proposalNo}${redo}`, label: L.pick };
     // a leader marked 💤 is never called (a shared phone's gate must not ask for them): anybody may tap 繼續
-    case 'voted': case 'quest-result': return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)] };
+    case 'voted':
+      return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)], open: true, step: `voted:${s.proposalNo}`, label: L.voted };
+    case 'quest-result':
+      return isAway(s, leaderOf(s)) ? null : { pids: [leaderOf(s)], open: true, step: `result:${s.questNo}`, label: L.result(s.questNo) };
     case 'vote': {
       const pids = votersOf(s).filter((p) => s.votes[p] === undefined);
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, step: `vote:${s.proposalNo}${redo}`, label: L.vote(s.questNo) } : null;
     }
     case 'quest': {
       const pids = s.team.filter((p) => !(p in s.cards));
-      return pids.length ? { pids } : null;
+      return pids.length ? { pids, step: `quest:${s.questNo}${redo}`, label: L.quest(s.questNo) } : null;
     }
-    case 'lady': case 'lady-peek': return { pids: [s.lady.step.holder] };
-    // The gate on a shared phone must not name the Assassin: it says what the Assassin is called instead.
-    case 'assassinate': return { pids: [shooterOf(s)], anonymous: S.T.assassinate.anonymous };
-    case 'shot': return { pids: [s.shot.assassin] };
+    case 'lady': return { pids: [s.lady.step.holder], open: true, step: `lady:${s.lady.log.length}`, label: L.lady };
+    case 'lady-peek': return { pids: [s.lady.step.holder], step: `peek:${s.lady.log.length}`, label: L.lady };
+    // #27, one phone: evil talks first, face up in the middle — nobody is called until the table taps 傾好喇
+    case 'assassinate':
+      if (s.talk) return null;
+      // The gate on a shared phone must not name the Assassin: it says what the Assassin is called instead.
+      return { pids: [shooterOf(s)], anonymous: S.T.assassinate.anonymous };
+    case 'shot': return { pids: [s.shot.assassin], open: true, step: 'shot', label: L.shot };
     default: return null;
   }
 }
@@ -1148,7 +1186,8 @@ function blocking(state, pid) {
     case 'vote': return s.votes[pid] === undefined;
     case 'quest': return s.team.includes(pid) && !(pid in s.cards);
     case 'lady': case 'lady-peek': return pid === s.lady.step.holder;
-    case 'assassinate': return pid === shooterOf(s);                         // everybody else only has a decoy
+    // everybody else only has a decoy; while evil talks (one phone) the table decides, nobody in particular
+    case 'assassinate': return !s.talk && pid === shooterOf(s);
     default: return false;                                                   // shot: its clock ends it
   }
 }
@@ -1186,7 +1225,8 @@ function legalActions(state, pid) {
       if (pid === s.lady.step.holder) out.push({ type: 'lady-done' });
       break;
     case 'assassinate':
-      if (pid === shooterOf(s)) {
+      if (s.talk) out.push({ type: 'talked' });
+      else if (pid === shooterOf(s)) {
         for (const t of s.order) if (t !== pid) out.push({ type: 'assassinate', target: t });
       } else if (!s.decoyed.includes(pid)) {
         out.push({ type: 'decoy' });
@@ -1219,6 +1259,7 @@ function autoAct(state, pid, ctx) {
     }
     case 'lady-peek': return pid === s.lady.step.holder ? { type: 'lady-done' } : null;
     case 'assassinate': {
+      if (s.talk) return { type: 'talked' };   // the talk is the table's, and ending it shoots nobody
       // only ever for a seat the host acts for (代佢做: its phone is gone) — the soft clock never shoots by itself
       if (pid !== shooterOf(s)) return s.decoyed.includes(pid) ? null : { type: 'decoy' };
       const cand = s.order.filter((t) => t !== pid);
@@ -1400,6 +1441,7 @@ function setup({ players, config: cfg, rng, now, carry }) {
     absent: [],                             // 💤 seats the host marked absent (public, D4)
     leaderSkips: 0,                         // times the leader token moved past a seat that went 💤 in `pick`
     extends: 0,                             // the host's ⏱️ ＋60 秒 on this assassination clock
+    talk: false,                            // one phone (passPhone): evil is still talking before the Assassin is called (#27)
     // The Lady starts with the seat to the right of the first leader (the one who will lead last).
     lady: { holder: on ? order[(startIx - 1 + n) % n] : null, held: on ? [order[(startIx - 1 + n) % n]] : [], step: null, log: [] },
     shot: null,

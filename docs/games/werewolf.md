@@ -12,8 +12,8 @@
 |---|---|
 | Seats | **6–13** (`meta.players`). App-as-moderator: 6–12 players, every seat plays. Human moderator: the host seat holds no card, so 7–13 seats = 6–12 players. The 13th seat exists only for the moderator. |
 | Time | 25–60 min (a night is ~2 min at the standard pace, a day is the speeches plus a 20 s vote) |
-| Narration | **required** — the night is called out loud. It works in all three modes: 語音 (the phone speaks), 讀稿 (a human reads the big text and taps 下一步), 靜音 (every stage line is also printed on every phone, steps advance by their own clocks). Every cue is public information. |
-| Single device | `partial` — works for the whole game on one passed phone (§4), but wolves hand the phone round and every step takes longer, so it defaults to the slow pace. |
+| Narration | **required** — the night is called out loud (`meta.eyesClosed: true`). With phones of their own it works in all three modes: 語音 (the phone speaks), 讀稿 (a human reads the big text and taps 下一步), 靜音 (every stage line is also printed on every phone, steps advance by their own clocks). **On one phone there is no 靜音** (decision U1, DESIGN §7.1): with every eye closed nobody would know their role is being called, and the shell offers 語音 · 讀稿 only (讀稿 needs a reader who does not play). Every cue is public information. |
+| Single device | `partial` — works for the whole game on one phone in the middle (§4): the called role picks it up, the wolves share one screen, every speaker holds it for their own turn, votes go seat by seat. Every step takes longer, so it defaults to the slow pace. |
 | Banks | none |
 | Paper mode | none |
 
@@ -29,8 +29,11 @@ variant. The research's two official boards that need a 狼王/白狼王 are off
 ### 2.1 Config
 
 `config.defaults(n, prev, env)` fills everything; `env.singleDevice` (one phone holds every seat) forces the slow pace and
-`voteSecs: 0` — the phone has to travel to every voter, and a vote clock would make the last ones abstain. `n` counts
-**seats**; the number of players is `n − 1` with a human moderator.
+`voteSecs: 0` — the phone has to travel to every voter, and a vote clock would make the last ones abstain — and sets the hidden
+`passPhone` flag (`env.singleDevice: false` clears it again; it is no form field). `n` counts **seats**; the number of players is `n − 1`
+with a human moderator. On one phone `validate(cfg, n, env)` warns that a human moderator needs a phone of their own (their all-seeing
+screen would be one 換人 away from every player) and `presets(n, env)` does not offer the 人手上帝 chip; the lobby adds
+「📱 一部手機：發言交俾講緊嗰個，狼人一齊睇」.
 
 | key | type | default | meaning |
 |---|---|---|---|
@@ -49,7 +52,8 @@ variant. The research's two official boards that need a 狼王/白狼王 are off
 | `speakOrder` | select | `dead` | `dead` start next to the single dead player (random seat on a peaceful or multi-death night) · `random`. The direction flips every day. |
 | `selfExplode` | select | `on` | `off` · `on` (during day speeches) · `pk` (also during PK speeches). Never during the vote, last words or the final action. |
 | `openCard` | select | `auto` | 出局亮牌: `auto` follows the board (only the official 6-player 明牌 board) · `on` · `off`. |
-| `spectate` | bool | `false` | dead players see every role. Off by default: a dead player's screen is the easiest one to leak. |
+| `spectate` | bool | `false` | dead players see every role. Off by default: a dead player's screen is the easiest one to leak. Not offered and ignored with `passPhone` (the dead speaker's 遺言 is a public screen there). |
+| `passPhone` | bool (not a form field) | `false` | set by `defaults` from `env.singleDevice`: the one-phone flow of §4 (speeches and 遺言 are public steps for the speaker, a dead wolf never takes the phone, 最後行動 is held for the whole window, the first night's line says the phone lies in the middle) |
 | `speakSecs` | seconds 0–300 | 60 | per speaker (day speeches and PK). 0 = no clock, the speaker taps 我講完. |
 | `wordsSecs` | seconds 0–300 | 60 | per 遺言 — the research's and the official default (decision D7, 2026-10-04; was 45). A self-explode always gets 30 s (0 stays untimed). The 快玩 preset sets 30. |
 | `voteSecs` | seconds 0–120 | 20 | the vote closes at the deadline and anyone who has not voted abstains. 0 = wait for everybody. |
@@ -236,6 +240,8 @@ next two speakers are NAMED because 「由大到細，由阿聰開始」 read wr
 speaker's phone, and — for every **living** seat — the **💥 自爆** control (a 1 s hold). It is the same control on every
 living phone; a non-wolf's hold sends the same message and the engine ignores it, with identical on-screen feedback.
 Dead seats and the moderator do not get it. A speech with a clock never blocks; with `speakSecs: 0` only the speaker does.
+On one phone each speaker holds it for their own turn (§4), so a wolf can only explode during **his own speech** — the research's
+"own speech only" variant; the note under the button says so (「一部手機：發言緊嗰個先自爆得…」).
 
 ### 3.6 Vote
 
@@ -362,17 +368,34 @@ of this game:
 
 ## 4. Single-device play
 
-One phone in the middle, voice on. The shell's pass-gate does the hand-overs; the engine only supplies `focus`.
+One phone in the middle, voice on (no 靜音, U1). The shell's one-phone contract (DESIGN §7.1) does the hand-overs — the private card
+「交俾 X · 其他人唔好望」, the public card 「輪到 X · 發言 · 大家一齊睇」, the eyes-closed card, and the phone lying in the middle (the public
+table view) between them; the engine supplies `focus` (§5) and, with `passPhone`, a few one-phone choices:
 
-- **Night:** during a window `focus = { pids: every holder of the called role (alive or dead, potions or not), anonymous: '守衛請拎起部手機' }`.
-  The gate shows the role prompt, never a name, so the phone is passed at the same moment whether the holder is alive or not, and
-  a dead seer takes the phone and plays a decoy. With several wolves the list shrinks as each wolf confirms, so the gate
-  moves on to the next wolf (a wolf who re-picks comes back into the list). Other roles do not shrink (a lit screen going dark
-  would say who finished).
-- **Day:** vote → the unvoted voters in seat order (each behind a gate); 最後行動 → the dead seat; speeches and 遺言 → nobody
-  (use ⋯ → 下一步, or give `speakSecs`).
-- `defaults(n, prev, { singleDevice: true })` sets `pace: 'slow'` because every step now includes a hand-over, and `voteSecs: 0`
-  because the phone has to reach every voter before the vote can close.
+- **Night.** `focus = { pids: holders of the called role, anonymous: '守衛請拎起部手機' }` while the window runs — not during the opening line,
+  where the eyes-closed card would cover the 📜 讀稿 narrator's line and 下一步 (the bar sits under it) until the called role picked the phone up.
+  Reaching for the phone comes out of the window, which the one-phone slow pace pads (DESIGN §7.1: night steps pad their windows). The card shows the role prompt, never a name; a dead seer still takes the phone and plays a decoy, so the phone moves at the
+  same moment whether the holder is alive or not. A seat that has confirmed gets 「📱 睇完，放返中間」 on the same 確定 button (real or decoy alike),
+  which lays the phone back in the middle under the dim.
+- **Wolves (decision U2, one-phone playtest #8).** Every living wolf is awake at once on **one combined screen**: the shell mounts the first
+  wolf with `ctx.coWakers` = all of them, the two info lines read 「🐺 你哋一齊揀：1號阿聰、6號阿珍」 / 「一齊指一個人，㩒一下「確定」就計晒你哋。」,
+  and every tap carries `seats: ctx.coWakers`, so one pick and one 確定 (or 空刀) count for every wolf — never a silent 空刀 from a wolf who
+  never got the phone. On one phone a **dead wolf is not called** (night 2 of the playtest went 空刀 because the dead wolf got the card); with
+  phones of their own he still is, after the living. No chained walk, no 換人.
+- **Dawn and announcements.** The 天光 card puts the phone in the middle whoever acted last (the playtest's blocker: the seer was named every
+  morning); the table screen shows the dawn, the speaking order, the 票型 and the 🗳 fold (`engine.view(state, null)` is complete and public).
+- **Speeches and 遺言 (#10).** `focus = { pids: [speaker], open: true, label: '發言' | 'PK 發言' | '遺言', hold: true }` from the opening line on:
+  a public card for the speaker, then their own screen with 我講完 and their own 💥 (the table watches it, so it names them —
+  「🎙 3號阿明 發言緊 — 講完㩒「我講完」」 — never 「輪到你」 or 「（你）」, and the role card and 📓 cover are not on it). The speech clock is held
+  while the card is unanswered. The 新手慢慢嚟 preset (no clocks) no longer stalls: the speaker always has the button.
+- **最後行動.** The dead player's private card during the opening line (label 「最後行動」, clock held at the card); they keep the phone for the
+  whole window, confirmed or not, and it goes back to the middle when the window ends — the same for a hunter and anybody else (handing it
+  back on 確定 would time the decision: the panel tells everybody but a hunter to wait the window out). A 💤 seat is not handed the phone; its
+  window runs on its own clock.
+- **出局後睇到全場 (`spectate`)** does not apply on one phone (not offered, and the engine ignores it): a dead player's 遺言 is a public screen.
+- **Votes.** One private card per voter, clockwise from the holder (label 「第 N 日投票」).
+- `defaults(n, prev, { singleDevice: true })` sets `pace: 'slow'` because every step now includes a hand-over, `voteSecs: 0` because the phone has
+  to reach every voter before the vote can close, and `passPhone: true`.
 - Realistically fine up to ~8 players; 12 people around one phone is cramped (the research says so too).
 
 ## 5. Engine
@@ -394,7 +417,7 @@ PRIVATE state (never in any view before `over`, except through the per-seat bloc
 | action | from | when | rule |
 |---|---|---|---|
 | `{type:'ready'}` | a player | `deal` | idempotent; all ready → night 1 |
-| `{type:'night', pick?: pid\|null, lock?: bool}` | a player | a role step's window | `pick` must be null or a chip the **panel** enables for this seat; a locked seat is frozen (wolves excepted: a new pick unlocks); `lock:true` with no pick locks "nobody" |
+| `{type:'night', pick?: pid\|null, lock?: bool, seats?: [pid]}` | a player | a role step's window | `pick` must be null or a chip the **panel** enables for this seat; a locked seat is frozen (wolves excepted: a new pick unlocks); `lock:true` with no pick locks "nobody". `seats` (U2, wolves on one shared phone): from a wolf in the wolves' step, the same pick / lock also for every wolf listed (anybody else listed, any other step, or a sender who is not a wolf: ignored; the room keeps only the sender's own phone's seats) |
 | `{type:'final', pick?, lock?}` | the dead player | his `final` window | same, targets = living seats; only a hunter who is not poisoned has an effect |
 | `{type:'done'}` | the speaker | `speech` / `words` run | ends the turn |
 | `{type:'vote', target: pid\|null}` | a voter | `vote` run | target ∈ candidates or null (abstain); replaceable until the vote closes |
@@ -444,8 +467,11 @@ lines are worded for both sides (「聽人發言：記低邊個講咩，諗吓�
 
 ### Focus
 
-`deal` → unready seats · night window → holders of the called role (wolves: who have not locked) with `anonymous` · `final` window →
-the dead seat · `vote` run → voters who have not voted · otherwise `null`.
+`deal` → unready seats · night window → holders of the called role (wolves: who have not locked, the living first) with `anonymous` · `final`
+window → the dead seat · `vote` run → voters who have not voted · otherwise `null`. One-phone hints (a phone of its own ignores them): `label`
+(睇身份 · 第 N 日投票 · 第 N 日 PK 投票 · 最後行動 · 發言 · PK 發言 · 遺言) and a `step` key per step. With `passPhone` also: no dead wolf in the
+wolves' focus (the night focus is the window only, as everywhere), the `final` focus from its opening line to the end of the window (`hold: true`; none for a 💤 seat), and the speech / 遺言 focus
+`{ pids: [speaker], open: true, hold: true }`.
 
 ## 6. Edge cases → the test list (`tests/werewolf.test.mjs`)
 
@@ -516,6 +542,18 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
   final window kept, public and identical `seats[].absent`, never `blocking`, garbage / moderator / over unchanged; a fuzz that marks random
   seats absent and back through whole games (nothing ever waits on or gives the floor to an absent seat).
 
+- **One phone in the middle (2026-10-04, one-phone playtest #8 #10 #19 #20 #22, U1 U2).** `passPhone` from `env` both ways, no form field, a
+  boolean, the lobby line; `meta.eyesClosed` (no 靜音); the rules name no control that does not exist; a human moderator warns on one phone and
+  the 上帝 chip is not offered; speeches, PK speeches and 遺言 are public steps for the speaker from the opening line on (none with phones of their
+  own); a wolf explodes in his own speech; the night calls a role only once its window runs (no card over the 讀稿 line); a dead wolf is never called on one phone (still
+  called, after the living, on phones of their own); `seats` co-waker taps (wolves only, wolves' step only, from a wolf only; a combined lock
+  kills the shared target); 最後行動 the same for a hunter and anybody else, held the whole window even once confirmed, no card for a 💤 seat; no `spectate` on one phone (the public 遺言 shows no role); the 新手慢慢嚟 preset played
+  with only the handed-over seat tapping never needs ⏭; the first night's line; the table view is complete and public. UI: the combined wolf
+  screen (both named, one pick and one 確定 / 空刀 for all, the night shape kept); 「📱 睇完，放返中間」 after confirming (real and decoy alike;
+  「已確定 ✓」 on a phone of its own); the speaker's screen (我講完, 💥, names, no 「（你）」 / 「輪到你」, no role card); the table screen. Through the
+  real play screen (`js/ui/screens/play.js`, a Sim-driven whole-table phone): one eyes-closed card for the wolves, one combined screen, back in
+  the middle after their 確定, the 天光 card at dawn, a public card and 我講完 for every speaker.
+
 ## 7. 貼心 touches
 
 - Every head-count has a recommended board **and the reason** (「6 人用屠城，免得 2 刀就完」), in the lobby, on the deal card and in `presets`.
@@ -536,7 +574,10 @@ Every bullet of the research's "Edge cases an engine must handle" has a test, gr
 - Your own ballot is never on your screen (「已投 ✓」) until the tally; the 票型 stays up long enough to read every ballot.
 - A friend who leaves the table does not freeze it: the host marks the seat 💤 and the deal, the votes and the speeches go on without it.
 - Public stage line on every phone, so 靜音 and 讀稿 modes never need the host's speaker.
-- The shared phone never learns a name at night; the dead take the phone like everybody else.
+- The shared phone never learns a name at night; the dead take the phone like everybody else (a dead wolf excepted: the living wolves share one
+  screen and one 確定).
+- One phone: the phone goes back to the middle at dawn and after every confirm (「📱 睇完，放返中間」); every speaker holds it for their own turn,
+  with their own 我講完 and 💥; the screens the table reads use names, never 「你」.
 - A human moderator who sees everything, live, with one big 下一步, and can still 代佢做 a dropped phone.
 - The results explain **why** and replay every night, including what nobody could see (the guard's choice, the wolves' picks, the witch's
   potion, the seer's checks, 奶穿 and 毒穿).
@@ -560,3 +601,10 @@ Requests for the framework (status 2026-10-03 UTC):
    cue acknowledgement and the second as a skip, like 9upper). A short debounce there would protect a human narrator.
 5. The shell dims a seat at night unless `focus` names it. A dead non-holder is dimmed for the whole night, which is intended; if the shell ever
    wants a spectator view of the night it must not read `view.nt` (it is a decoy for them).
+6. **Whether the room is one phone, at setup** (2026-10-04). The one-phone flow keys off the hidden `cfg.passPhone` that `defaults` sets from
+   `env.singleDevice`; a host who edits the setup and then has friends join keeps a stale `true` (on phones of their own that only means
+   small things: the speaker's phone shows 輪到你, a dead wolf's screen stays dark). `engine.setup({ …, env })`, or the Room re-running `defaults` for this one key,
+   would remove the drift.
+7. **Explode during another player's speech on one phone** (2026-10-04). Only the speaker holds the phone, so the "any time in the day"
+   explode becomes "own speech only". A 「💥 有人要自爆？」 on the speaker's public screen would need the phone handed over mid-speech and
+   back (an `askWho` that returns to the speaker); deliberately left out.

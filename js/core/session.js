@@ -16,6 +16,8 @@
 //    pause could not be shifted twice.
 //  - D4 absent seats: setAbsent(pid, away) sends `@absent` / `@present` as HOST and keeps `absent` (the
 //    seats the engine accepted it for) — blocking() is false for them, so the room never waits on one.
+//  - U10 (DESIGN §7.1): holdClock(on) holds the deadline while a one-phone gate is unanswered; released, the
+//    deadline moves on by the time held (pause-safe). Never snapshotted.
 //  - A restored session starts PAUSED, with the clock stopped at the moment it
 //    was last saved, so the host taps 繼續 (which also satisfies iOS' gesture
 //    rule for speech) and every timer carries on from where it was.
@@ -130,6 +132,12 @@ export class Session {
     this.lastCueId = null;
     this.cueStartedAt = 0;
     this.absent = [];              // D4: seats the host marked absent this game (the engine took '@absent'), seat order
+    // U10 (§7.1) the clock held at a one-phone gate: heldMs banked so far, heldAt = when the current stretch began
+    // (null while paused: a pause shifts the deadline by itself), heldDeadline = the deadline the stretch is for
+    this.held = false;
+    this.heldMs = 0;
+    this.heldAt = null;
+    this.heldDeadline = null;
 
     const snap = o.restore;
     if (snap) {
@@ -197,6 +205,12 @@ export class Session {
   }
 
   #after() {
+    // U10: the engine set a new deadline while the clock is held — it was set "now", so only the time from now on counts
+    if (this.held && this.state?.deadline !== this.heldDeadline) {
+      this.heldDeadline = this.state?.deadline ?? null;
+      this.heldMs = 0;
+      this.heldAt = this.paused ? null : this.nowFn();
+    }
     if ((this.state.inkEpoch ?? 0) !== this.drawing.epoch) {
       this.drawing = emptyInk(this.state.inkEpoch ?? 0);
       this.onInk(null);
@@ -261,7 +275,7 @@ export class Session {
 
   #schedule() {
     if (this.deadlineTimer !== null) { this.timers.clearTimeout(this.deadlineTimer); this.deadlineTimer = null; }
-    if (this.stopped || this.paused) return;
+    if (this.stopped || this.paused || this.held) return;
     const d = this.state?.deadline;
     if (typeof d !== 'number' || !Number.isFinite(d)) return;
     const delay = Math.min(MAX_TIMEOUT, Math.max(0, d - this.nowFn()));
@@ -270,7 +284,7 @@ export class Session {
 
   #fire() {
     this.deadlineTimer = null;
-    if (this.stopped || this.paused) return;
+    if (this.stopped || this.paused || this.held) return;
     const d = this.state?.deadline;
     if (typeof d !== 'number') return;
     if (this.nowFn() < d) { this.#schedule(); return; }   // timer fired early, or the delay was clamped
@@ -288,6 +302,7 @@ export class Session {
     if (this.paused || this.stopped) return false;
     this.paused = true;
     this.pausedAt = this.nowFn();
+    if (this.held && this.heldAt !== null) { this.heldMs += Math.max(0, this.pausedAt - this.heldAt); this.heldAt = null; }
     if (this.deadlineTimer !== null) { this.timers.clearTimeout(this.deadlineTimer); this.deadlineTimer = null; }
     if (this.silent) this.silentRemaining = Math.max(0, this.silent.due - this.pausedAt);
     this.#clearCueTimer();
@@ -301,6 +316,7 @@ export class Session {
     let moved = false;
     if (typeof this.state.deadline === 'number' && delta > 0) { this.state.deadline += delta; moved = true; }
     if (moved) this.rev++;
+    if (this.held) { this.heldAt = this.nowFn(); this.heldDeadline = this.state.deadline ?? null; }
     this.#schedule();
     const cue = this.cue();
     if (cue && this.mode === 'silent') {
@@ -309,6 +325,34 @@ export class Session {
     this.silentRemaining = null;
     if (moved) this.onChange();
     if (cue) this.onCue(cue, { replay: true });   // speech was cancelled by the pause; say it again
+    return true;
+  }
+
+  /**
+   * U10 (§7.1) — hold (on) or release the game clock while a one-phone gate is unanswered. Held, the deadline timer
+   * does not run; released, `state.deadline` moves on by the time held (time spent paused is not counted twice: the
+   * pause shifts it by itself), and a deadline the engine set during the hold moves only by the time since it was
+   * set. Input keeps working. Not snapshotted: a restored session starts paused and unheld. True iff it changed.
+   */
+  holdClock(on) {
+    if (this.stopped || !!on === this.held) return false;
+    if (on) {
+      this.held = true;
+      this.heldMs = 0;
+      this.heldAt = this.paused ? null : this.nowFn();
+      this.heldDeadline = this.state?.deadline ?? null;
+      if (this.deadlineTimer !== null) { this.timers.clearTimeout(this.deadlineTimer); this.deadlineTimer = null; }
+      this.onChange();
+      return true;
+    }
+    const ms = this.heldMs + (this.heldAt !== null ? Math.max(0, this.nowFn() - this.heldAt) : 0);
+    this.held = false;
+    this.heldMs = 0;
+    this.heldAt = null;
+    this.heldDeadline = null;
+    if (typeof this.state?.deadline === 'number' && ms > 0) { this.state.deadline += ms; this.rev++; }
+    this.#schedule();
+    this.onChange();
     return true;
   }
 

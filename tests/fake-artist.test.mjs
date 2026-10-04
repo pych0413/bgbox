@@ -166,8 +166,16 @@ test('fake-artist: config.defaults with { singleDevice } — one phone for every
   assert.equal(one.qm, 'app', 'a question master on a passed-round phone has nobody to hide the fake from');
   assert.equal(one.turnSecs, 0, 'handing the phone over would eat into a stroke clock');
   for (const k of ['draw', 'laps', 'tieRule', 'guess', 'scoring']) assert.equal(one[k], prev[k], k);
+  assert.equal(one.vote, 'point', 'U7: one phone votes by pointing together');
+  assert.equal(one.passPhone, true, 'the engine learns the phone goes round');
   assert.deepEqual(game.config.defaults(6, prev, { singleDevice: false }), game.config.defaults(6, prev));
-  assert.deepEqual(game.config.defaults(6, undefined, { singleDevice: true }), { ...game.config.defaults(6), qm: 'app', turnSecs: 0 });
+  assert.deepEqual(game.config.defaults(6, undefined, { singleDevice: true }),
+    { ...game.config.defaults(6), qm: 'app', turnSecs: 0, vote: 'point', passPhone: true });
+  // a second phone joins: the one phone's defaults go back to the multi-phone ones
+  const back = game.config.defaults(6, one, { singleDevice: false });
+  assert.deepEqual([back.vote, back.passPhone], ['ballot', false]);
+  assert.equal(game.config.defaults(6, { ...one, vote: 'point', passPhone: false }, { singleDevice: false }).vote, 'point',
+    'a table that chose 一齊指 itself keeps it');
   for (let n = game.meta.players[0]; n <= game.meta.players[1]; n++) {
     const cfg = game.config.defaults(n, prev, { singleDevice: true });
     assert.ok(game.config.validate(cfg, n).ok, `n=${n}`);
@@ -2652,4 +2660,591 @@ test('fake-artist UI D3/D4/D6: 睇完 n / m after a short lock, the ballot keeps
   } finally {
     dom.restore();
   }
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest fake-artist F1–F8, #2, #4, #5, #29, #30, U7)
+// ============================================================
+
+const onePhone = (n, config = {}, seed = 1) => mk(n, { seed, config: { ...game.config.defaults(n, undefined, { singleDevice: true }), ...config } });
+
+test('fake-artist one phone: #4 every stroke is a public step (the public card, not 「其他人唔好望」); the guess and the ballots are named for the gate', () => {
+  const sim = mk(5, { seed: 501 });
+  assert.equal(sim.focus().label, '睇卡');
+  readyAll(sim);
+  const f = sim.focus();
+  assert.deepEqual(f, { pids: [drawerOf(sim)], open: true, step: 'draw:0', label: '畫第 1 筆' });
+  drawStroke(sim);
+  assert.equal(sim.focus().step, 'draw:1', 'every turn is its own step');
+  drawAll(sim);
+  // secret ballots (the multi-phone default): private, with 「全部投完先好講」 on the gate (#30)
+  const v = sim.focus();
+  assert.equal(v.open, undefined);
+  assert.deepEqual([v.step, v.label], ['vote:1', '投票 · 全部投完先好講']);
+  allVote(sim, R(sim).fake);
+  settle(sim);
+  assert.equal(phase(sim), 'guess');
+  // #29: the spoken guess lets the phone lie in the middle for the caught fake (the answer stays under the judge's cover)
+  assert.deepEqual(sim.focus(), { pids: [R(sim).judge], open: true, label: '開口估題目' });
+  const typed = mk(5, { seed: 502, config: { guess: 'typed' } });
+  toVote(typed);
+  allVote(typed, R(typed).fake);
+  settle(typed);
+  assert.deepEqual(typed.focus(), { pids: [R(typed).fake], label: '打字估題目' }, 'typing a guess is private');
+  typed.act(R(typed).fake, { type: 'guess', text: '（亂估）' });
+  assert.equal(typed.focus().step, 'judge', 'the judge’s own step');
+});
+
+test('fake-artist one phone: secret ballots on one phone first lay the picture in the middle — anybody starts the walk (#2)', () => {
+  const sim = onePhone(5, { vote: 'ballot' }, 503);
+  assert.equal(sim.state.cfg.passPhone, true);
+  readyAll(sim);
+  drawAll(sim);
+  assert.equal(phase(sim), 'vote');
+  assert.equal(sim.view(null).vote.look, true);
+  assert.equal(sim.focus(), null, 'nobody is called: the picture lies in the middle for everybody');
+  assert.equal(sim.cue().id, `r${R(sim).key}:vote:look`);
+  assert.ok(!sim.cue().text.includes('三、二、一'), 'no simultaneous vote is announced');
+  const v0 = R(sim).artists[0];
+  assert.equal(sim.act(v0, { type: 'vote', target: R(sim).artists[1] }), false, 'no ballot before the look is over');
+  assert.equal(game.engine.autoAct(clone(sim.state), v0), null);
+  assert.ok(sim.act(R(sim).artists[2], { type: 'start-vote' }));
+  assert.equal(sim.view(null).vote.look, false);
+  assert.equal(sim.focus().label, '投票 · 全部投完先好講');
+  assert.match(sim.cue().text, /全部投完先好講/);
+  // the host's ⏭ during the look starts the walk — it never turns the ballots into abstentions
+  const h = onePhone(5, { vote: 'ballot' }, 504);
+  readyAll(h);
+  drawAll(h);
+  h.host({ type: ACT.CUE_DONE, id: h.cue().id });
+  assert.ok(h.host({ type: ACT.NEXT }));
+  assert.equal(phase(h), 'vote');
+  assert.equal(h.view(null).vote.look, false);
+  assert.deepEqual(R(h).vote.votes, {});
+  // a multi-phone table never gets the look
+  const multi = mk(5, { seed: 505 });
+  toVote(multi);
+  assert.equal(multi.view(null).vote.look, false);
+  assert.ok(multi.focus().pids.length > 0);
+  assert.match(multi.cue().text, /三、二、一，投！/, 'the multi-phone cue is unchanged');
+});
+
+test('fake-artist one phone: U7 一齊指 — count, point, one person enters who pointed at whom; the tally and tie rules run as usual', () => {
+  const sim = onePhone(5, {}, 506);
+  assert.equal(sim.state.cfg.vote, 'point');
+  readyAll(sim);
+  drawAll(sim);
+  const F = R(sim).fake;
+  const artists = R(sim).artists;
+  assert.equal(phase(sim), 'vote');
+  assert.equal(sim.focus(), null, 'nobody is handed the phone one by one');
+  assert.match(sim.cue().text, /一齊指/);
+  const v = sim.view(artists[0]).vote;
+  assert.deepEqual([v.mode, v.canVote, v.countAt], ['point', false, null]);
+  for (const p of artists) assert.equal(game.engine.blocking(sim.state, p), false, 'the table is not waiting on anybody in particular');
+  assert.equal(sim.act(artists[0], { type: 'vote', target: artists[1] }), false, 'no separate ballots');
+  const all = (t) => Object.fromEntries(artists.map((p) => [p, p === t ? artists.find((x) => x !== t) : t]));
+  assert.equal(sim.act(artists[0], { type: 'point', votes: all(F) }), false, 'not before the count');
+  assert.ok(sim.act(artists[1], { type: 'count' }));
+  assert.equal(sim.view(null).vote.countAt, sim.now);
+  assert.equal(sim.cue().text, '三、二、一，指！指住唔好郁。');
+  const goId = sim.cue().id;
+  // incomplete or impossible entries are refused
+  const { [artists[0]]: _, ...partial } = all(F);
+  assert.equal(sim.act(artists[0], { type: 'point', votes: partial }), false, 'every pointer must be entered');
+  assert.equal(sim.act(artists[0], { type: 'point', votes: { ...all(F), [artists[2]]: artists[2] } }), false, 'nobody points at themselves');
+  assert.equal(sim.act(artists[0], { type: 'point', votes: { ...all(F), [artists[2]]: 'p99' } }), false);
+  // counting again re-says the count
+  assert.ok(sim.act(artists[0], { type: 'count' }));
+  assert.notEqual(sim.cue().id, goId);
+  assert.ok(sim.act(artists[3], { type: 'point', votes: all(F) }));
+  assert.equal(phase(sim), 'tally');
+  assert.deepEqual(R(sim).tally1.votes, all(F), 'who pointed at whom is kept for the result (and the 最醒目 award)');
+  assert.equal(R(sim).caught, true);
+  // a tie under the revote rule: the re-vote is pointing too, among the tied only
+  const t = onePhone(6, { tieRule: 'revote' }, 507);
+  readyAll(t);
+  drawAll(t);
+  const A = R(t).artists;
+  const fk = R(t).fake;
+  const other = A.find((p) => p !== fk);
+  t.act(A[0], { type: 'count' });
+  const rest = A.filter((p) => p !== fk && p !== other);
+  // 3 v 3: the fake and one other artist are tied at the top, and four artists are left to re-point
+  const tie = { [fk]: other, [other]: fk, [rest[0]]: fk, [rest[1]]: fk, [rest[2]]: other, [rest[3]]: other };
+  assert.ok(t.act(A[0], { type: 'point', votes: tie }));
+  settle(t);
+  assert.equal(phase(t), 'revote');
+  {
+    assert.equal(R(t).vote.mode, 'point');
+    assert.equal(R(t).vote.countAt, null, 'a fresh count');
+    assert.deepEqual(R(t).vote.voters, rest, 'only the artists nobody pointed at most');
+    assert.equal(t.focus(), null);
+    assert.match(t.cue().text, /再一齊指/);
+  }
+});
+
+test('fake-artist one phone: fuzz — 一齊指 and the look on one phone always finish, and legalActions stay honest', () => {
+  for (const cfg of [{}, { vote: 'ballot' }, { tieRule: 'revote' }, { tieRule: 'escape', guess: 'typed' }, { draw: 'paper' }]) {
+    for (let seed = 1; seed <= 6; seed++) {
+      const n = 3 + (seed % 6);
+      const sim = onePhone(n, cfg, 600 + seed);
+      sim.runRandom();
+      assert.equal(sim.state.phase, 'over', `${JSON.stringify(cfg)} n=${n} seed=${seed}`);
+    }
+  }
+});
+
+test('fake-artist one phone: a whole-table 睇完 counts every listed reader, whichever seat carried it', () => {
+  const sim = mk(4, { seed: 508, config: { endMode: 'rounds', rounds: 2 } });
+  playRound(sim);
+  assert.equal(phase(sim), 'result');
+  const all = ids(sim);
+  assert.ok(sim.act('p1', { type: 'next' }));
+  assert.equal(sim.act('p1', { type: 'next', seats: all }), false, 'a seat that is done cannot tap for the others');
+  assert.ok(sim.act('p1', { type: 'next', seats: all, table: true }));
+  assert.notEqual(phase(sim), 'result', 'one tap on the table screen read it for everybody');
+});
+
+test('fake-artist one phone: rules and help no longer promise a simultaneous vote or 「其他人即時睇到」; a 一部手機玩 section', () => {
+  const text = [...game.rules.quick, ...game.rules.sections.map((s) => s.body)].join('\n');
+  assert.ok(!text.includes('畫完同時投票'));
+  assert.ok(!text.includes('其他人即時睇到'));
+  const one = game.rules.sections.find((s) => s.title === '一部手機玩');
+  for (const bit of ['一齊指', '全部投完先好講', '答案冚住']) assert.ok(one.body.includes(bit), bit);
+  const help = game.config.fields(game.config.defaults(5), 5).find((f) => f.key === 'draw').help;
+  assert.ok(!help.includes('即時睇到'), help);
+  assert.ok(game.config.fields(game.config.defaults(5), 5).some((f) => f.key === 'vote'));
+  const w = game.config.validate({ ...game.config.defaults(5), vote: 'ballot' }, 5, { singleDevice: true }).warnings;
+  assert.ok(w.some((x) => x.includes('一齊指')), w.join(' | '));
+  assert.equal(game.config.validate({ ...game.config.defaults(5), vote: 'x' }, 5).ok, false);
+});
+
+/** A shared phone's mount (me null = the table screen) with the §7.1 api members faked and logged. */
+async function mountFakeShared(dom, sim, me, { wholeTable = true, ctx = {} } = {}) {
+  const { mount } = await import('../js/games/fake-artist/ui.js');
+  const root = new dom.FakeNode('div');
+  const log = { sent: [], table: [], handTo: [], toTable: 0 };
+  const fc = fakeComponents(dom.FakeNode);
+  const all = ids(sim);
+  const ui = mount(root, {
+    me, players: sim.players, isHost: true, send: (a) => { log.sent.push(a); return true; }, ink() {}, sfx() {}, toast() {},
+    now: () => sim.now, components: fc.components, meta: game.meta, config: sim.config,
+    shared: true, wholeTable, atTable: me == null, mySeats: all,
+    tableSend: (a) => { log.table.push(a); return Promise.resolve(true); },
+    handTo: (pid, opts = {}) => { log.handTo.push([pid, opts]); return true; },
+    toTable: () => { log.toTable += 1; return true; },
+  });
+  const show = (extra = {}) => ui.update(sim.view(me), {
+    focus: sim.focus(), paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] },
+    shared: true, wholeTable, atTable: me == null, tableLocked: false, asked: null, ...ctx, ...extra,
+  });
+  show();
+  return { me, root, ui, log, fc, show };
+}
+
+test('fake-artist ui one phone: the table screen of the deal says the phone goes round — never 「睇你張卡」 to the table (#20)', async () => {
+  const dom = installDom();
+  let t = null;
+  try {
+    const sim = onePhone(5, {}, 519);
+    t = await mountFakeShared(dom, sim, null);
+    const text = t.root.visibleText();
+    assert.ok(!text.includes('睇你張卡'), text);
+    assert.ok(text.includes('逐個睇卡') && text.includes('部手機逐個傳'), text);
+  } finally {
+    t?.ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist ui one phone: the drawer’s public screen hides the re-peek card; 「唔記得題目？」 goes through a private hand-over and back (#4)', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    const sim = mk(5, { seed: 520 });
+    readyAll(sim);
+    const d = drawerOf(sim);
+    const a = await mountFakeShared(dom, sim, d);
+    uis.push(a.ui);
+    const cover = () => a.fc.made.covers[a.fc.made.covers.length - 1];
+    assert.ok(cover().el.hidden, 'no hold-to-peek card on a screen the whole table watches');
+    assert.ok(!a.root.visibleText().includes('輪到你'), '#20: the table reads it, so it names the drawer');
+    assert.ok(a.root.visibleText().includes(`${sim.players.find((p) => p.id === d).name} 畫`), a.root.visibleText());
+    assert.equal(a.fc.made.canvases[0].props.canDraw, true, 'the drawer draws on the public screen');
+    uiButton(a.root, '唔記得題目').click();
+    assert.deepEqual(a.log.handTo, [[d, { why: '睇返張卡' }]], 'a private hand-over card for the same seat');
+    // the shell mounts the seat afresh behind that card: the card is there, the pen is down
+    const b = await mountFakeShared(dom, sim, d);
+    uis.push(b.ui);
+    const bc = b.fc.made.covers[b.fc.made.covers.length - 1];
+    assert.ok(!bc.el.hidden, 'the card can be held now');
+    assert.equal(b.fc.made.canvases[0].props.canDraw, false, 'no drawing while the others look away');
+    // put back with the shell's 📱 擺返中間 instead: the public card that follows opens a plain stroke screen, never
+    // the card again on the screen the table watches (the request is taken once, by the screen it was made for)
+    const c = await mountFakeShared(dom, sim, d);
+    uis.push(c.ui);
+    assert.ok(c.fc.made.covers[c.fc.made.covers.length - 1].el.hidden, 'no card after the phone went back to the middle');
+    assert.equal(c.fc.made.canvases[0].props.canDraw, true);
+    assert.ok(!uiButton(c.root, '記得喇'));
+    uiButton(b.root, '記得喇').click();
+    assert.deepEqual(b.log.handTo, [[d, { open: true }]], 'back to the table with the public card');
+    b.show();
+    assert.ok(bc.el.hidden);
+    assert.equal(b.fc.made.canvases[0].props.canDraw, true);
+    // a phone of its own: the re-peek card stays, nothing changes
+    const own = await mountFakeArtistSeat(dom, sim, d);
+    uis.push(own.ui);
+    assert.ok(!own.fc.made.covers[own.fc.made.covers.length - 1].el.hidden);
+    assert.ok(!uiButton(own.root, '唔記得題目'));
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist ui one phone: 一齊指 on the table screen — 3-2-1 for everybody, then one person enters the pointing (U7)', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    const sim = onePhone(5, {}, 521);
+    readyAll(sim);
+    drawAll(sim);
+    const t = await mountFakeShared(dom, sim, null);
+    uis.push(t.ui);
+    assert.ok(t.root.visibleText().includes('一齊指'));
+    t.show({ tableLocked: true });
+    assert.equal(uiButton(t.root, '3、2、1').disabled, true, 'locked while the table card is up (U5)');
+    t.show();
+    uiButton(t.root, '3、2、1').click();
+    assert.deepEqual(t.log.table, [{ type: 'count' }]);
+    assert.ok(sim.act('p1', t.log.table[0]));
+    t.show();
+    const big = () => t.root.all().find((n) => n.className === 'fk-count');
+    assert.equal(big().textContent, '3', 'the count, from the host’s clock');
+    sim.now += 1500;
+    t.show();
+    assert.equal(big().textContent, '2');
+    assert.ok(!uiButton(t.root, '確定'), 'no entry until 「指！」');
+    sim.now += 2000;
+    t.show();
+    assert.equal(big().textContent, '指！');
+    const ok = () => uiButton(t.root, '確定');
+    assert.equal(ok().disabled, true, 'every pointer has to be entered first');
+    const F = R(sim).fake;
+    // tap a chip per row: everybody points at the fake, the fake at someone else
+    const rows = t.root.all().filter((n) => n.className === 'fk-point-row');
+    assert.equal(rows.length, R(sim).artists.length);
+    for (const row of rows) {
+      const chips = row.all().filter((n) => n.tagName === 'button');
+      const fakeChip = chips.find((c) => c.textContent.includes(sim.players.find((p) => p.id === F).name));
+      (fakeChip ?? chips[0]).click();
+    }
+    assert.equal(ok().disabled, false);
+    ok().click();
+    assert.equal(t.log.table.length, 1, 'the first tap only arms');
+    uiButton(t.root, '再㩒一次').click();
+    const sent = t.log.table.at(-1);
+    assert.equal(sent.type, 'point');
+    assert.ok(sim.act('p2', sent), 'the engine takes the entry');
+    assert.equal(R(sim).caught, true);
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+test('fake-artist ui one phone: the look starts the walk, ballots say 「全部投完先好講」, the judge puts the picture first, the result closes with one tap (#2, #29, #30, F7)', async () => {
+  const dom = installDom();
+  const uis = [];
+  try {
+    const sim = onePhone(5, { vote: 'ballot' }, 522);
+    readyAll(sim);
+    drawAll(sim);
+    const t = await mountFakeShared(dom, sim, null);
+    uis.push(t.ui);
+    assert.ok(t.root.visibleText().includes('大家睇清楚幅畫'));
+    uiButton(t.root, '開始投票').click();
+    assert.deepEqual(t.log.table, [{ type: 'start-vote' }]);
+    assert.ok(sim.act('p1', t.log.table[0]));
+    const v = await mountFakeShared(dom, sim, R(sim).vote.voters[0]);
+    uis.push(v.ui);
+    assert.ok(v.root.visibleText().includes('投票中 — 全部投完先好講'), v.root.visibleText());
+    allVote(sim, R(sim).fake);
+    settle(sim);
+    assert.equal(phase(sim), 'guess');
+    // spoken guess on one phone: the picture first, the answer under the cover, the note says how
+    const j = await mountFakeShared(dom, sim, R(sim).judge);
+    uis.push(j.ui);
+    const kids = j.root.all();
+    const boardAt = kids.findIndex((n) => n.className === 'fk-board');
+    const wordAt = kids.findIndex((n) => n.className === 'fk-judge-word');
+    assert.ok(boardAt >= 0 && boardAt < wordAt, 'the picture comes before the covered answer');
+    assert.ok(j.root.visibleText().includes('部手機擺喺中間俾'), j.root.visibleText());
+    sim.act(R(sim).judge, { type: 'verdict', correct: false });
+    assert.equal(phase(sim), 'result');
+    const r = await mountFakeShared(dom, sim, null);
+    uis.push(r.ui);
+    const next = () => uiButton(r.root, '大家睇完 ✓（一下就得）');
+    assert.equal(next().disabled, true, 'a short lock first');
+    dom.flush();
+    r.show();
+    assert.equal(next().disabled, false);
+    assert.ok(!r.root.visibleText().includes('等緊：'), 'no waiting list on the one phone');
+    assert.ok(!r.root.visibleText().includes('（你）'));
+    next().click();
+    assert.deepEqual(r.log.table.at(-1), { type: 'next' });
+    assert.ok(sim.act('p1', { type: 'next', seats: ids(sim), table: true }));
+    assert.notEqual(phase(sim), 'result');
+  } finally {
+    for (const ui of uis) ui.destroy();
+    dom.restore();
+  }
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
+// seat). This checks that the engine's focus, the shell's gates and this UI fit together (DESIGN §7.1).
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false; this.value = '';
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstChild() { return this.children[0] ?? null; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  get outerHTML() { return `<${this.tag} ${JSON.stringify([...this.cls])} ${JSON.stringify(this.attrs)} ${this.hidden} ${this.disabled}>${this.children.map((c) => (c instanceof ShEl ? c.outerHTML : c.data)).join('')}</${this.tag}>`; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  setPointerCapture() {}
+  releasePointerCapture() {}
+  getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; }
+  scrollIntoView() {}
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+  focus() {}
+  blur() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** What a person could read: hidden subtrees left out. */
+const shText = (n) => (n instanceof ShText ? n.data : !n || n.hidden ? '' : n.children.map(shText).join(''));
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, removeEventListener() {}, AudioContext: undefined, scrollTo() {}, devicePixelRatio: 1 };
+  globalThis.requestAnimationFrame = () => 1;            // (the real Canvas paints on frames: never run here)
+  const savedCaf = globalThis.cancelAnimationFrame;
+  globalThis.cancelAnimationFrame = () => {};
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf, cancelAnimationFrame: savedCaf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. `mount` = this game's real ui.mount. */
+async function onePhoneShell(dom, sim, mount) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: game.meta.id, players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false, config: sim.config,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true,
+      holdClock: () => true,
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gameEl = () => shFind(screen.el, (n) => n.cls.has('play-game'))[0];
+  const tap = async (n) => { shTap(n); await shSettle(); await render(); };
+  return {
+    st, acts, render, tap,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => tap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]),
+    game: gameEl,
+    text: () => shText(gameEl()),
+    find: (pred) => shFind(gameEl(), pred),
+    button: (text) => shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && n.textContent.includes(text))[0],
+    tapIn: async (text) => tap(shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && n.textContent.includes(text))[0]),
+    sheetButton: (text) => shFind(shDoc.body, (n) => n.cls.has('menu-sheet')).flatMap((m) => shFind(m, (n) => n.tag === 'button' && n.textContent.includes(text)))[0],
+    destroy: () => screen.destroy(),
+  };
+}
+
+const shWait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('fake-artist, one phone through the real play screen: private deal walk, every stroke behind the PUBLIC card, 一齊指 in the middle, one tap reads the result (#4, #2, U7, F7)', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/fake-artist/ui.js?v=1');
+    const sim = onePhone(4, { endMode: 'rounds', rounds: 2 }, 530);
+    const ph = await onePhoneShell(dom, sim, mount);
+    assert.equal(ph.st.activeSeat, null, 'the phone starts in the middle');
+    while (phase(sim) === 'deal') {
+      assert.equal(ph.gate(), 'private', ph.gateText());
+      assert.ok(ph.gateText().includes('睇卡'), ph.gateText());
+      await ph.tapGate();
+      await ph.tapIn('睇完喇');
+    }
+    // every stroke: the public card (no 「其他人唔好望」, the picture stays in view), then the drawer's screen
+    let strokes = 0;
+    while (phase(sim) === 'draw') {
+      assert.equal(ph.gate(), 'public', `stroke ${strokes + 1}: ${ph.gateText()}`);
+      assert.ok(!ph.gateText().includes('其他人唔好望'), ph.gateText());
+      assert.ok(ph.gateText().includes(`畫第 ${strokes + 1} 筆`), ph.gateText());
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, drawerOf(sim));
+      assert.ok(!ph.find((n) => n.cls.has('c-cover')).some(shShown), 'no re-peek card on the screen everybody watches');
+      assert.ok(ph.button('唔記得題目'), 'the drawer can still ask for a private look');
+      sim.act(drawerOf(sim), { type: 'stroke', length: 150 });
+      strokes += 1;
+      await ph.render();
+    }
+    assert.equal(strokes, 8);
+    // 一齊指: nobody is handed the phone one by one — it goes to the middle
+    assert.equal(phase(sim), 'vote');
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, null);
+    await ph.tapIn('3、2、1');
+    assert.notEqual(sim.view(null).vote.countAt, null);
+    sim.now += 3500;
+    await ph.render();
+    const F = R(sim).fake;
+    const fakeName = sim.players.find((p) => p.id === F).name;
+    for (const row of ph.find((n) => n.cls.has('fk-point-row'))) {
+      const chips = shFind(row, (n) => n.tag === 'button');
+      await ph.tap(chips.find((c) => c.textContent.includes(fakeName)) ?? chips[0]);
+    }
+    await ph.tapIn('確定');
+    await shWait(400);
+    await ph.tapIn('再㩒一次確定');
+    assert.equal(phase(sim), 'tally');
+    assert.equal(R(sim).caught, true);
+    // the spoken guess: the public card to the judge; the picture stays in view for the caught fake
+    sim.advance();
+    await ph.render();
+    assert.equal(phase(sim), 'guess');
+    assert.equal(ph.gate(), 'public', ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, R(sim).judge);
+    assert.ok(ph.text().includes('部手機擺喺中間俾'), ph.text());
+    sim.act(R(sim).judge, { type: 'verdict', correct: false });
+    await ph.render();
+    assert.equal(phase(sim), 'result');
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    await shWait(2600);                                          // the short lock every result has
+    await ph.render();
+    assert.ok(!ph.text().includes('等緊：'), ph.text());
+    await ph.tapIn('大家睇完 ✓（一下就得）');
+    assert.equal(phase(sim), 'deal', 'one tap read it for the whole table: the next round is dealt');
+    assert.equal(ph.gate(), 'private');
+    ph.destroy();
+  });
 });

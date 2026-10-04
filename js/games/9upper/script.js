@@ -124,11 +124,17 @@ export function cueRead({ readSecs, pass, first }) {
  * Start of the explaining step. `mode` = who decides the order: 'judge' (default), 'system', 'free'.
  * Only public facts: the order of a 系統派 round is public to everybody.
  */
-export function cueExplain({ mode, term, first, judge }) {
+export function cueExplain({ mode, term, first, judge, pass = false }) {
   const ask = `${judge}可以追問，但唔可以問人係咩身份。`;
-  if (mode === 'system') return `睇卡完。收起電話，今輪由電話隨機派人，第一位係${first}，解釋「${term}」。${ask}`;
-  if (mode === 'free') return `睇卡完。收起電話，大家自己傾好邊個先講，逐個解釋「${term}」，講完㩒「我講完」。${ask}`;
-  return `睇卡完。收起電話，由${first}開始解釋「${term}」。${judge}可以叫人、追問，但唔可以問人係咩身份。`;
+  // one phone (#19): nobody puts a phone away — it goes back to the 諗樣, who ticks the speakers off
+  const head = pass ? `睇卡完。部手機交返俾${judge}，` : '睇卡完。收起電話，';
+  if (mode === 'system') {
+    return `${head}今輪由電話隨機派人，第一位係${first}，解釋「${term}」。${pass ? `講完由${judge}㩒「講完」。` : ''}${ask}`;
+  }
+  if (mode === 'free') {
+    return `${head}大家自己傾好邊個先講，逐個解釋「${term}」，${pass ? `講完話一聲，${judge}會剔你個名。` : '講完㩒「我講完」。'}${ask}`;
+  }
+  return `${head}由${first}開始解釋「${term}」。${judge}可以叫人、追問，但唔可以問人係咩身份。`;
 }
 
 /** 系統派: one short line each time somebody finishes and the phone deals the next speaker. */
@@ -208,6 +214,8 @@ function explainHint(c, honest) {
   const free = c.speakOrder === 'free';
   if (c.role === 'judge') {
     const tail = c.callouts > 0 ? '覺得離譜就出收皮啦。' : '問夠就揀人。';
+    // one phone: the speakers cannot reach 我講完, so the 諗樣 ticks them off (#11)
+    if (system && c.pass) return `電話派人講，講完你㩒「✅ 講完」；${tail}`;
     if (system) return `電話派人講，你追問（唔可以問身份）；${tail}`;
     if (free) return `大家自己傾次序，講完㩒佢個名；${c.callouts > 0 ? '覺得離譜出收皮啦。' : '問夠就揀人。'}`;
     return `㩒名叫人解釋、隨便追問（唔可以問身份）；${tail}`;

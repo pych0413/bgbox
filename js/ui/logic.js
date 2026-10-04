@@ -3,6 +3,8 @@
 // they run (and are tested) under Node.
 // ============================================================
 
+import { needsEyesClosed } from '../core/engine-kit.js?v=1';
+
 /**
  * Does a game fit the table right now? { ok, reason }.
  * `reason` is shown on the greyed-out picker card. `n` counts seated players
@@ -146,6 +148,9 @@ export function skipNeedsConfirm({ waiting = false, focus = null, night = false,
 export const NIGHT_WORDS = Object.freeze({
   closed: Object.freeze({ title: '閉 眼', hint: '🌙 可以將螢幕調暗啲' }),     // 語音 / 讀稿: eyes shut between your steps
   silent: Object.freeze({ title: '夜 晚', hint: '🌙 可以將螢幕調暗啲' }),     // 靜音: eyes stay open, every phone alike
+  // a shared phone's opaque cover (§7.1): whoever holds it when it comes on puts it back in the middle
+  middle: Object.freeze({ title: '📱 擺返中間', hint: '部手機放返枱中間，閉埋眼' }),
+  middleOpen: Object.freeze({ title: '📱 擺返中間', hint: '部手機放返枱中間' }),   // the same in 靜音 (eyes open)
 });
 
 /**
@@ -159,13 +164,74 @@ export const NIGHT_WORDS = Object.freeze({
  *  - `words` (title + hint) depend on the mode only, never on the seat.
  * No seat (a spectator, the table view) or no night → off.
  */
-export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false } = {}) {
+export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false, table = false } = {}) {
   const silent = mode === 'silent';
   const words = silent ? NIGHT_WORDS.silent : NIGHT_WORDS.closed;
-  if (!seat || !night) return { on: false, level: null, words };
-  if (silent) return { on: true, level: shared && !inFocus ? 'opaque' : 'soft', words };
+  const middle = silent ? NIGHT_WORDS.middleOpen : NIGHT_WORDS.middle;
+  if (!night) return { on: false, level: null, words };
+  // §7.1: a shared phone lying in the middle (no seat on screen) at night is covered, whatever the mode
+  if (shared && (table || !seat)) return { on: true, level: 'opaque', words: middle };
+  if (!seat) return { on: false, level: null, words };
+  if (silent) return shared && !inFocus ? { on: true, level: 'opaque', words: middle } : { on: true, level: 'soft', words };
   if (inFocus) return { on: false, level: null, words };
-  return { on: true, level: shared ? 'opaque' : 'dark', words };
+  return shared ? { on: true, level: 'opaque', words: middle } : { on: true, level: 'dark', words };
+}
+
+// ---------- one phone in the middle (DESIGN §7.1) ----------
+
+/**
+ * What makes a focus "another step" on a shared phone: this phone's called seats (sorted), `anonymous`, `step`
+ * and `open` — never `together`, which follows other phones' progress. '' = no focus.
+ */
+export function focusSig(focus) {
+  if (!focus || typeof focus !== 'object') return '';
+  const pids = Array.isArray(focus.pids) ? focus.pids.filter((x) => typeof x === 'string').sort() : [];
+  return JSON.stringify([pids, focus.anonymous ? String(focus.anonymous) : '', typeof focus.step === 'string' ? focus.step : '', focus.open === true]);
+}
+
+/**
+ * #17: the order a shared phone goes round for one named step. `called` = this phone's called seats (engine
+ * order), `seatOrder` = every seat id round the table, `from` = the holder (else the last holder): clockwise from
+ * there, `from` itself first while it is still called. `ordered` keeps the engine's order. `deferred` seats (#18
+ * 「⏭ 跳過佢」) go to the end.
+ */
+export function walkOrder(called, seatOrder, { from = null, ordered = false, deferred = [] } = {}) {
+  const list = (Array.isArray(called) ? called : []).filter((x, i, a) => typeof x === 'string' && a.indexOf(x) === i);
+  const order = Array.isArray(seatOrder) ? seatOrder : [];
+  let out = list.slice();
+  if (!ordered && list.length > 1) {
+    const i0 = from ? order.indexOf(from) : -1;
+    const n = order.length;
+    const rank = (id) => {
+      const j = order.indexOf(id);
+      if (j < 0) return n + list.indexOf(id);          // not round the table (cannot happen): last, engine order
+      return i0 < 0 ? j : (j - i0 + n) % n;
+    };
+    out.sort((a, b) => rank(a) - rank(b));
+  }
+  const later = new Set(Array.isArray(deferred) ? deferred : []);
+  return [...out.filter((x) => !later.has(x)), ...out.filter((x) => later.has(x))];
+}
+
+/** #33: the private gate's subtitle: 「其他人唔好望 · 第 1 輪投票 · 搞掂 2/5」 (label / progress when known). */
+export function gateSubtitle({ label = '', done = 0, total = 0 } = {}) {
+  const parts = ['其他人唔好望'];
+  if (typeof label === 'string' && label.trim()) parts.push(label.trim());
+  if (total > 1) parts.push(`搞掂 ${Math.max(0, Math.min(done, total))}/${total}`);
+  return parts.join(' · ');
+}
+
+export const ONE_PHONE_NARRATION = '一部手機：大家要閉眼，所以冇靜音 · 📜 讀稿要搵個唔玩嘅人讀';
+
+/**
+ * U1: the narration modes a host may pick for `meta` → `{ modes, note }`. On a whole-table phone a game whose night
+ * needs eyes closed (`engine-kit.needsEyesClosed`) has no 靜音, and `note` says why in one line.
+ */
+export function narrationChoices(meta, { singleDevice = false } = {}) {
+  const barred = !!singleDevice && !!meta && needsEyesClosed(meta);
+  return barred
+    ? { modes: ['voice', 'read'], note: ONE_PHONE_NARRATION }
+    : { modes: ['voice', 'read', 'silent'], note: '' };
 }
 
 // ---------- public "recent events" folds (#10) ----------

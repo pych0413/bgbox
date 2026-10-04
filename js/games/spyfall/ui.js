@@ -77,8 +77,21 @@ export function mount(root, api) {
   const colorOf = (pid) => pl(pid)?.color ?? 'var(--cheese, #f5c518)';
   const me = () => view?.mine?.pid ?? api.me;
   const away = (pid) => !!view?.absent?.includes(pid);
+  // ---- one phone (DESIGN §7.1) ----
+  /** This phone holds 2+ playing seats: the whole table reads it, so it never says 「你」 to them (#20). */
+  const shared = () => api.shared === true;
+  /** …and it lies in the middle of the table now (no seat on screen): the public table screen. */
+  const atTable = () => shared() && api.me == null;
+  /** …and it holds every seated player: one tap there is the table's (U5). */
+  const wholeTable = () => atTable() && api.wholeTable === true;
+  /** U3: the seat on screen took the phone after 🛑 停鐘 → 「邊個要停鐘？」 (api.askWho). */
+  const askedStop = () => ctx.asked?.key === 'stop';
+  /** May this screen accuse / reveal? A phone of its own always; a shared phone only through 🛑 (#13). */
+  const canAct = () => !shared() || askedStop();
+  /** A public one-person step on a shared phone (the 舉手 reporter, a revealed spy): no role card on screen (#4). */
+  const openStep = () => shared() && ctx.focus?.open === true;
   /** 💤 = the host marked the seat absent (public): it is never waited on. */
-  const seatName = (pid) => nameOf(pid) + (pid === me() ? '（你）' : '') + (away(pid) ? ' 💤' : '');
+  const seatName = (pid) => nameOf(pid) + (pid === me() && !shared() ? '（你）' : '') + (away(pid) ? ' 💤' : '');
   /** The other seats this same phone holds (a passed-round phone): one 睇完 counts for all of them. */
   const deviceMates = () => {
     const dev = pl(me())?.deviceId;
@@ -86,6 +99,8 @@ export function mount(root, api) {
   };
   const locName = (i) => view.locations[i]?.name ?? '?';
   const send = (action) => api.send(action);
+  /** A table control: on the shared phone in the middle it is a whole-table tap (api.tableSend), else the seat's own. */
+  const sendT = (action) => (atTable() ? (ctx.tableLocked ? false : api.tableSend?.(action) ?? false) : api.send(action));
 
   const keyed = (node) => {
     let last = null;
@@ -148,28 +163,31 @@ export function mount(root, api) {
   // ---------- header ----------
   function renderHead(v) {
     const my = me();
-    kHead([v.round, v.dealer, v.rules.spies, my && v.totals[my], v.history.length, v.mine == null], () => [
+    const mine = !!v.mine && !shared();
+    kHead([v.round, v.dealer, v.rules.spies, my && v.totals[my], v.history.length, mine], () => [
       h('b', { text: `第 ${v.round.n}/${v.round.of} 局` }),
       h('span', { class: 'pill', text: `發牌員 ${nameOf(v.dealer)}` }),
       h('span', { class: 'pill', text: `${v.rules.spies} 個間諜` }),
-      v.round.of > 1 && v.mine ? h('span', { class: 'pill sf-pts', text: `你 ${v.totals[my] ?? 0} 分` }) : null,
+      v.round.of > 1 && mine ? h('span', { class: 'pill sf-pts', text: `你 ${v.totals[my] ?? 0} 分` }) : null,
     ]);
   }
 
   // ---------- clock ----------
   function renderClock(v) {
-    const running = v.phase === 'play';
+    const running = v.phase === 'play' && !v.halted;
     timerBox.hidden = !running;
     timer.update({ deadline: running ? v.deadline : null, now: () => api.now(), label: '剩餘時間', paused: !!ctx.paused, warnAt: [60, 10] });
-    const mine = running ? v.mine : null;
+    // the 🙋 shortcut acts as the seat on screen: on a shared phone only once that seat took the phone through 🛑 (#13)
+    const mine = running && canAct() ? v.mine : null;
     kClockAct([!!mine, mine?.accUsed ?? null], () => (mine
       ? btn(mine.accUsed ? '🙋 用咗' : '🙋 指控', 'btn-ghost btn-sm sf-clock-acc', jumpToAccuse,
         { disabled: mine.accUsed, 'aria-label': mine.accUsed ? '已用咗指控' : '指控' })
       : null));
-    const stopped = ['vote', 'tally', 'guess'].includes(v.phase);
+    const stopped = ['vote', 'tally', 'guess'].includes(v.phase) || (v.phase === 'play' && v.halted);
     frozenBox.hidden = !stopped;
     if (stopped) {
-      frozenBox.textContent = v.frozen === 0 ? '⏰ 時間到 · 最後投票' : `⏸ 鐘停咗 · 剩 ${fmtClock(v.frozen)}`;
+      frozenBox.textContent = v.frozen === 0 ? '⏰ 時間到 · 最後投票'
+        : v.halted ? `🛑 有人停咗鐘 · 剩 ${fmtClock(v.frozen)}` : `⏸ 鐘停咗 · 剩 ${fmtClock(v.frozen)}`;
       frozenBox.classList.toggle('over', v.frozen === 0);
     }
   }
@@ -237,7 +255,7 @@ export function mount(root, api) {
             api.sfx('tap');
             renderReady(view);
           }));
-      } else out.push(h('p', { class: 'sf-note', text: '你唔喺呢局入面，睇緊就得。' }));
+      } else out.push(h('p', { class: 'sf-note', text: atTable() ? '部手機逐個傳：輪到嘅人睇自己張卡。' : '你唔喺呢局入面，睇緊就得。' }));
       const waiting = v.seats.filter((id) => !v.ready.who.includes(id) && !away(id));
       out.push(h('p', { class: 'sf-note', text: `已準備 ${v.ready.done}/${v.ready.total}${waiting.length ? ` · 等緊 ${waiting.map(nameOf).join('、')}` : ''}` }));
       if (v.absent?.length) out.push(h('p', { class: 'sf-note dim', text: `💤 唔喺度：${v.absent.map(nameOf).join('、')}` }));
@@ -252,14 +270,16 @@ export function mount(root, api) {
 
   // ---------- play: who asks next ----------
   function renderFloor(v) {
-    floorBox.hidden = v.phase !== 'play' || st.mode !== 'main';
+    // U11: a table may play without the tracker (the default on one phone) — the questions are just spoken
+    floorBox.hidden = v.phase !== 'play' || st.mode !== 'main' || v.rules.tracker === false || !!v.halted;
     if (floorBox.hidden) return;
     const f = v.floor;
     const my = me();
-    const active = !!v.mine && !away(my);
+    // the phone in the middle records a pass for whoever is asked: no seat switching for a question (#1)
+    const active = atTable() ? !ctx.tableLocked : !!v.mine && !away(my);
     const used = v.accUsed ?? [];
-    kFloor([f, my, active, used, v.absent], () => {
-      const mineTurn = f.holder === my;
+    kFloor([f, my, active, used, v.absent, shared()], () => {
+      const mineTurn = f.holder === my && !shared();
       // The card turns to someone the moment they are asked, while they are still answering: say "answer, then ask".
       return [
         h('div', { class: 'sf-holder' }, h('b', { text: mineTurn ? '你' : nameOf(f.holder) }),
@@ -273,15 +293,16 @@ export function mount(root, api) {
             class: `sf-seat${pid === f.holder ? ' holder' : ''}${pid === f.prev ? ' prev' : ''}`,
             style: { '--seat': colorOf(pid) },
             disabled: blocked || !active,
-            onclick: () => { api.sfx('tap'); send({ type: 'ask', target: pid }); },
+            onclick: () => { api.sfx('tap'); sendT({ type: 'ask', target: pid }); },
           }, h('i', { class: 'dot' }), h('span', { class: 'nm', text: seatName(pid) }),
           used.includes(pid) ? h('span', { class: 'sf-acc', title: '用咗指控', 'aria-label': '用咗指控', text: '🙋✓' }) : null,
-          pid === f.holder ? h('em', { text: '發問中' }) : pid === f.prev ? h('em', { text: '🚫' }) : null);
+          // (the card turns to whoever is asked while they still answer: 「輪到」, not 「發問中」 — one-phone #31)
+          pid === f.holder ? h('em', { text: '輪到' }) : pid === f.prev ? h('em', { text: '🚫' }) : null);
           // (seatName already carries the 💤 of an absent seat)
         })),
         h('div', { class: 'sf-floor-foot' },
           f.trail.length > 1 ? h('span', { class: 'sf-trail', text: f.trail.map(nameOf).join(' → ') }) : h('span'),
-          f.canUndo && active ? btn('↩ 撤銷', 'btn-ghost btn-sm', () => send({ type: 'undo-ask' })) : null),
+          f.canUndo && active ? btn('↩ 撤銷', 'btn-ghost btn-sm', () => sendT({ type: 'undo-ask' })) : null),
       ];
     });
   }
@@ -303,6 +324,25 @@ export function mount(root, api) {
     try { actionBox.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); } catch { /* an old browser without options */ }
   }
 
+  /**
+   * U3 🛑 停鐘 on the table screen: a whole-table tap that freezes the clock at once (the engine's `stop`), then
+   * 「邊個要停鐘？」 — the tapper picks their own name and gets the phone behind a hand-over card. Closed without a
+   * name, the clock goes on again.
+   */
+  function tableStop() {
+    if (ctx.tableLocked) return;
+    if (view?.halted) { askStopper(); return; }
+    const res = sendT({ type: 'stop' });
+    if (res === false) return;
+    api.sfx('tap');
+    Promise.resolve(res).then((ok) => { if (ok !== false) askStopper(); }, () => {});
+  }
+  function askStopper() {
+    if (typeof api.askWho !== 'function') return;
+    Promise.resolve(api.askWho({ key: 'stop', title: '邊個要停鐘？', subtitle: '揀你自己個名，部手機會交俾你' }))
+      .then((pid) => { if (pid == null) api.tableSend?.({ type: 'resume' }); }, () => {});
+  }
+
   function renderActions(v) {
     const play = v.phase === 'play';
     actionBox.hidden = !play;
@@ -312,14 +352,36 @@ export function mount(root, api) {
       return;
     }
     const mine = v.mine;
+    if (atTable()) {
+      // U3 / #13: the phone in the middle has ONE stop for everybody — 🛑 freezes the clock at once, then whoever
+      // tapped picks their own name and takes the phone (accuse, reveal as the spy, or cancel). Same path for all.
+      kActions(['table', !!v.halted, !!ctx.tableLocked], () => (v.halted
+        ? h('div', { class: 'sf-stopbox' },
+          h('p', { class: 'sf-note strong', text: '鐘停咗：停鐘嗰個揀返自己個名，接部機。' }),
+          h('div', { class: 'grid2' },
+            btn('🙋 揀返我個名', 'btn-primary', askStopper, { disabled: !!ctx.tableLocked }),
+            btn('▶ 繼續計時', 'btn-ghost', () => { api.sfx('tap'); sendT({ type: 'resume' }); }, { disabled: !!ctx.tableLocked })))
+        : h('div', { class: 'sf-stopbox' },
+          btn('🛑 停鐘', 'btn-danger btn-lg sf-stop', tableStop, { disabled: !!ctx.tableLocked }),
+          h('p', { class: 'sf-note dim', text: '要指控或者亮間諜身分就㩒：鐘即刻停，再揀返自己個名。' }))));
+      return;
+    }
     if (!mine) { kActions(['spectator'], () => h('p', { class: 'sf-note', text: '你係觀眾，睇緊就得。' })); return; }
     if (away(me())) {
       if (st.mode !== 'main' || picker) { st.mode = 'main'; st.sel = []; picker?.destroy(); picker = null; pickerHost.hidden = true; }
       kActions(['away'], () => h('p', { class: 'sf-note strong', text: AWAY }));
       return;
     }
+    if (!canAct()) {
+      // a shared phone's seat screen (picked to look at the card): nobody accuses as whoever happens to be on screen
+      if (st.mode !== 'main' || picker) { st.mode = 'main'; st.sel = []; picker?.destroy(); picker = null; pickerHost.hidden = true; }
+      kActions(['shared-seat'], () => h('div', { class: 'sf-stopbox' },
+        h('p', { class: 'sf-note', text: '要指控或者亮間諜身分：擺返中間㩒「🛑 停鐘」，再揀返自己個名。' }),
+        btn('📱 擺返中間', 'btn-ghost', () => { api.sfx('tap'); api.toTable?.(); })));
+      return;
+    }
     // The key never holds isSpy: every phone builds exactly the same buttons and panels.
-    kActions([st.mode, mine.accUsed, v.rules.spies], () => {
+    kActions([st.mode, mine.accUsed, v.rules.spies, askedStop()], () => {
       if (st.mode === 'spy') {
         // The same panel on every phone, opened with no sound. For a non-spy 「我係間諜，停鐘」 closes it exactly
         // like 取消 and sends nothing, so no screen can be held up as proof of innocence.
@@ -340,10 +402,17 @@ export function mount(root, api) {
           h('p', { class: 'sf-note', text: `指控會即刻停鐘。${needText(v)}。每人每局得一次。` }),
           btn('取消', 'btn-ghost btn-sm', leaveMode));
       }
-      return h('div', { class: 'grid2 sf-act-grid' },
+      const grid = h('div', { class: 'grid2 sf-act-grid' },
         btn(mine.accUsed ? '已用咗指控' : '🙋 指控', mine.accUsed ? 'btn-ghost' : 'btn-primary', () => setMode('accuse'), { disabled: mine.accUsed }),
         // Present on every phone and identical on every phone: no sound, no toast, the same confirm panel.
         btn('🕵️ 我係間諜', 'btn-ghost', () => setMode('spy')));
+      if (!askedStop()) return grid;
+      // U3: handed the phone after 🛑 — 取消 starts the clock again from where it stopped and puts the phone back
+      return [
+        h('p', { class: 'sf-note strong', text: '鐘停咗。你要做咩？' }),
+        grid,
+        btn('取消 · 繼續計時', 'btn-ghost sf-stop-cancel', () => { send({ type: 'resume' }); api.toTable?.(); }),
+      ];
     });
 
     if (st.mode === 'accuse') {
@@ -416,7 +485,7 @@ export function mount(root, api) {
         out.push(h('p', { class: 'sf-note strong', text: AWAY }));
       } else if (mine) {
         out.push(h('p', { class: 'sf-note strong', text: '你被指控，唔使投票。等其他人投。' }));
-      } else out.push(h('p', { class: 'sf-note', text: '你係觀眾，睇緊就得。' }));
+      } else out.push(h('p', { class: 'sf-note', text: atTable() ? '大家輪流投緊：部手機會逐個交，投完先公佈。' : '你係觀眾，睇緊就得。' }));
       out.push(h('p', { class: 'sf-note', text: `已投 ${vt.voted.length}/${vt.voters.length}${waiting.length ? ` · 等緊 ${waiting.map(nameOf).join('、')}` : ''}` }));
       out.push(h('div', { class: 'sf-pips' }, vt.voters.map((id) => h('i', { class: vt.voted.includes(id) ? 'on' : '', title: nameOf(id) }))));
       return out;
@@ -482,7 +551,8 @@ export function mount(root, api) {
 
   // ---------- my card ----------
   function renderCard(v) {
-    const show = !!v.mine && WITH_CARD.has(v.phase);
+    // a public one-person step on a shared phone (#4): the screen is the table's, so no role card on it
+    const show = !!v.mine && WITH_CARD.has(v.phase) && !openStep();
     cardBox.hidden = !show;
     if (!show) { roleCard.close(); return; }
     roleCard.update({
@@ -499,8 +569,10 @@ export function mount(root, api) {
     const guesser = v.phase === 'guess' && v.guess.current === me() && !!v.mine;
     if (guesser && !st.listOpen) st.listOpen = true;
     const picked = v.guess ? Object.values(v.guess.picks) : [];
-    const struck = [...st.strikes].sort((a, b) => a - b);
-    kList([st.listOpen, struck, v.locations.map((l) => l.used), picked, st.pick, guesser], () => {
+    // #22: the phone in the middle is read by everybody — nobody's strikes on it (they could hint at the spy)
+    const table = atTable();
+    const struck = table ? [] : [...st.strikes].sort((a, b) => a - b);
+    kList([st.listOpen, struck, v.locations.map((l) => l.used), picked, st.pick, guesser, table], () => {
       const head = h('div', { class: 'sf-list-head' },
         h('button', {
           type: 'button', class: 'sf-list-toggle', 'aria-expanded': String(st.listOpen),
@@ -508,7 +580,9 @@ export function mount(root, api) {
         }, h('span', { text: `📍 地點清單 · ${v.locations.length} 個` }), h('span', { class: 'chev', text: st.listOpen ? '▴' : '▾' })),
         struck.length && !guesser ? btn('還原劃線', 'btn-ghost btn-sm', () => { st.strikes.clear(); renderList(view); }) : null);
       if (!st.listOpen) return head;
-      const hint = guesser ? '㩒你要揀嘅地點' : '㩒一下劃走（淨係你部手機見到）。灰色 = 舊局用過，唔會再係答案。';
+      const hint = guesser ? '㩒你要揀嘅地點'
+        : table ? '灰色 = 舊局用過，唔會再係答案。'
+          : '㩒一下劃走（淨係呢部機見到；一部機輪流玩，換人會清返）。灰色 = 舊局用過，唔會再係答案。';
       const groups = [];
       for (const loc of v.locations) {
         let g = groups[groups.length - 1];
@@ -522,6 +596,7 @@ export function mount(root, api) {
           class: ['sf-loc', st.strikes.has(loc.i) && !guesser ? 'struck' : '', loc.used ? 'used' : '', picked.includes(loc.i) ? 'picked' : '', st.pick === loc.i ? 'is-sel' : ''].filter(Boolean).join(' '),
           onclick: () => {
             if (guesser) { st.pick = loc.i; api.sfx('tap'); renderGuess(view); renderList(view); return; }
+            if (table) return;
             if (st.strikes.has(loc.i)) st.strikes.delete(loc.i); else st.strikes.add(loc.i);
             api.sfx('tap');
             renderList(view);
@@ -548,14 +623,20 @@ export function mount(root, api) {
     }
     const ready = st.endLeft <= 0;
     const seen = v.phase === 'roundEnd' ? v.seen : null;
-    const iSeen = !!v.mine?.seen || st.seenFor === e.n;
-    const canNext = v.phase === 'roundEnd' && !!v.mine && !away(me()) && !iSeen;
-    kEnd([e, v.totals, canNext && ready, v.phase, me(), st.endLeft, seen, iSeen, v.absent], () => {
+    // §7.1 the shared phone in the middle: one 睇完 for every seat it holds (api.tableSend); on a one-phone table
+    // that is everybody — 「大家睇完 ✓（一下就得）」, no waiting list, locked while the 「擺返中間」 card is up (U5)
+    const table = atTable();
+    const mates = table ? (api.mySeats ?? []).filter((id) => !away(id)) : [];
+    const iSeen = table ? (st.seenFor === e.n || (!!seen && mates.length > 0 && mates.every((id) => seen.who.includes(id))))
+      : !!v.mine?.seen || st.seenFor === e.n;
+    const canNext = v.phase === 'roundEnd' && !iSeen && (table ? mates.length > 0 : !!v.mine && !away(me()));
+    const locked = table && !!ctx.tableLocked;
+    kEnd([e, v.totals, canNext && ready, v.phase, me(), st.endLeft, seen, iSeen, v.absent, table, locked], () => {
       const spyWon = e.winTeam === 'spy';
       const rows = v.seats.map((pid) => {
         const isSpy = e.spies.includes(pid);
         const d = e.deltas[pid] ?? 0;
-        return h('div', { class: `sf-row${isSpy ? ' is-spy' : ''}${pid === me() ? ' is-me' : ''}` },
+        return h('div', { class: `sf-row${isSpy ? ' is-spy' : ''}${pid === me() && !shared() ? ' is-me' : ''}` },
           h('i', { class: 'dot', style: { '--seat': colorOf(pid) } }),
           h('span', { class: 'nm', text: seatName(pid) + (seen?.who.includes(pid) ? ' ✓' : '') }),
           h('span', { class: 'role', text: isSpy ? '🕵️ 間諜' : e.roles[pid] ?? '' }),
@@ -575,13 +656,14 @@ export function mount(root, api) {
         // D3: the table moves on once every present seat has tapped 睇完 (the host's 下一步 can force it). The button
         // is the same on every phone; after the tap it only says you are done.
         canNext
-          ? btn('睇完 ✓', 'btn-primary btn-lg', markSeen, { disabled: !ready })
-          : v.phase === 'roundEnd' && v.mine && !away(me())
-            ? btn('✓ 睇完 · 等緊其他人', 'btn-ghost btn-lg', null, { disabled: true })
+          ? btn(table ? (wholeTable() ? '大家睇完 ✓（一下就得）' : '睇完 ✓（呢部機嘅人）') : '睇完 ✓', 'btn-primary btn-lg', markSeen,
+            { disabled: !ready || locked })
+          : v.phase === 'roundEnd' && (table ? mates.length > 0 : v.mine && !away(me()))
+            ? btn(table && wholeTable() ? '✓ 睇完' : '✓ 睇完 · 等緊其他人', 'btn-ghost btn-lg', null, { disabled: true })
             : null,
         // a short lock, so a tap meant for the last screen cannot skip the reveal — and it says how long
         canNext && !ready ? h('p', { class: 'sf-note dim sf-end-wait', text: `睇清楚先，${st.endLeft} 秒後先㩒得` }) : null,
-        seen ? h('p', { class: 'sf-note sf-seen', text: seenLine(v, e) }) : null,
+        seen && !wholeTable() ? h('p', { class: 'sf-note sf-seen', text: seenLine(v, e) }) : null,
       ];
     });
   }
@@ -589,10 +671,14 @@ export function mount(root, api) {
   function markSeen() {
     const e = view?.end;
     if (!e || st.seenFor === e.n) return;
+    if (atTable()) {
+      if (sendT({ type: 'next-round' }) === false) return;
+    } else {
+      const mates = deviceMates();
+      send(mates.length ? { type: 'next-round', seats: mates } : { type: 'next-round' });
+    }
     st.seenFor = e.n;
     api.sfx('tap');
-    const mates = deviceMates();
-    send(mates.length ? { type: 'next-round', seats: mates } : { type: 'next-round' });
     renderEnd(view);
     const n = e.n;
     later(() => {                 // a tap that never reached the host must not leave this phone stuck
@@ -622,7 +708,7 @@ export function mount(root, api) {
     }
     if (v.phase === 'play') {
       const holder = v.floor?.holder ?? null;
-      if (holder && holder !== st.holder && holder === my && st.phase === 'play') api.sfx('turn');
+      if (holder && holder !== st.holder && holder === my && !shared() && st.phase === 'play') api.sfx('turn');
       st.holder = holder;
     }
     st.phase = v.phase;
@@ -642,7 +728,7 @@ export function mount(root, api) {
       st.sel = [];
       st.pick = null;
       st.sentReady = false;
-      st.listOpen = v.phase === 'reveal';
+      st.listOpen = v.phase === 'reveal' || atTable();   // the table screen keeps the public list open (#1)
       st.holder = null;
       if (picker) { picker.destroy(); picker = null; }
       kReady(null, () => null);
@@ -650,7 +736,7 @@ export function mount(root, api) {
     if (st.phase === 'reveal' && v.phase === 'play') {
       // Play starts: the blocks reorder (clock and question card first), so start from the top, and fold the
       // location list once — its 📍 toggle reopens it — so it does not push everything off the screen.
-      st.listOpen = false;
+      st.listOpen = atTable();
       try { globalThis.scrollTo?.(0, 0); } catch { /* no window */ }
     }
     wrap.dataset.phase = v.phase;

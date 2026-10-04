@@ -40,7 +40,7 @@ host's ruling), show the leaderboard after every cycle, remember every word and 
 
 | key | UI label | type | default | notes |
 |---|---|---|---|---|
-| `drawMode` | 畫喺邊 | select `canvas` / `paper` | `canvas` | |
+| `drawMode` | 畫喺邊 | select `canvas` / `paper` | `canvas` | help (canvas) 「畫家喺手機上畫，大家睇住同一幅畫（各自部機，或者擺喺中間嗰部）。」 — fits one phone and phones of their own alike (D6) |
 | `guessMode` | 點樣估 | select `shout` / `typed` | `shout` | typed warns 「打字估要每人用自己部手機」 |
 | `teamMode` | 玩法 | select `ffa` / `teams` | `ffa` | `teams` needs n ≥ 4 |
 | `teams` | 幾多隊 | int 2–4 | 2 | only with teams; `teams × 2 ≤ n` |
@@ -55,7 +55,9 @@ host's ruling), show the leaderboard after every cycle, remember every word and 
 
 `config.defaults(n, prev, env)` keeps the previous choices (sanitised), falls back to FFA when n < 4, clamps `teams`
 to ⌊n/2⌋, and with `env.singleDevice` (the Room passes it: one device holds every seat) **never keeps typed** — a
-pass-the-phone table always starts on 🗣️ 講出口; the drawing mode and the rest are kept. `cycles`, `teamRounds` and
+pass-the-phone table always starts on 🗣️ 講出口; the drawing mode and the rest are kept. It also sets the hidden
+`passPhone` (no field) to `env.singleDevice`: the play cue then says 「部手機擺喺中間」 and the drawing step's gate label
+reads 「擺喺枱中間畫」 (§4). `cycles`, `teamRounds` and
 `roundSeconds` are `0 = auto`, so they follow the head-count and the mode by themselves. Summary lines (lobby):
 「6 人：每人畫 2 次，共 12 輪 · 約 22 分鐘」 · 「📱 手機畫板」 · 「🗣️ 講出口」 · 「每輪 80 秒」 · optional 「冇提示」,
 「難詞多分」, 「類別：…」, 「難度：…」.
@@ -78,12 +80,12 @@ The head-count reason is also the help line of 每人畫幾次: 「6 人：每�
 ### Validation
 
 `config.validate(cfg, n, env?)`. Errors (block start): head-count outside 3–12; an unknown enum value; a number out of
-range or not an integer (numeric strings from a `<select>` are accepted); teams with n < 4; `teams × 2 > n`.
-Warnings: typed (one phone per player — with `env.singleDevice` the stronger 「一部手機唔啱打字估：其他人冇得打字。請揀
-「講出口」。」); typed + paper (「大家望住張紙，用自己部手機打答案」); more than 16 turns (says the minutes); uneven
-teams (「隊伍人數唔平均…」); 10+ players FFA (「分隊玩會更緊湊」); typed with 3 players; exactly one category (no
-category hint, smaller pool). Typed on one phone is a warning, not an error: it can be played (the phone goes round),
-just badly.
+range or not an integer (numeric strings from a `<select>` are accepted); teams with n < 4; `teams × 2 > n`; **typed with
+`env.singleDevice`** (one-phone playtest #21: 「一部手機冇得打字估：其他人冇得打字，請揀「講出口」。」 — only the drawer
+ever holds the phone during `play`, so nobody else could type and every turn would time out).
+Warnings: typed (「打字估要每人用自己部手機；一部手機輪流玩請用講出口。」); typed + paper (「大家望住張紙，用自己部手機打答案」);
+more than 16 turns (says the minutes); uneven teams (「隊伍人數唔平均…」); 10+ players FFA (「分隊玩會更緊湊」); typed with
+3 players; exactly one category (no category hint, smaller pool).
 
 ### Dealing words
 
@@ -109,7 +111,7 @@ A turn is one drawer with one word. `play` has sub-steps `run` · `grace` · `bu
 
 | Seat | Shows |
 |---|---|
-| Drawer | 「到你畫！揀一個詞」 (the screen flashes twice — typed play is silent — and an Android phone vibrates; iPhone Safari cannot), three big cards — tier (⭐ 簡單 / ⭐⭐ 中等 / ⭐⭐⭐ 困難), the word, 「類別 · N 隻字 · 最多 30／45／60 分」 (teams: 「全隊 +1 分」 or 「+n 分」) —, a 「🔄 唔鍾意？換一批（得一次）」 button (two taps) and a 20 s clock. Paper mode adds 「先攞定張白紙同支筆」 |
+| Drawer | 「到你畫！揀一個詞」 (the screen flashes twice — typed play is silent — and an Android phone vibrates; iPhone Safari cannot), three big cards — tier (⭐ 簡單 / ⭐⭐ 中等 / ⭐⭐⭐ 困難), the word, 「類別 · N 隻字 · 最多 30／45／60 分」 (teams: 「全隊 +1 分」 or 「+n 分」) —, a 「🔄 唔鍾意？換一批（得一次）」 button (two taps) and a 20 s clock. Note: 「揀完就即刻計時，其他人隨即睇到你畫。…」; on a whole-table phone (`api.wholeTable`, #16) 「揀好就將部手機平放喺枱中間，大家望住你畫。…」 (paper: 「先攞定紙筆。揀好就將部手機擺喺枱中間計時，…」) |
 | Everyone else | 「✏️ 阿明 揀緊詞…」 (teams: with the team), a calm 「最遲 15 秒後開始畫」 (no beeps), 「之後到：阿B → 阿C → 阿D」 and the scores |
 
 20 s (research: 12 s — §9). Time out → the **medium** card is picked. Re-roll: once per turn; burns the three words for
@@ -137,7 +139,9 @@ only gets the category. Hints never change points themselves — time does.
 
 **Drawer's seat** additionally: the word behind a 「👁 㩒一下睇個詞」 chip (tap → shown for 2.5 s, plus the accepted
 aliases 「都接受：…」; the chip sits in a fixed-height slot and opens UPWARD over the mask and hint rows, so a peek never
-moves the canvas under a drawing finger); canvas mode: the **canvas with full tools** (8 colours, 3 widths, eraser, undo, clear); then for
+moves the canvas under a drawing finger) — on a **shared phone** (`api.shared`, #22) the slim hold-to-peek cover
+「拎起部機，㩒住睇個詞」 instead, because that phone lies face up in the middle; canvas mode: the **canvas with full tools** (8 colours, 3 widths, eraser, undo, clear) —
+on a shared phone it takes the full width and the name chips sit under it (D9: the table guesses from this very screen); then for
 - 🗣️ shout: 「邊個估中？㩒佢個名」 — one chip per eligible guesser;
 - ⌨️ typed: the live feed of everybody's guesses (newest first) with a ✔ per guess that the checker did not accept.
   The feed never spells the word: a right guess reads 「✅ 估中（已計）」 with no text, and a private near miss has every
@@ -164,7 +168,7 @@ phone they are reachable whichever seat is on screen. 作廢 is *not* repeated t
 sits in the same menu and sends `@void-round`, which voids exactly the same turns.
 
 **Shout-mode resolution** (research "Voting & resolution B"):
-1. The drawer taps a name → a **3 s grace window** opens (「✅ 確認緊 — 仲有人同時估中就加埋，揀錯可以撤銷」, a
+1. The drawer taps a name → a **3 s grace window** opens (「✅ 仲有人估中？一齊㩒 · ↩ 撤銷」 — short, the window lasts 3 s (D10), a
    「確認中」 clock). The first tap fixes `r`; every further tap inside the window is a co-winner with the **same** `r`;
    each solved chip shows 「✅ ↩」 and tapping it undoes that one. Undoing the last one resumes the turn **with the
    clock exactly where it was** (it is frozen during the window, §9).
@@ -218,7 +222,8 @@ default 「點解會咁」 suits a hidden-role reveal). `result.lines` come in t
 (`'── 標題 ──'` lines, which the results screen turns into sections):
 - `── 排名 ──` 🥇 阿明 142 分（估中 5 次 · 畫畫得 61 分） … (teams: 🥇 🔴 紅隊 4 分（阿明、阿B、阿C）);
 - `── 亮點 ──` 「🎨 最勁畫家：…（平均每次畫得 21.5 分）」, 「⚡ 最快反應：阿B（3.2 秒估中「老虎」）」, 「⭐ 最多困難詞估中：…」
-  (a highlight shared by more than half the players highlights nobody and is left out);
+  (a highlight shared by more than half the players highlights nobody and is left out; 最快反應 only for a solve in the
+  first half of its turn — D10);
 - `── 每輪重溫 ──` **one line per turn** (BACKLOG #10 — who drew which word, who got it, the points, fouls):
   「第 3 輪 · 阿明 畫「摩天輪」⭐⭐ — 阿B 估中 ｜ 阿B +34 · 阿明（畫）+28」.
 `result.points`: every winner (all tied winners) gets **1 evening point**, the others 0 (research "How the game ends");
@@ -232,15 +237,28 @@ shows the clock, the mask and the hints. **No phone shows a canvas** and no ink 
 drops any stroke). Shout and typed guessing both work: typed players look at the paper and type on their own phones.
 After the word is dealt nothing needs the network.
 
-**One shared phone, 🗣️ 講出口 only.** `config.defaults` never keeps typed when `env.singleDevice`, `presets` drop the
-typed one, `validate` warns if typed is chosen anyway. `focus` names the drawer during `choose` and `play`, so the shell
-puts a PassGate in front of each drawer (「交俾 阿明 ・ 其他人唔好望」). The drawer taps a card behind the gate, then
-lays the phone flat in the middle: it keeps showing the drawer's seat — the clock, **the mask and the hints**, and the
-name chips. The word stays behind the peek chip / hold-to-peek cover, so the table cannot read it off the screen
-(tested: no non-drawer seat view and no table view on that device ever holds an unrevealed character or an unpicked
-offer, and the drawer's screen never shows the word unless tapped). In canvas mode the drawer draws on that phone and
-everybody watches; in paper mode the phone is just the clock. During `reveal` / `standings` `focus` is `null`.
-On one phone only the active (drawer's) seat is on screen during play, so 🚩 is not reachable: fouls are settled at the
+**One shared phone, 🗣️ 講出口 only** (DESIGN §7.1; one-phone playtest #2, #16, #21–#23, D6–D9, U10).
+`config.defaults` never keeps typed when `env.singleDevice` and sets the hidden `passPhone`; `presets` drop the typed one;
+`validate` refuses typed on one phone. The phone moves like this:
+
+1. `choose`: `focus = { pids: [drawer], label: '揀詞', hold: true }` — the shell's private gate 「交俾 阿明 · 其他人唔好望 ·
+   揀詞」, also when the drawer is already on screen (the host as first drawer, a re-queued voided turn: #2). On a
+   whole-table phone the 20 s pick clock is **held** while that gate (or the 擺返中間 card before it) is unanswered (U10,
+   #23): the clock counts from the moment the drawer has the phone.
+2. `play`: `focus = { pids: [drawer], open: true, label: '擺喺枱中間畫' (passPhone; else '畫畫'), hold: true }` — a public
+   one-person step (#4): the shell's light card 「輪到 阿明 · 擺喺枱中間畫 · 大家一齊睇 · 阿明 㩒一下開始」 over the table
+   view, and the drawing clock does not start until the drawer taps it. The drawer's screen says 「部手機平放喺枱中間畫 ·
+   唔准講嘢、寫字同數字。」 (paper: 「部手機擺喺中間計時，用紙筆畫 · …」), the play cue 「開始！部手機擺喺中間。限時 80 秒。…」
+   (#16). It keeps showing the clock, **the mask and the hints**, the full-width canvas and, under it, the name chips. The
+   word stays behind the hold cover 「拎起部機，㩒住睇個詞」 (#22), so the table cannot read it off the screen (tested: no
+   non-drawer seat view and no table view on that device ever holds an unrevealed character or an unpicked offer, and the
+   drawer's screen never shows the word unless held). In paper mode the phone is just the clock.
+3. `reveal` / `standings`: `focus` is `null` → the phone goes to the middle behind the shell's table card and shows the
+   table view: the answer, the points and 「下一個畫：阿B（之後：阿C → 阿D）」 (D8 — the waiting screen's queue is never on
+   show on one phone). The table screen's play prompt is the shout line, never 「旁觀緊」.
+
+No screen of a shared phone says 「你」: no 「（你）」 in names, no `.me` chip, no 「you won」 sound (#20).
+On one phone only the drawer's seat is on screen during play, so 🚩 is not reachable: fouls are settled at the
 table; the host's ⋯ menu has ＋30 秒, the foul ruling (`engine.hostActions`) and 🗑️ 呢輪作廢 (`@void-round`) for whichever seat is on screen.
 ⌨️ typed needs a phone per player: one phone cannot type for everybody.
 
@@ -380,7 +398,9 @@ view (e.g. 「揀一個你畫得出嘅詞，星多分高；可以換一批。」
 「有人舉報畫家犯規，計時停咗，等主持裁決。」). Shown only behind the shell's 💡, never by itself.
 `rules.quick` is 6 lines; every role's text is 「做乜：… 點贏：…」 (the 💡 sheet splits it) and its `team` is a colour,
 so the sheet shows no 好人／壞人 label.
-`focus`: the drawer during `choose` and `play`; `null` otherwise. `canInk`: the drawer while `play` in canvas mode,
+`focus`: the drawer during `choose` (`{ pids, label: '揀詞', hold: true }`, private) and `play` (`{ pids, open: true, label:
+'擺喺枱中間畫' | '畫畫', hold: true }`, public — §4); `null` otherwise. Single-seat phones ignore the one-phone hints.
+`canInk`: the drawer while `play` in canvas mode,
 not during a ruling; `inkEpoch` bumps at every turn start (canvas mode), which makes the session clear the picture.
 `legalActions` lists every action that changes the state (the late ✔ / late 🚩 are not listed: whether their window is
 open depends on the clock, which `legalActions` cannot see — the fuzzer adds them itself; a typed example guess is unique
@@ -427,8 +447,15 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
   label, `roleFor` finds the seat's role; `CATEGORIES` covers every real bank category; defaults valid for n 3–12 with
   hostile `prev`; the turn table (3 → 9, 4 → 8, …, 12 → 12) and the team-rounds table; validation matrix and warnings;
   fields/summary.
-- One phone: typed never survives `defaults(…, { singleDevice })` for any n or prev, the warning names it, no typed
-  preset; paper / canvas presets; the topics field's `bank` + `matches` (#11).
+- One phone: typed never survives `defaults(…, { singleDevice })` for any n or prev, `validate` refuses it with a message
+  that says why (#21), no typed preset, the hidden `passPhone` follows the env; paper / canvas presets; the topics field's
+  `bank` + `matches` (#11). Focus carries `label` / `hold` (choose) and `open` / `label` / `hold` (play); the play cue says
+  「部手機擺喺中間」 only with `passPhone`; 最快反應 only for a solve in the first half of its turn (D10). UI on a shared phone:
+  the 平放喺枱中間 lines (whole-table), the slim hold cover instead of the tap chip, the full-width canvas with the chips under
+  it, the shout line on the table screen, 「之後：…」 on the reveal, never 「（你）」; phones of their own unchanged. Through the
+  REAL play screen (paper, one whole-table phone): the private 揀詞 gate with the clock held (`holdClock(true)` → `false` on
+  the tap), the public 「擺喺枱中間畫」 card over the table screen with the drawing clock held, the word only under the
+  cover, the reveal in the middle.
 - Judge: normalisation; right answers (word, alt, script, width, filler, ambiguous groups); lists of answers never match and never
   count as wrong; close / near / wrong rules; strictness; the "wrong never contains the answer" property over the bank;
   D9: no 好接近 from a same-place character on 2-character words (before or after the reveal), nor from revealed characters
@@ -511,9 +538,11 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 
 ## 9. Deviations from the research doc (kept, with why)
 
-- **Choice clock 20 s** (research 12 s). On a shared phone the clock starts while the phone is handed over and the PassGate
-  waits for a tap; 12 s would often auto-pick before the drawer has read three cards (4-character idioms included). On
-  separate phones it is only a ceiling — most drawers pick in a few seconds.
+- **Choice clock 20 s** (research 12 s). 12 s would often auto-pick before the drawer has read three cards (4-character
+  idioms included). On a whole-table phone the clock is held while the PassGate waits for its tap (U10, `focus.hold`), so
+  the 20 s count from the moment the drawer has the phone — and so does the drawing clock, held behind the public
+  「擺喺枱中間畫」 card. (A phone shared by only some of the seats still runs the clock during the hand-over.) On separate
+  phones it is only a ceiling — most drawers pick in a few seconds.
 - **No separate 3 s intro step** (research 2.1). The choice screen already tells every phone who draws (and the cue says it);
   a 3 s pause before it would only add dead time to every turn.
 - **Teams get the 3 s grace window too** (research: a team turn ends at the tap). A drawer's finger on a phone lying on the table

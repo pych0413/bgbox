@@ -383,8 +383,14 @@ test('onuw: defaults on ONE phone for everybody pick the slow pace (pass-the-pho
   assert.equal(config.defaults(5, joined, { singleDevice: true }).pace, 'slow', 'and slow again on one phone');
   assert.equal(config.fields(alone, 5).some((f) => f.key === 'paceAuto'), false, 'the marker is not a form field');
   assert.equal(config.validate({ ...alone, paceAuto: 'x' }, 5).message.includes('undefined'), false);
-  // the pace stretches EVERY window by the same factor, so a slow table still tells nothing
-  for (const k of ['doppelganger', 'werewolf', 'seer', 'drunk']) assert.equal(game.windowMs(d, k), Math.round(game.windowMs({ ...d, pace: 'standard' }, k) * 1.5));
+  // the pace stretches EVERY window by the same factor, so a slow table still tells nothing (and one phone adds the
+  // same hand-over pad to every role step on top, U6)
+  assert.equal(d.passPhone, true);
+  const bare = { ...d, passPhone: false };
+  for (const k of ['doppelganger', 'werewolf', 'seer', 'drunk']) {
+    assert.equal(game.windowMs(bare, k), Math.round(game.windowMs({ ...bare, pace: 'standard' }, k) * 1.5));
+    assert.equal(game.windowMs(d, k), game.windowMs(bare, k) + game.PASS_PAD_MS);
+  }
 });
 
 // ============================================================
@@ -1233,7 +1239,7 @@ test('onuw: ring vote — everyone agrees and every player ends on exactly one v
     order.slice(0, -1).forEach((p) => sim.act(p, { type: 'ring', on: true }));
     assert.equal(st(sim).phase, 'vote', 'one seat has not agreed');
     assert.deepEqual(sim.focus().pids, [order.at(-1)]);
-    assert.deepEqual(engine.view(st(sim), order[0]).ring, { on: true, done: n - 1, total: n, mine: true, stuck: false });
+    assert.deepEqual(engine.view(st(sim), order[0]).ring, { on: true, done: n - 1, total: n, mine: true, stuck: false, fallback: false });
     sim.act(order.at(-1), { type: 'ring', on: true });
     assert.equal(st(sim).phase, 'reveal');
     assert.deepEqual(R(sim).dead, []);
@@ -3382,5 +3388,376 @@ test('onuw ui: with seats marked 💤 and back through whole random games, every
       pushViews(sim, seats);
       for (const s of Object.values(seats)) s.handle.destroy();
     }
+  });
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest C1–C12: #5, #6, #7, #8, #19, #20, #24, #25, #40; U1, U2, U6, U8)
+// ============================================================
+
+test('onuw: meta — an eyes-closed night (no 靜音 on a whole-table phone, U1) with a noise bed under it (U8)', async () => {
+  assert.equal(meta.eyesClosed, true);
+  assert.equal(meta.nightAmbient, true);
+  const { needsEyesClosed } = await import('../js/core/engine-kit.js');
+  assert.equal(needsEyesClosed(meta), true);
+});
+
+test('onuw: one phone (passPhone, U6) — every role step gets the same +8 s hand-over pad, awake or in the centre; begin and dawn do not; it follows the room', () => {
+  const one = config.defaults(5, undefined, { singleDevice: true });
+  assert.equal(one.passPhone, true);
+  assert.equal(config.fields(one, 5).some((f) => f.key === 'passPhone'), false, 'a hidden marker, not a form field');
+  assert.equal(config.validate(one, 5).ok, true);
+  assert.equal(config.validate({ ...one, passPhone: 'x' }, 5).ok, false);
+  assert.ok(config.summary(one, 5).includes('📱 每步加 8 秒交機'));
+  assert.ok(!config.summary(config.defaults(5), 5).some((l) => l.includes('交機')));
+  const joined = config.defaults(5, one, { singleDevice: false });
+  assert.equal(joined.passPhone, false, 'a second phone joins: back to one phone each');
+  assert.equal(config.defaults(5, joined, { singleDevice: true }).passPhone, true);
+  for (const k of ['doppelganger', 'werewolf', 'minion', 'mason', 'seer', 'robber', 'troublemaker', 'drunk', 'insomniac']) {
+    assert.equal(game.windowMs(one, k), game.windowMs({ ...one, passPhone: false }, k) + 8000, k);
+  }
+  for (const k of ['begin', 'dawn']) assert.equal(game.windowMs(one, k), game.windowMs({ ...one, passPhone: false }, k), k);
+  // played: the werewolf step with both wolves in the centre lasts exactly as long as with a wolf awake
+  const lens = [];
+  for (const [deal, centre] of [
+    [{ p1: 'werewolf', p2: 'seer', p3: 'robber', p4: 'villager' }, ['werewolf', 'troublemaker', 'villager']],
+    [{ p1: 'villager', p2: 'seer', p3: 'robber', p4: 'troublemaker' }, ['werewolf', 'werewolf', 'villager']],
+  ]) {
+    const sim = scenario(deal, centre, { passPhone: true });
+    openStep(sim, 'werewolf');
+    lens.push(st(sim).deadline - sim.now);
+    assert.equal(engine.view(st(sim), null).step.windowMs, st(sim).deadline - sim.now, 'the bar\'s length is public and exact');
+    assert.equal(engine.view(st(sim), 'p2').step.windowMs, st(sim).deadline - sim.now);
+  }
+  assert.equal(lens[0], lens[1]);
+  assert.equal(lens[0], 12000 + 8000);
+});
+
+test('onuw: one phone — the begin line asks for a hand on the table, the vote line says the phone goes round; a lapsed ability reads 「時間到或者唔想用」', () => {
+  const one = scenario({ p1: 'werewolf', p2: 'robber', p3: 'villager', p4: 'seer' }, ['werewolf', 'troublemaker', 'villager'], { passPhone: true });
+  toNight(one);
+  assert.ok(one.cue().text.includes('部手機放喺枱中間') && one.cue().text.includes('一隻手放喺枱上'));
+  const own = scenario({ p1: 'werewolf', p2: 'robber', p3: 'villager', p4: 'seer' }, ['werewolf', 'troublemaker', 'villager']);
+  toNight(own);
+  assert.ok(own.cue().text.includes('大家將部手機放低'));
+  playNight(one);
+  for (const p of st(one).order) one.act(p, { type: 'ready-vote', on: true });
+  assert.ok(one.cue().text.includes('部手機逐個交'));
+  playNight(own);
+  for (const p of st(own).order) own.act(p, { type: 'ready-vote', on: true });
+  assert.ok(!own.cue().text.includes('打開手機'), 'device-neutral');
+  // the robber let its window run out: its own note does not claim it chose to do nothing
+  const idle = notes(one, 'p2').find((n) => n.k === 'idle');
+  assert.equal(S.noteLine(idle, (p) => p), '強盜：今晚你冇確定（時間到或者唔想用）。');
+});
+
+test('onuw: `seats` (§7.1) — one whole-table tap readies everybody for the vote; the host\'s seat among them may add the minute; co-wakers ack together', () => {
+  const sim = scenario({ p1: 'werewolf', p2: 'werewolf', p3: 'seer', p4: 'robber' }, ['villager', 'troublemaker', 'villager']);
+  openStep(sim, 'werewolf');
+  const d = st(sim).deadline;
+  assert.ok(sim.act('p2', { type: 'ack', seats: ['p1', 'p2', 'ghost', 3] }));
+  assert.deepEqual(st(sim).acked.slice().sort(), ['p1', 'p2']);
+  assert.equal(st(sim).deadline, d, 'acking never ends a window');
+  assert.deepEqual(sim.focus().pids, ['p1', 'p2'], 'and never drops a wolf from focus');
+  playNight(sim);
+  // +60 s: a tap from a seat that is not the host's, carrying the host's seat (the phone in the middle holds it)
+  const before = st(sim).deadline;
+  assert.equal(sim.act('p3', { type: 'extend' }), false, 'not the host');
+  assert.ok(sim.act('p3', { type: 'extend', seats: ['p3', 'p1'], table: true }));
+  assert.equal(st(sim).deadline, before + 60_000);
+  assert.ok(sim.act('p3', { type: 'ready-vote', on: true, seats: ['p3', 'p4'] }));
+  assert.equal(engine.view(st(sim), null).dayReady.done, 2);
+  assert.ok(sim.act('p1', { type: 'ready-vote', on: true, seats: ids(4), table: true }));
+  assert.equal(st(sim).phase, 'vote', 'the whole table in one tap');
+  assert.deepEqual(sim.focus(), { pids: ids(4), label: S.FOCUS_LABEL.vote }, 'the vote gate names the step (#33)');
+});
+
+test('onuw: 「全枱同意圈票」 from the middle of a whole-table phone (#24) — every present seat at once: the circle forms, nobody dies; anything less is refused', () => {
+  const day = () => {
+    const sim = scenario({ p1: 'villager', p2: 'seer', p3: 'robber', p4: 'troublemaker' }, ['werewolf', 'werewolf', 'villager']);
+    playNight(sim);
+    return sim;
+  };
+  const a = day();
+  assert.equal(a.act('p1', { type: 'ring', on: true, seats: ids(4) }), false, 'only from the table screen (table: true)');
+  assert.equal(a.act('p1', { type: 'ring', on: true, seats: ['p1', 'p2', 'p3'], table: true }), false, 'every present seat must be in it');
+  assert.equal(a.act('p1', { type: 'ring', on: false, seats: ids(4), table: true }), false);
+  assert.equal(st(a).phase, 'day');
+  assert.ok(a.act('p1', { type: 'ring', on: true, seats: ids(4), table: true }));
+  assert.equal(st(a).phase, 'reveal');
+  assert.deepEqual(R(a).dead, []);
+  assert.equal(R(a).max, 1, 'every player on exactly one vote');
+  assert.equal(R(a).headline, 'village', 'both wolves in the centre and nobody died');
+  // with a seat marked 💤, the present seats are the whole table
+  const b = day();
+  b.host({ type: ACT.ABSENT ?? '@absent', pid: 'p4' });
+  assert.ok(b.act('p1', { type: 'ring', on: true, seats: ['p1', 'p2', 'p3'], table: true }));
+  assert.equal(st(b).phase, 'reveal');
+  // the circle switched off in the setup: nothing to agree to
+  const c = scenario({ p1: 'villager', p2: 'seer', p3: 'robber', p4: 'troublemaker' }, ['werewolf', 'werewolf', 'villager'], { ringVote: false });
+  playNight(c);
+  assert.equal(c.act('p1', { type: 'ring', on: true, seats: ids(4), table: true }), false);
+});
+
+test('onuw: one phone ring vote (#24) — agreeing and a fallback ballot go in the same turn, so nobody gets the phone twice; the circle wins only if all agree', () => {
+  const deal = { p1: 'werewolf', p2: 'seer', p3: 'robber', p4: 'troublemaker' };
+  const centre = ['werewolf', 'villager', 'villager'];
+  // everybody agrees (each with a fallback ballot): the circle
+  const all = scenario(deal, centre, { passPhone: true });
+  playNight(all);
+  for (const p of ids(4)) all.act(p, { type: 'ready-vote', on: true });
+  const walked = [];
+  for (let guard = 0; guard < 10 && st(all).phase === 'vote'; guard++) {
+    const p = all.focus().pids[0];
+    walked.push(p);
+    if (p === 'p1') assert.equal(engine.view(st(all), p).ring.fallback, true);
+    assert.ok(all.act(p, { type: 'ring', on: true }));
+    if (st(all).phase === 'vote') assert.deepEqual(all.focus().pids[0], p, 'agreeing alone does not end the turn: a fallback is still owed');
+    if (st(all).phase === 'vote') assert.ok(all.act(p, { type: 'vote', target: p === 'p1' ? 'p2' : 'p1' }));
+    if (st(all).phase === 'vote') assert.ok(engine.view(st(all), p).ring.mine, 'the ballot does not undo the agreement');
+  }
+  assert.deepEqual(walked, ids(4), 'each seat had the phone exactly once');
+  assert.equal(st(all).phase, 'reveal');
+  assert.deepEqual(R(all).dead, [], 'the circle: everybody agreed');
+  // one seat does not agree: the fallback ballots count
+  const some = scenario(deal, centre, { passPhone: true });
+  playNight(some);
+  for (const p of ids(4)) some.act(p, { type: 'ready-vote', on: true });
+  for (const p of ['p1', 'p2', 'p3']) { some.act(p, { type: 'ring', on: true }); some.act(p, { type: 'vote', target: p === 'p1' ? 'p2' : 'p1' }); }
+  assert.equal(engine.view(st(some), 'p1').ring.stuck, false, 'never stuck on one phone');
+  some.act('p4', { type: 'vote', target: 'p1' });
+  assert.equal(st(some).phase, 'reveal');
+  assert.deepEqual(R(some).dead, ['p1'], 'the circle failed, so the fallback ballots decide');
+  // one phone each keeps the official order: a ballot leaves the circle
+  const own = scenario(deal, centre);
+  playNight(own);
+  for (const p of ids(4)) own.act(p, { type: 'ready-vote', on: true });
+  own.act('p1', { type: 'ring', on: true });
+  own.act('p1', { type: 'vote', target: 'p2' });
+  assert.equal(engine.view(st(own), 'p1').ring.mine, false);
+  assert.equal(engine.view(st(own), 'p1').ring.fallback, false);
+});
+
+test('onuw: 睇完整個結果 from the middle — the phone holding the host\'s seat finishes it in one tap; another shared phone\'s seats count but wait', () => {
+  const deal = { p1: 'werewolf', p2: 'seer', p3: 'robber', p4: 'troublemaker' };
+  const a = play(deal, ['werewolf', 'villager', 'villager']);
+  assert.ok(a.act('p3', { type: 'done', seats: ids(4), table: true }));
+  assert.equal(st(a).phase, 'over', 'the host\'s seat (p1) was among them');
+  const b = play(deal, ['werewolf', 'villager', 'villager']);
+  assert.ok(b.act('p3', { type: 'done', seats: ['p3', 'p4'], table: true }));
+  assert.equal(st(b).phase, 'reveal');
+  assert.deepEqual(engine.view(st(b), null).revealDone, { done: 2, total: 4, mine: false });
+  assert.equal(b.act('p4', { type: 'done', seats: ['p3', 'p4'] }), false, 'nothing new');
+  assert.ok(b.act('p2', { type: 'done' }));
+  assert.ok(b.act('p1', { type: 'done' }));
+  assert.equal(st(b).phase, 'over');
+});
+
+// ---------- one phone: the screens ----------
+
+/** One seat of a SHARED phone, as the play screen mounts it (api.shared / wholeTable / tableSend / sendAs / confirm). */
+function mountShared(ui, sim, pid, sent, { whole = true, host = 'p1' } = {}) {
+  const comps = stubComponents();
+  const root = new FEl('div');
+  const all = sim.players.map((p) => p.id);
+  const actAs = (as, a) => { const changed = sim.act(as, a); sent.push({ pid: as, a, changed }); return changed; };
+  const armed = new Set();
+  const api = {
+    me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
+    shared: true, wholeTable: whole, atTable: pid === null, mySeats: all,
+    send: (a) => (pid ? actAs(pid, a) : false),
+    sendAs: (as, a) => actAs(as, a),
+    tableSend: (a) => actAs(all.find((x) => x !== host) ?? all[0], { ...a, seats: all, table: true }),
+    // arm-then-confirm: the first tap on a button arms it, the second does it
+    confirm: (text, node) => { if (armed.has(node)) { armed.delete(node); return true; } armed.add(node); return false; },
+    ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+  };
+  return { pid, root, api, handle: ui.mount(root, api) };
+}
+
+function sharedCtx(sim, co = [], extra = {}) {
+  return {
+    focus: sim.focus(), paused: false, narrationMode: 'voice', shared: true, wholeTable: true, atTable: false, tableLocked: false,
+    coWakers: co, views: Object.fromEntries(co.map((p) => [p, sim.view(p)])), asked: null, clockHeld: false, ...extra,
+  };
+}
+
+function showTwice(seat, view, ctx) {
+  seat.handle.update(view, ctx);
+  const a = serialize(seat.root);
+  seat.handle.update(clone(view), clone(ctx));
+  assert.equal(serialize(seat.root), a, `update() is not idempotent for ${seat.pid ?? 'table'}`);
+}
+
+const byCls = (root, c) => findAll(root, (n) => hasCls(n, c));
+const visibleText = (root) => {
+  const out = [];
+  const go = (n) => { if (n instanceof FText) out.push(n.data); else if (!n.hidden) n.children.forEach(go); };
+  go(root);
+  return out.join(' ');
+};
+
+test('onuw ui: one phone, two werewolves — ONE screen names the team once; each 📓 stays behind its own cover; one tap acks for both (U2)', async () => {
+  await withFakeDom(async (ui) => {
+    // p1 is a werewolf, p2 the Doppelgänger who copies p1: both wake as wolves (the other werewolf card is in the centre)
+    const sim = scenario({ p1: 'werewolf', p2: 'doppelganger', p3: 'seer', p4: 'villager' }, ['werewolf', 'robber', 'villager'], { passPhone: true });
+    openStep(sim, 'doppelganger');
+    assert.ok(sim.act('p2', { type: 'copy', target: 'p1' }));
+    toStep(sim, 'werewolf');
+    sim.cueDone();
+    const co = ['p1', 'p2'];
+    assert.deepEqual(sim.focus().pids, co);
+    const sent = [];
+    const seat = mountShared(ui, sim, 'p1', sent);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    const r = seat.root;
+    assert.equal(byCls(r, 'on-co').length, 1, 'the combined screen');
+    const panelText = visibleText(byCls(r, 'on-lines')[0]);
+    assert.ok(panelText.includes('你哋係狼人'));
+    assert.ok(panelText.includes('一齊醒：玩家1、玩家2'));
+    // one 📓 per co-waker, each behind its own cover; the Doppelgänger's copy is only on hers
+    const books = byCls(r, 'on-co-book');
+    assert.equal(books.length, 2);
+    const backs = byCls(r, 'c-cover-back').map((n) => n.textContent);
+    assert.ok(backs.includes('㩒住睇 玩家1 嘅記錄') && backs.includes('㩒住睇 玩家2 嘅記錄'));
+    const front = (i) => byCls(books[i], 'c-cover-front')[0].textContent;
+    assert.ok(front(1).includes('化身幽靈'), 'her copy note is behind her own cover');
+    assert.ok(!front(0).includes('化身幽靈'), 'never behind the other wolf\'s');
+    assert.ok(!visibleText(byCls(r, 'on-lines')[0]).includes('化身幽靈'), 'nor in the shared part');
+    // one tap: both acked, the window keeps its length, nobody leaves focus
+    const d = st(sim).deadline;
+    click(byCls(r, 'on-ack')[0]);
+    assert.deepEqual(sent.at(-1).a, { type: 'ack', seats: co });
+    assert.deepEqual(st(sim).acked.slice().sort(), co);
+    assert.equal(st(sim).deadline, d);
+    assert.deepEqual(sim.focus().pids, co);
+    assert.equal(byCls(r, 'on-ack-sub')[0].textContent, S.T.coAckSub);
+    seat.handle.destroy();
+    // the same two seats on phones of their own: two ordinary night screens (nothing combined)
+    const own = mountAll(ui, sim, []);
+    pushViews(sim, own);
+    assert.equal(byCls(own.p1.root, 'on-co').length, 0);
+    for (const s of Object.values(own)) s.handle.destroy();
+  });
+});
+
+test('onuw ui: one phone — the night bar runs from the fixed window and says 時間到; one-phone lines replace own-phone ones; the reveal never says 「你」 (#7, #19, #20)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario({ p1: 'werewolf', p2: 'robber', p3: 'villager', p4: 'seer' }, ['werewolf', 'troublemaker', 'villager'], { passPhone: true });
+    openStep(sim, 'robber');
+    const len = st(sim).deadline - sim.now;
+    assert.equal(len, Math.round(10000 * 1) + 8000);
+    sim.now = st(sim).deadline - 6000;
+    const seat = mountShared(ui, sim, 'p2', []);
+    showTwice(seat, sim.view('p2'), sharedCtx(sim));
+    const r = seat.root;
+    assert.equal(byCls(r, 'on-bar-text')[0].textContent, '仲有 6 秒');
+    const bar = byCls(r, 'on-bar')[0];
+    assert.equal(bar.children[0].styleMap.transform, `scaleX(${(6000 / len).toFixed(3)})`, 'from the fixed window, not from the mount');
+    assert.equal(bar.attrs['aria-valuetext'], '仲有 6 秒');
+    assert.equal(byCls(r, 'on-ack-sub')[0].textContent, S.T.ackSubShared);
+    assert.equal(byCls(r, 'on-help')[0].textContent, S.T.helpVoiceShared);
+    assert.ok(!visibleText(r).includes('自己部機'));
+    sim.now = st(sim).deadline;
+    showTwice(seat, sim.view('p2'), sharedCtx(sim));
+    assert.equal(byCls(r, 'on-bar-text')[0].textContent, S.T.timeUpShared);
+    seat.handle.destroy();
+    // a phone of its own keeps its lines
+    const own = mountAll(ui, sim, []);
+    pushViews(sim, own);
+    assert.equal(byCls(own.p2.root, 'on-help')[0].textContent, S.T.helpVoice);
+    assert.equal(byCls(own.p2.root, 'on-bar-text')[0].textContent, S.T.timeUp);
+    for (const s of Object.values(own)) s.handle.destroy();
+    // the reveal on a seat of the shared phone: 🐺 開牌, no 「你贏咗」, no 「（你）」
+    playNight(sim);
+    castVotes(sim, {});
+    const rv = mountShared(ui, sim, 'p1', []);
+    showTwice(rv, sim.view('p1'), sharedCtx(sim));
+    const t = visibleText(rv.root);
+    assert.ok(t.includes(S.T.watching));
+    assert.ok(!t.includes(S.T.won) && !t.includes(S.T.lost) && !t.includes('（你）'), t);
+    rv.handle.destroy();
+  });
+});
+
+test('onuw ui: by day on a whole-table phone — 夠鐘投票 and 全枱同意圈票 are table taps (locked while the card is up; the circle takes two taps); a seat\'s own screen points to the middle', async () => {
+  await withFakeDom(async (ui) => {
+    const make = () => { const sim = scenario({ p1: 'villager', p2: 'seer', p3: 'robber', p4: 'troublemaker' }, ['werewolf', 'werewolf', 'villager'], { passPhone: true }); playNight(sim); return sim; };
+    const sim = make();
+    const sent = [];
+    const table = mountShared(ui, sim, null, sent);
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true, tableLocked: true }));
+    const ready = byCls(table.root, 'on-table-ready')[0];
+    const ring = byCls(table.root, 'on-table-ring')[0];
+    assert.equal(ready.textContent, S.T.tableReady);
+    assert.equal(ring.textContent, S.T.tableRing);
+    assert.equal(ready.disabled, true, 'U5: locked while the 「擺返中間」 card is up');
+    assert.equal(ring.disabled, true);
+    assert.ok(!visibleText(table.root).includes('想投票：'), 'no n / m waiting list');
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true }));
+    click(ready);
+    assert.deepEqual(sent.at(-1).a, { type: 'ready-vote', on: true, seats: ids(4), table: true });
+    assert.equal(st(sim).phase, 'vote');
+    table.handle.destroy();
+    // the circle: two taps, then nobody dies
+    const c = make();
+    const s2 = [];
+    const t2 = mountShared(ui, c, null, s2);
+    showTwice(t2, c.view(null), sharedCtx(c, [], { atTable: true }));
+    const ring2 = byCls(t2.root, 'on-table-ring')[0];
+    click(ring2);
+    assert.equal(s2.length, 0, 'the first tap only arms it');
+    click(ring2);
+    assert.deepEqual(s2.at(-1).a, { type: 'ring', on: true, seats: ids(4), table: true });
+    assert.equal(st(c).phase, 'reveal');
+    assert.deepEqual(R(c).dead, []);
+    // the reveal from the middle: 「大家睇完」 also takes two taps, then the results
+    showTwice(t2, c.view(null), sharedCtx(c, [], { atTable: true }));
+    const done = findAll(t2.root, (n) => n.tag === 'button' && n.textContent === S.T.revealDoneTable)[0];
+    assert.ok(done && !done.hidden);
+    click(done);
+    assert.equal(st(c).phase, 'reveal');
+    click(done);
+    assert.equal(st(c).phase, 'over');
+    t2.handle.destroy();
+    // a shared phone that does not hold the whole table: its reveal tap is only its own seats', and says so
+    const pc = make();
+    castVotes(pc, {});
+    assert.equal(st(pc).phase, 'reveal');
+    const part = mountShared(ui, pc, null, [], { whole: false });
+    showTwice(part, pc.view(null), sharedCtx(pc, [], { atTable: true, wholeTable: false }));
+    assert.ok(findAll(part.root, (n) => n.tag === 'button' && !n.hidden && n.textContent === S.T.revealDoneTablePart).length);
+    assert.ok(!visibleText(part.root).includes(S.T.revealDoneTable));
+    part.handle.destroy();
+    // a seat's own screen by day: card notes and the way to the middle, no per-seat 夠鐘投票, no host ⋯ line
+    const d = make();
+    const seat = mountShared(ui, d, 'p2', []);
+    showTwice(seat, d.view('p2'), sharedCtx(d));
+    assert.ok(visibleText(seat.root).includes(S.T.seatToTable));
+    assert.ok(!findAll(seat.root, (n) => n.tag === 'button' && !n.hidden && n.textContent.includes('夠鐘投票')).length);
+    assert.ok(!visibleText(seat.root).includes(S.T.hostSkip));
+    seat.handle.destroy();
+    // a spectator's table (not a shared phone): no table taps
+    const spect = mountAll(ui, d, []);
+    pushViews(d, spect);
+    assert.equal(byCls(spect.table.root, 'on-table-ready')[0].hidden, true);
+    assert.equal(byCls(spect.table.root, 'on-table-ring')[0].hidden, true);
+    for (const s of Object.values(spect)) s.handle.destroy();
+  });
+});
+
+test('onuw ui: the one-phone ballot says the circle needs a fallback pick in the same turn (#24)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario({ p1: 'werewolf', p2: 'seer', p3: 'robber', p4: 'troublemaker' }, ['werewolf', 'villager', 'villager'], { passPhone: true });
+    playNight(sim);
+    for (const p of ids(4)) sim.act(p, { type: 'ready-vote', on: true });
+    const sent = [];
+    const seat = mountShared(ui, sim, 'p1', sent);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim));
+    assert.ok(visibleText(seat.root).includes(S.T.ringHelpFallback));
+    click(findAll(seat.root, (n) => n.tag === 'button' && n.textContent === S.T.ringOff)[0]);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim));
+    assert.ok(findAll(seat.root, (n) => n.tag === 'button' && n.textContent === S.T.ringOnFallback).length === 1);
+    seat.handle.destroy();
   });
 });

@@ -413,7 +413,7 @@ export const rules = {
     '每人一個秘密骰盅：搖部手機或者㩒 🎲 擲骰。',
     '點玩、點樣先算贏，由你哋自己講，app 唔計分。',
     '主持可以全體搖骰、開晒啲骰、開晒角色、開下一回合。',
-    '一部機都玩得：app 會逐個叫人接機睇牌。',
+    '一部機都玩得：app 逐個叫人接機，睇牌搖骰一次過做完先交。',
   ],
   roles: [
     { id: 'moderator', name: '主持', emoji: '🎙️', team: '#94a3b8', text: '做乜：唔攞牌、唔擲骰，負責講規則、搖骰、開骰、開角色同開下一回合。點贏：主持唔使贏，帶得好玩就得。' },
@@ -443,7 +443,7 @@ export const rules = {
     },
     {
       title: '角色牌',
-      body: '每人派一張。㩒住張牌先睇到，放手即刻冚返，所以放喺枱面都唔使怕。\n如果有朋友喺你隔離，或者你要將部機借畀人，㩒「鎖定角色牌」，鎖咗之後連你自己都睇唔到，要自己㩒返解鎖。\n其中一個角色可以設做「自動填充」：指定咗嘅角色派完，剩低幾多人就當幾多個呢個角色。',
+      body: '每人派一張。㩒住張牌先睇到，放手即刻冚返。\n如果有朋友喺你隔離，或者你要將部機借畀人，㩒「鎖定角色牌」，鎖咗之後連你自己都睇唔到，要自己㩒返解鎖。\n一部機輪流玩：要大家一齊睇（開盅、開角色）就擺返枱中間，中間嗰個畫面冇任何人嘅牌同骰。\n其中一個角色可以設做「自動填充」：指定咗嘅角色派完，剩低幾多人就當幾多個呢個角色。',
     },
     {
       title: '骰盅',
@@ -459,7 +459,7 @@ export const rules = {
     },
     {
       title: '一部機玩',
-      body: '冇數據、或者有人部機冇電都得：一部機放喺枱中間，每人輪流拎起。開局之後 app 會逐個叫你交機畀下一個人睇牌，睇完就叫返下一個。\n主持嘅掣喺房主嗰個座位，要用就切返去房主嗰個位。',
+      body: '冇數據、或者有人部機冇電都得：一部機放喺枱中間，每人輪流拎起。開局之後 app 會逐個叫人接機：睇牌，要搖骰就而家搖、鎖埋，搞掂㩒「✓ 搞掂 · 交俾下一個」。\n最後一個人會交返俾房主：主持嘅掣喺房主嗰個座位。主持開盅或者開角色之後，部機會擺返枱中間俾大家一齊睇。',
     },
   ],
 };
@@ -794,6 +794,7 @@ export const engine = {
       title: '通用派牌',
       subtitle: `第 ${state.round} 回合`,
       controller: ctl,
+      host: state.hostPid,   // public: whose seat has the host controls (one phone hands the phone back there, #15)
       selfRoll: state.selfRoll,
       dice: { count: state.dice.count, sides: state.dice.sides },
       roles: state.roles.map((r) => ({ id: r.id, name: r.name, emoji: r.emoji, desc: r.desc, count: r.count, filler: r.filler })),
@@ -816,11 +817,12 @@ export const engine = {
   cue() { return null; },
 
   // Card holders who have not looked at their card yet — drives 輪到你 and,
-  // on a shared phone, walks the pass gate from seat to seat after every deal.
+  // on a shared phone, walks the pass gate from seat to seat after every deal. On a shared phone a seat sends `seen`
+  // only with 「✓ 搞掂」, after its peek AND its dice (#15); `label` names the step on the gate (§7.1 #33).
   focus(state) {
     if (state.phase !== 'play' || state.revealRoles) return null;
     const pids = state.order.filter((id) => HANDLERS.seen.allowed(state, state.seats[id]));
-    return pids.length ? { pids } : null;
+    return pids.length ? { pids, label: state.selfRoll ? '睇牌、搖骰' : '睇牌' } : null;
   },
 
   // A stalled / disconnected seat: skip their peek so it cannot hold the table up.

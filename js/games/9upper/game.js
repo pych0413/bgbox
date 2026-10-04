@@ -123,7 +123,10 @@ export const rules = {
       + '・🗑️ 呢輪作廢：唔計分，重新派題目、身份同次序。如果卡喺諗樣度（揀難度、開始睇卡、揀人），就換下一位做諗樣，佢今個圈最尾先做。\n'
       + '・💤 唔喺度：唔再等佢。佢係諗樣就換人做；輪到佢解釋就跳過；之後唔派卡俾佢。返嚟再㩒一下就得。' },
     { title: '用一部手機玩', body:
-      '設定入面開「一部手機輪流睇」。睇卡嗰陣部手機由諗樣左手邊開始逐個傳：㩒「開始睇卡」，每人都係睇同樣秒數，夠鐘自動冚返，再交俾下一位。之後部手機放返諗樣度。' },
+      '要開「一部手機輪流睇」（得一部手機會自動開）。睇卡嗰陣部手機由諗樣左手邊開始逐個傳：㩒「開始睇卡」，每人都係睇同樣秒數，夠鐘自動冚返，再交俾下一位。\n'
+      + '之後部手機交返俾諗樣：解釋嗰陣佢拎住，有人講完就㩒「✅ 講完 · 下一位」；人唔喺度先㩒「⏭ 跳過」。'
+      + '想睇返自己係咩，㩒上面個名換人，睇完擺返中間。\n'
+      + '揭曉嗰陣部手機擺返枱中間，大家一齊睇，睇完任何一個人㩒「下一輪」就得。' },
     { title: '小貼士', body:
       '・老實人：用自己嘅講法講，唔好照讀；唔知嘅細節可以話「張卡冇寫」。\n'
       + '・9upper：講得自信、有細節，唔好同其他人作得一模一樣。\n'
@@ -229,16 +232,18 @@ function presetHelp(id, n) {
 
 const PRESET_LABEL = { official: '官方玩法', newbie: '新手（第一次玩）', quick: '快玩', custom: '自訂' };
 
-/** One line under the 發言次序 select: what the chosen mode does at the table. */
-function orderHelp(mode) {
+/** One line under the 發言次序 select: what the chosen mode does at the table (`pass`: one phone, the 諗樣 holds it). */
+function orderHelp(mode, pass = false) {
   switch (mode) {
-    case 'system': return '電話每輪隨機派人（同邊個係老實人冇關）；講完㩒「我講完」。';
-    case 'free': return '大家自己傾邊個先講；講完㩒「我講完」，或者諗樣㩒佢個名。';
+    case 'system': return pass ? '電話每輪隨機派人（同邊個係老實人冇關）；講完由諗樣㩒「✅ 講完」。'
+      : '電話每輪隨機派人（同邊個係老實人冇關）；講完㩒「我講完」。';
+    case 'free': return pass ? '大家自己傾邊個先講；講完話一聲，諗樣㩒佢個名。' : '大家自己傾邊個先講；講完㩒「我講完」，或者諗樣㩒佢個名。';
     default: return '說明書玩法：諗樣㩒名叫人解釋，次序由佢話事。';
   }
 }
 
 const ORDER_SUMMARY = { judge: '發言次序：諗樣揀', system: '發言次序：系統隨機派', free: '發言次序：自己決定' };
+const ONE_PHONE_PASS = '一部手機玩要開「一部手機輪流睇」，唔係淨係第一個人睇到張卡。';
 
 export const config = {
   defaults(n, prev, env) {
@@ -249,7 +254,8 @@ export const config = {
     return out;
   },
 
-  validate(cfg, n) {
+  /** `env.singleDevice` (one phone holds every seat): 一部手機輪流睇 must be on, or only the first 玩家 ever reads (#12). */
+  validate(cfg, n, env) {
     const warnings = [];
     if (!Number.isInteger(n) || n < meta.players[0] || n > meta.players[1]) {
       return { ok: false, message: `瞎掰王要 ${meta.players[0]}–${meta.players[1]} 個人玩。`, warnings };
@@ -264,6 +270,7 @@ export const config = {
       if (key in c && !keyOk(key, c[key])) return { ok: false, message: `「${label[key]}」設定唔啱。`, warnings };
     }
     const m = norm(c);
+    if (env && env.singleDevice && !m.passPhone) return { ok: false, message: ONE_PHONE_PASS, warnings };
     if (m.readSecs < OFFICIAL_READ) warnings.push(`睇卡時間短過官方嘅 ${OFFICIAL_READ} 秒，老實人可能睇唔切。`);
     if (totalRoundsFor(m, n) > 20) warnings.push(`一共 ${totalRoundsFor(m, n)} 輪，會玩好耐。`);
     if (m.callouts === 2 && n === 3) warnings.push('3 個人玩，出兩張收皮啦一定會中老實人。');
@@ -296,7 +303,7 @@ export const config = {
       );
     }
     out.push(
-      { key: 'speakOrder', label: '發言次序', type: 'select', help: orderHelp(m.speakOrder),
+      { key: 'speakOrder', label: '發言次序', type: 'select', help: orderHelp(m.speakOrder, m.passPhone),
         options: [
           { value: 'judge', label: '諗樣揀（說明書玩法）' },
           { value: 'system', label: '系統派（每輪隨機）' },
@@ -305,7 +312,7 @@ export const config = {
       { key: 'readSecs', label: '睇卡時間（秒）', type: 'seconds', min: 5, max: 30, step: 1,
         help: `說明書係 ${OFFICIAL_READ} 秒。每個人睇嘅時間一樣長。` },
       { key: 'passPhone', label: '一部手機輪流睇', type: 'bool',
-        help: '得一部手機就開：睇卡嗰陣逐個傳，每人睇同樣秒數。' },
+        help: '得一部手機就要開：睇卡嗰陣逐個傳，每人睇同樣秒數。' },
       { key: 'speakSecs', label: '每人解釋時限（秒）', type: 'seconds', min: 0, max: 300,
         help: m.speakOrder === 'free' ? '0＝唔限時。「自己決定」次序唔計時。' : '0＝唔限時。' },
       { key: 'scoreFloor', label: '分數唔會低過 0', type: 'bool' },
@@ -786,7 +793,7 @@ function rawCue(s) {
       }
       const first = r.explainers.find((p) => !isAway(s, p)) ?? r.explainers[0];   // stable for the whole step
       return { id: `r${k0}:explain`, minMs: 2500,
-        text: S.cueExplain({ mode: s.cfg.speakOrder, term: r.term.term, first: nm(first), judge: nm(r.judge) }) };
+        text: S.cueExplain({ mode: s.cfg.speakOrder, term: r.term.term, first: nm(first), judge: nm(r.judge), pass: !!s.cfg.passPhone }) };
     }
     case 'judge':
       return { id: `r${k0}:judge`, text: S.cueJudge({ judge: nm(r.judge) }), minMs: 2500 };
@@ -886,7 +893,11 @@ function act(state, msg, ctx) {
       if (!isJudge && pid !== speaker(s)) return s;
       // the UI sends the turn it saw, so the speaker's 我講完 and the 諗樣's 下一位 tapped together end ONE turn, not two
       if (typeof a.turn === 'number' && a.turn !== (r.turnNo ?? 0)) return s;
-      endTurn(s, ctx, null, pid !== speaker(s));   // the 諗樣's 下一位 skips; the speaker's own 我講完 does not
+      // the 諗樣's 下一位 skips; the speaker's own 我講完 does not. One phone (passPhone, #11): the 諗樣 holds the phone and
+      // the speaker cannot reach 我講完, so the 諗樣's 「✅ 講完 · 下一位」 IS the speaker's 講完 — only `skip: true`
+      // (「⏭ 佢唔喺度，跳過」) is a skip there
+      const byJudge = pid !== speaker(s);
+      endTurn(s, ctx, null, byJudge && (!s.cfg.passPhone || a.skip === true));
       return s;
     }
     case 'away': {
@@ -918,10 +929,13 @@ function act(state, msg, ctx) {
     case 'pick':
       if (s.phase === 'judge' && isJudge && isTarget(a.target)) resolve(s, a.target);
       return s;
-    case 'next':
-      // a 諗樣 marked 💤 cannot press 下一輪: then anybody at the table may
-      if (s.phase === 'reveal' && (isJudge || isAway(s, r.judge))) nextRound(s, ctx);
+    case 'next': {
+      // a 諗樣 marked 💤 cannot press 下一輪: then anybody at the table may. A whole-table tap (one phone in the middle,
+      // `table: true`, §7.1) counts for every seat in `seats` — the room keeps only the sending phone's own seats there
+      const by = a.table === true && Array.isArray(a.seats) ? a.seats : [pid];
+      if (s.phase === 'reveal' && (by.includes(r.judge) || isAway(s, r.judge))) nextRound(s, ctx);
       return s;
+    }
     default:
       return s;
   }
@@ -1005,6 +1019,7 @@ function view(state, pid) {
       text: r.term.term, level: r.term.level,
       hint: r.term.hint ? { kind: r.term.hint.kind, options: r.term.hint.options.slice() } : null,
     } : null,
+    // 'pass' = one phone goes round (passPhone): also what the UI keys the one-phone 「✅ 講完 · 下一位」 / 「⏭ 跳過」 on (#11)
     readMode: pass ? 'pass' : 'together',
     readSecs: s.cfg.readSecs,
     reading: s.phase === 'read' && pass
@@ -1078,16 +1093,32 @@ function cue(state) {
   return c && c.id !== state.cueAck ? c : null;
 }
 
+/**
+ * Who must hold the phone now. The 諗樣's steps are public — the 諗樣 never sees anything secret — so on a shared phone
+ * they get the public card (`open`, §7.1 #4), with the step's name for the gate (`label`). The pass-the-phone read is the
+ * private part: one reader at a time, the gate saying how far round the table it is (#33). With one phone (passPhone)
+ * the reveal calls nobody: the phone goes to the middle and the table reads it together (#1, #5).
+ */
 function focus(state) {
   const r = state.round;
+  const pass = !!state.cfg.passPhone;
+  const judgeStep = (label, extra = {}) => ({ pids: [r.judge], open: true, label, ...extra });
   switch (state.phase) {
-    case 'read':
-      return { pids: state.cfg.passPhone ? (r.reader ? [r.reader] : []) : presentOf(state, r.explainers) };
-    case 'level': case 'term': case 'explain': case 'judge':
-      return { pids: [r.judge] };
+    case 'read': {
+      if (!pass) return { pids: presentOf(state, r.explainers) };
+      if (!r.reader) return { pids: [] };
+      const round = r.readers.filter((p) => r.readDone.includes(p) || !isAway(state, p));
+      return { pids: [r.reader], label: `睇卡 ${round.indexOf(r.reader) + 1}/${round.length}` };
+    }
+    case 'level': return judgeStep('揀難度');
+    case 'term': return judgeStep('睇題目');
+    // U10: with a speaking clock, hold it while the 諗樣's card is up on a whole-table phone
+    case 'explain':
+      return judgeStep('解釋', state.cfg.speakSecs > 0 && state.cfg.speakOrder !== 'free' ? { hold: true } : {});
+    case 'judge': return judgeStep('揀老實人');
     case 'reveal':
       // a 諗樣 marked 💤 is never called (a shared phone's gate must not ask for them): anybody may press 下一輪
-      return isAway(state, r.judge) ? null : { pids: [r.judge] };
+      return pass || isAway(state, r.judge) ? null : judgeStep('揭曉');
     default:
       return null;
   }
@@ -1105,7 +1136,8 @@ function blocking(state, pid) {
   switch (s.phase) {
     case 'level': case 'term': case 'judge': case 'reveal': return pid === r.judge;
     case 'read': return !!s.cfg.passPhone && pid === r.reader && !r.readStarted;
-    case 'explain': return s.cfg.speakOrder !== 'free' && pid === r.speaker;
+    // one phone (passPhone): the 諗樣 holds it and ends every turn, so the speaker is never the one the table waits on (#11)
+    case 'explain': return !s.cfg.passPhone && s.cfg.speakOrder !== 'free' && pid === r.speaker;
     default: return false;
   }
 }
@@ -1148,7 +1180,10 @@ function legalActions(state, pid) {
       if (s.cfg.speakOrder === 'free') {
         if (isJudge) for (const t of r.explainers) if (!r.spoken.includes(t)) out.push({ type: 'done', target: t });
         if (!isJudge && r.explainers.includes(pid) && !r.spoken.includes(pid)) out.push({ type: 'done' });
-      } else if (isJudge || pid === speaker(s)) out.push({ type: 'done' });
+      } else if (isJudge || pid === speaker(s)) {
+        out.push({ type: 'done' });
+        if (isJudge && s.cfg.passPhone) out.push({ type: 'done', skip: true });   // one phone: 講完 and ⏭ are two buttons
+      }
       if (isJudge) {
         out.push({ type: 'decide' });
         if (s.cfg.speakOrder === 'judge') {
@@ -1190,7 +1225,8 @@ function autoAct(state, pid, ctx) {
         if (isJudge) return { type: 'done', target: r.explainers.find((p) => !r.spoken.includes(p)) };
         return r.spoken.includes(pid) ? null : { type: 'away' };
       }
-      if (isJudge) return { type: 'done' };
+      // 代佢做 for the 諗樣 never claims the speaker finished: one phone needs the explicit skip
+      if (isJudge) return s.cfg.passPhone ? { type: 'done', skip: true } : { type: 'done' };
       return pid === speaker(s) ? { type: 'away', turn: r.turnNo ?? 0 } : null;
     case 'judge': return isJudge ? { type: 'pick', target: r.explainers[rnd(r.explainers.length)] } : null;
     case 'reveal': return isJudge ? { type: 'next' } : null;

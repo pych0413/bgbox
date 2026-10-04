@@ -70,12 +70,22 @@ export function mount(root, api) {
   };
   const withMates = (action) => { const m = deviceMates(); return m.length ? { ...action, seats: m } : action; };
 
-  /** More than one seat on this phone? Then it is passed around, and every public control goes to whoever holds it. */
+  /**
+   * More than one seat on this phone? Then it is passed around, and every public control goes to whoever holds it.
+   * The shell says so (api.shared, DESIGN §7.1); an older shell is read from the seats' devices.
+   */
   function sharedDevice() {
+    if (typeof api.shared === 'boolean') return api.shared;
     const me = byId(meId());
     if (!me?.deviceId) return false;
     return players().filter((p) => p.deviceId === me.deviceId).length > 1;
   }
+  /** §7.1: this mount is the shared phone lying in the middle of the table (no seat on screen). */
+  const atTable = () => !!api.atTable && api.me == null;
+  /** …and that phone holds every seated player: one tap there is the table's decision (U5). */
+  const wholeTable = () => atTable() && !!api.wholeTable;
+  /** A whole-table tap from the table screen (api.tableSend); false while the table card is still up (U5). */
+  const tableTap = (action) => (ctx.tableLocked ? false : api.tableSend?.(action) ?? false);
 
   /** "That is you" only means something on a phone of your own; on a shared one the seat on screen is just whoever held it last. */
   const isMe = (id) => id != null && id === meId() && !sharedDevice();
@@ -196,7 +206,7 @@ export function mount(root, api) {
     const action = el('div', { class: 'uc-action' });
     const note = el('p', { class: 'uc-note' });
     const status = el('p', { class: 'uc-status' });
-    const box = el('section', { class: 'uc-screen' }, el('h2', { class: 'uc-title', text: '你嘅詞語' }), lead, slot, action, status, note);
+    const box = el('section', { class: 'uc-screen' }, el('h2', { class: 'uc-title', text: atTable() ? '睇詞語' : '你嘅詞語' }), lead, slot, action, status, note);
     let readyShown = null;
 
     function remember() {
@@ -212,7 +222,7 @@ export function mount(root, api) {
         const me = v.me;
         slot.hidden = !me;
         if (!me) {
-          lead.textContent = '大家逐個睇緊自己嘅詞語，你係旁觀者。';
+          lead.textContent = atTable() ? '部手機逐個傳：輪到嘅人睇自己個詞。' : '大家逐個睇緊自己嘅詞語，你係旁觀者。';
           action.replaceChildren();
           note.textContent = '';
         } else {
@@ -247,6 +257,7 @@ export function mount(root, api) {
     const action = el('div', { class: 'uc-action' });
     const box = el('section', { class: 'uc-screen' }, who, sub, timer.el, action, hint, order);
     let actionStep = null;
+    let tableBtn = null;
 
     return {
       el: box,
@@ -271,11 +282,19 @@ export function mount(root, api) {
 
         if (actionStep !== sp.id) {
           actionStep = sp.id;
-          const canDone = v.me && (mine || sharedDevice());
-          action.replaceChildren(canDone
-            ? button(mine ? '講完喇 ▸' : `${nameOf(sp.pid)} 講完喇 ▸`, () => api.send({ type: 'done', at: sp.id }))
-            : (v.me && !v.me.alive ? el('p', { class: 'uc-note' }, '你已經出局，聽住大家講。') : ''));
+          tableBtn = null;
+          if (atTable()) {
+            // §7.1: the phone lies in the middle while the clues go round — anyone taps for the speaker who finished
+            tableBtn = button(`${nameOf(sp.pid)} 講完喇 ▸`, () => tableTap({ type: 'done', at: sp.id }));
+            action.replaceChildren(tableBtn);
+          } else {
+            const canDone = v.me && (mine || sharedDevice());
+            action.replaceChildren(canDone
+              ? button(mine ? '講完喇 ▸' : `${nameOf(sp.pid)} 講完喇 ▸`, () => api.send({ type: 'done', at: sp.id }))
+              : (v.me && !v.me.alive ? el('p', { class: 'uc-note' }, '你已經出局，聽住大家講。') : ''));
+          }
         }
+        if (tableBtn) tableBtn.disabled = !!c.tableLocked;       // U5: not while the 「擺返中間」 card is up
       },
       destroy() { timer.destroy(); },
     };
@@ -293,6 +312,32 @@ export function mount(root, api) {
     let shown = null;
     let pending = false;               // tapped, not yet confirmed by the host
     let retry = null;
+    let tableBtn = null;
+    /**
+     * §7.1 the shared phone in the middle: one tap counts for every seat it holds (api.tableSend). A phone that holds
+     * the whole table opens the vote with it, so it takes a second tap there (U5): 「再㩒一次：全枱傾夠未？」.
+     */
+    function tableStart() {
+      if (ctx.tableLocked) return;
+      if (wholeTable() && api.confirm && !api.confirm('全枱傾夠未？', tableBtn)) return;
+      if (tableTap({ type: 'start-vote' }) === false) return;
+      pending = true;
+      clearTimeout(retry);
+      retry = setTimeout(() => { pending = false; render(); }, RETRY_MS);
+      render();
+    }
+    /** A seat's own 開始投票 (it also counts the phone's other seats). On a whole-table phone it is the table's call: two taps (U5). */
+    function seatStartBtn() {
+      const b = button('開始投票 🗳️', () => {
+        if (api.wholeTable && api.confirm && !api.confirm('全枱傾夠未？', b)) return;
+        pending = true;
+        api.send(withMates({ type: 'start-vote' }));
+        clearTimeout(retry);
+        retry = setTimeout(() => { pending = false; render(); }, RETRY_MS);
+        render();
+      });
+      return b;
+    }
     return {
       el: box,
       update(v, c) {
@@ -301,23 +346,27 @@ export function mount(root, api) {
         const me = v.me;
         const mine = !!me && d.want.includes(me.id);
         if (mine) pending = false;
-        const state = !me ? 'table' : away(me.id) ? 'away' : !me.alive ? 'dead' : mine || pending ? 'asked' : 'ask';
+        const mates = atTable() ? (api.mySeats ?? []).filter((id) => v.seats.some((s) => s.id === id && s.alive) && !away(id)) : [];
+        const tableAsked = atTable() && mates.length > 0 && mates.every((id) => d.want.includes(id));
+        if (tableAsked) pending = false;
+        const state = atTable() ? (!mates.length ? 'table' : tableAsked || pending ? 'tableAsked' : 'tableAsk')
+          : !me ? 'table' : away(me.id) ? 'away' : !me.alive ? 'dead' : mine || pending ? 'asked' : 'ask';
         if (state !== shown) {
           shown = state;
+          tableBtn = state === 'tableAsk' ? button('開始投票 🗳️', tableStart) : null;
           action.replaceChildren(
-            state === 'table' ? el('p', { class: 'uc-note' }, '等大家開始投票。')
+            state === 'tableAsk' ? tableBtn
+              : state === 'tableAsked' ? el('p', { class: 'uc-done' }, wholeTable() ? '✓ 開始投票' : '✓ 呢部機嘅人想開始投票')
+            : state === 'table' ? el('p', { class: 'uc-note' }, '等大家開始投票。')
               : state === 'away' ? el('p', { class: 'uc-note' }, AWAY)
                 : state === 'dead' ? el('p', { class: 'uc-note' }, '你已經出局，由未出局嘅人決定幾時投票。')
                   : state === 'asked' ? el('p', { class: 'uc-done' }, '✓ 你想開始投票')
-                    : button('開始投票 🗳️', () => {
-                      pending = true;
-                      api.send(withMates({ type: 'start-vote' }));
-                      clearTimeout(retry);
-                      retry = setTimeout(() => { pending = false; render(); }, RETRY_MS);
-                      render();
-                    }));
+                    : seatStartBtn());
         }
-        // every phone shows the same count: 「想開始投票 2 / 3」 (more than half of the alive seats at the table)
+        if (tableBtn) tableBtn.disabled = !!ctx.tableLocked;   // U5: not while the 「擺返中間」 card is up
+        // every phone shows the same count: 「想開始投票 2 / 3」 (more than half of the alive seats at the table) — not on
+        // a phone that holds the whole table, where the one (confirmed) tap opens the vote
+        status.hidden = wholeTable();
         status.textContent = `想開始投票 ${d.want.length} / ${d.need}${d.want.length ? ` · ${namesOf(d.want)}` : ''}`;
       },
       destroy() { timer.destroy(); clearTimeout(retry); },
@@ -360,7 +409,7 @@ export function mount(root, api) {
           if (!panel) { panel = C.VotePanel(props); panelSlot.append(panel.el); } else panel.update(props);
           panelSlot.hidden = false;
         } else {
-          if (!me) lead.textContent = '大家投緊票。';
+          if (!me) lead.textContent = atTable() ? '大家輪流投緊票：部手機會逐個交，全部投完先公佈。' : '大家投緊票。';
           else if (away(me.id)) lead.textContent = AWAY;
           else if (me.alive) lead.textContent = '你喺 PK 入面，今次唔使投，等其他人決定。';
           else lead.textContent = '你已經出局，唔使投票，睇住大家投。';
@@ -397,16 +446,19 @@ export function mount(root, api) {
     let mineSeen = false;
     let pending = false;              // 睇完 tapped, not yet confirmed by the host
     let retry = null;
-    // D3: the result stays until every present seat has tapped 睇完 (the host's 下一步 can force it)
-    const proceed = button('睇完 ✓', () => {
+    // D3: the result stays until every present seat has tapped 睇完 (the host's 下一步 can force it). On the table
+    // screen of a shared phone it is one tap for every seat the phone holds (api.tableSend, §7.1) — the whole table
+    // on a one-phone table: 「大家睇完 ✓（一下就得）」, locked while the 「擺返中間」 card is still up (U5)
+    const table = atTable();
+    const proceed = button(table ? (wholeTable() ? '大家睇完 ✓（一下就得）' : '睇完 ✓（呢部機嘅人）') : '睇完 ✓', () => {
+      if (table ? tableTap({ type: 'continue' }) === false : api.send(withMates({ type: 'continue' })) === false) return;
       pending = true;
-      api.send(withMates({ type: 'continue' }));
       clearTimeout(retry);
       retry = setTimeout(() => { pending = false; paintProceed(); }, RETRY_MS);
       paintProceed();
     });
     proceed.disabled = true;
-    const doneNote = el('p', { class: 'uc-done' }, '✓ 睇完 · 等緊其他人');
+    const doneNote = el('p', { class: 'uc-done' }, table && wholeTable() ? '✓ 睇完' : '✓ 睇完 · 等緊其他人');
     doneNote.hidden = true;
     const seenLine = el('p', { class: 'uc-status uc-seen' });
     action.append(proceed, doneNote, seenLine);
@@ -415,14 +467,14 @@ export function mount(root, api) {
     function paintProceed() {
       const done = mineSeen || pending;
       proceed.hidden = waiting || !canContinue || done;
-      proceed.disabled = !unlocked;
+      proceed.disabled = !unlocked || (table && !!ctx.tableLocked);
       doneNote.hidden = waiting || !canContinue || !done;
     }
 
-    /** 「睇完 3 / 5 · 等緊：阿明、小美」 — the same on every phone. */
+    /** 「睇完 3 / 5 · 等緊：阿明、小美」 — the same on every phone (not on the one phone of the whole table: one tap does it). */
     function paintSeen(v) {
       const s = v.elim.seen;
-      seenLine.hidden = waiting || !s;
+      seenLine.hidden = waiting || !s || wholeTable();
       if (!s || waiting) return;
       const left = v.seats.map((x) => x.id).filter((id) => !s.who.includes(id) && !away(id));
       seenLine.textContent = `睇完 ${s.who.length} / ${s.total}${left.length ? ` · 等緊：${namesOf(left)}` : ''}`;
@@ -505,8 +557,14 @@ export function mount(root, api) {
         paintGuess(e, v);
         timer.update(v, c);
         waiting = !!e.guess?.pending;
-        canContinue = !!v.me && !away(v.me.id);
-        mineSeen = !!v.me && !!e.seen?.who.includes(v.me.id);
+        if (table) {
+          const mates = (api.mySeats ?? []).filter((id) => !away(id));
+          canContinue = mates.length > 0;
+          mineSeen = canContinue && mates.every((id) => e.seen?.who.includes(id));
+        } else {
+          canContinue = !!v.me && !away(v.me.id);
+          mineSeen = !!v.me && !!e.seen?.who.includes(v.me.id);
+        }
         if (mineSeen) pending = false;
         paintProceed();
         paintSeen(v);
@@ -605,26 +663,52 @@ export function mount(root, api) {
    */
   let wordInner = null;
   let wordToggle = null;
+  let wordHome = null;
+  let askedOpened = false;
+
+  /**
+   * #22 (one-phone playtest): the shared phone in the middle never shows a seat's word. Its 「🃏 睇返我個詞」 asks who
+   * wants it (api.askWho → the private hand-over card → that seat's screen with ctx.asked.key === 'word'), where the
+   * card is open to peek and 「📱 睇完 · 擺返中間」 puts the phone back.
+   */
+  function askWord() {
+    sfx('tap');
+    api.askWho?.({ key: 'word', title: '邊個睇返個詞？', subtitle: '揀你自己個名，部手機會交俾你' });
+  }
 
   function paintWordPanel(v) {
-    const show = !!v.me && v.phase !== 'deal' && v.phase !== 'over';
+    const live = v.phase !== 'deal' && v.phase !== 'over';
+    const tableAsk = atTable() && live && v.phase !== 'vote' && typeof api.askWho === 'function';
+    const show = (!!v.me && live) || tableAsk;
     wordBox.hidden = !show;
     if (!show) { if (wordInner && wordBox.contains(card.el)) card.close(); return; }
     if (!wordInner) {
       wordToggle = el('button', { class: 'btn btn-ghost btn-sm uc-wordtoggle', type: 'button' });
       wordInner = el('div', { class: 'uc-wordinner' });
+      wordHome = el('button', { class: 'btn btn-ghost btn-sm uc-wordhome', type: 'button' }, '📱 睇完 · 擺返中間');
       wordToggle.addEventListener('click', () => {
+        if (atTable()) { askWord(); return; }
         sfx('tap');
         wordOpen = !wordOpen;
         if (wordOpen && sharedDevice()) { locked = true; paintCard(); }
         paintWordPanel(view);
       });
-      wordBox.replaceChildren(wordToggle, wordInner);
+      wordHome.addEventListener('click', () => { sfx('tap'); card.close(); api.toTable?.(); });
+      wordBox.replaceChildren(wordToggle, wordInner, wordHome);
     }
-    const shared = sharedDevice();
-    wordToggle.textContent = wordOpen
-      ? '🃏 收埋個詞'
-      : (shared ? `🃏 睇返我個詞（淨係 ${nameOf(v.me.id)} 本人好㩒）` : '🃏 睇返我個詞');
+    if (atTable()) {
+      wordToggle.hidden = false;
+      wordToggle.textContent = '🃏 睇返我個詞';
+      wordInner.hidden = true;
+      wordHome.hidden = true;
+      return;
+    }
+    // handed over for it (askWho): the card is ready to peek, and one tap puts the phone back in the middle
+    const asked = sharedDevice() && ctx.asked?.key === 'word';
+    if (asked && !askedOpened) { askedOpened = true; wordOpen = true; }
+    wordToggle.hidden = asked;
+    wordHome.hidden = !asked;
+    wordToggle.textContent = wordOpen ? '🃏 收埋個詞' : '🃏 睇返我個詞';
     wordInner.hidden = !wordOpen;
     if (wordOpen) placeCard(wordInner); else card.close();
   }

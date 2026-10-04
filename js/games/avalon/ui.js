@@ -19,11 +19,23 @@
 //    「失敗」 tile is simply inert (same look, same tap sound)
 //  - the assassination screen is the same picker for every seat; only the
 //    Assassin's confirm is real, everybody else's records a decoy
+//
+// One phone in the middle (DESIGN §7.1; api.shared = this phone holds 2+ seats —
+// a phone of its own sees none of it):
+//  - U9: 「我睇完」 and 「確定出牌」 wait the same 8 s / 4 s for every role,
+//    counted from the hand-over card (minHold)
+//  - #22: on a public step (focus.open: pick, the vote reveal, the result, the
+//    Lady's pick, the shot) the identity mini card is not on screen
+//  - #27: evil talks face up first; 「傾好喇」 is one table tap (api.tableSend)
+//  - #20: the leader's public screen names the leader, never 「你係隊長」
 // ============================================================
 
 import * as S from './script.js?v=1';
 
 const T = S.T;
+/** U9 (decision 2026-10-04): one shared phone — every holder keeps the role card ≥ 8 s and the quest card ≥ 4 s. */
+export const MIN_REVEAL_MS = 8000;
+export const MIN_QUEST_MS = 4000;
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -62,7 +74,41 @@ export function mount(root, api) {
     timers.add(t);
     return t;
   };
+  const cancel = (t) => { if (t) { clearTimeout(t); timers.delete(t); } };
   const rerender = () => { if (body && view) body.update(view, ctx); };
+
+  /**
+   * U9 (DESIGN §7.1): on a shared phone holding time is a tell, so the role card and the quest card each have the same
+   * minimum for every role, counted from the hand-over card (this seat's screen mounts when its gate is tapped).
+   * A fill bar and 「仲有 N 秒…」 make it read as a rule, not lag. `check(on, words)` → true while it still holds back.
+   */
+  function minHold(ms) {
+    const t0 = api.now();
+    const fill = h('i', { class: 'av-hold-fill', style: { '--ms': `${ms}ms` } });
+    const text = h('span', { class: 'av-hold-text' });
+    const el = h('div', { class: 'av-hold', hidden: true, role: 'status' }, h('span', { class: 'av-hold-bar' }, fill), text);
+    let tick = null;
+    return {
+      el,
+      check(on, words) {
+        cancel(tick);
+        tick = null;
+        const left = on ? ms - (api.now() - t0) : 0;
+        el.hidden = !(left > 0);
+        if (!(left > 0)) return false;
+        text.textContent = words(Math.ceil(left / 1000));
+        tick = later(rerender, (((left - 1) % 1000) + 1) + 20);   // the next whole second, or the end
+        return true;
+      },
+      destroy() { cancel(tick); },
+    };
+  }
+
+  /** The table card is up on a shared phone: whole-table taps wait until it is tapped (U5). */
+  const tableLocked = (c) => !!api.atTable && !!c?.tableLocked;
+  /** 繼續 from a seat — or from the table screen of a shared phone while the leader is 💤 (one table tap). */
+  const sendContinue = () => (api.atTable && typeof api.tableSend === 'function'
+    ? api.tableSend({ type: 'continue' }) : api.send({ type: 'continue' }));
 
   /** Debounce for buttons that send an action: blocks re-taps while the answer is in flight, lets go after 3.5 s. */
   function sendGuard() {
@@ -273,9 +319,10 @@ export function mount(root, api) {
         const C = T.card;
         let label = C.knowsNone;
         let note = C.knowsNoneNote;
-        if (k.kind === 'seesEvil') { label = C.knowsEvil; note = C.knowsEvilNote; }
+        // #28: Merlin's note follows the public deck (who he cannot see); one evil partner is 佢, not 佢哋
+        if (k.kind === 'seesEvil') { label = C.knowsEvil; note = S.merlinNote(k.blind); }
         else if (k.kind === 'seesMerlin') { label = k.pids.length === 1 ? C.knowsMerlin1 : C.knowsMerlin2; note = k.pids.length === 1 ? info.short : C.knowsMerlinNote; }
-        else if (k.kind === 'allies') { label = C.knowsAllies; note = k.pids.length ? C.knowsAlliesNote : C.knowsAlliesNone; }
+        else if (k.kind === 'allies') { label = C.knowsAllies; note = !k.pids.length ? C.knowsAlliesNone : k.pids.length === 1 ? C.knowsAllyNote : C.knowsAlliesNote; }
         else if (k.kind === 'alone') { label = C.knowsAlone; note = C.knowsAloneNote; }
         labelEl.textContent = label;
         noteEl.textContent = note;
@@ -320,7 +367,8 @@ export function mount(root, api) {
     }) : null;
     const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', 'data-act': 'seen', text: T.reveal.done });
     doneBtn.addEventListener('click', () => { guard.fire(() => { doneBtn.disabled = true; sentSeen = true; api.send({ type: 'seen' }); }); });
-    const el = h('div', { class: 'av-stack' }, h('h2', { class: 'av-h', text: T.reveal.title }), card?.el, timer.el, doneBtn, note);
+    const hold = minHold(MIN_REVEAL_MS);
+    const el = h('div', { class: 'av-stack' }, h('h2', { class: 'av-h', text: T.reveal.title }), card?.el, timer.el, hold.el, doneBtn, note);
     return {
       el,
       update(v, c) {
@@ -328,10 +376,13 @@ export function mount(root, api) {
         timer.update(v, c, [5]);
         const tap = v.opts.reveal === 'tap';
         doneBtn.hidden = !(seat && tap);
-        if (v.mine?.seen) { doneBtn.disabled = true; doneBtn.textContent = T.reveal.doneWait; } else { doneBtn.disabled = guard.busy; doneBtn.textContent = T.reveal.done; sentSeen = false; }
-        note.textContent = !seat ? T.reveal.noteTable : tap ? T.reveal.noteTap : T.reveal.note;
+        // U9: a shared phone holds 「我睇完」 back for the same 8 s whatever the card says
+        const held = hold.check(!!api.shared && !!seat && tap && !v.mine?.seen, T.reveal.minWait);
+        if (v.mine?.seen) { doneBtn.disabled = true; doneBtn.textContent = T.reveal.doneWait; } else { doneBtn.disabled = guard.busy || held; doneBtn.textContent = T.reveal.done; sentSeen = false; }
+        note.textContent = !seat ? (api.shared ? T.reveal.noteTableShared : T.reveal.noteTable)
+          : tap ? (api.shared ? T.reveal.noteTapShared : T.reveal.noteTap) : T.reveal.note;
       },
-      destroy() { card?.destroy(); timer.destroy(); },
+      destroy() { card?.destroy(); timer.destroy(); hold.destroy(); },
     };
   }
 
@@ -359,7 +410,8 @@ export function mount(root, api) {
       el,
       update(v, c) {
         head.textContent = T.pick.title(v.pick.size);
-        hint.textContent = T.pick.mineHint(v.pick.size);
+        // a shared phone: the leader's pick is the table's screen (#4, #20) — it names the leader, never 「你係隊長」
+        hint.textContent = api.shared ? T.pick.leaderShared(nameOf(v.leader), v.pick.size) : T.pick.mineHint(v.pick.size);
         const lines = [];
         if (v.redo) lines.push(T.redo.pick);
         if (v.pick.need > 1) lines.push(T.pick.twoFail);
@@ -448,14 +500,17 @@ export function mount(root, api) {
     const trackLine = h('p', { class: 'av-note' });
     const needLine = h('p', { class: 'av-note' });
     const btn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', 'data-act': 'continue' });
-    btn.addEventListener('click', () => { guard.fire(() => { btn.disabled = true; api.send({ type: 'continue' }); }); });
+    btn.addEventListener('click', () => { guard.fire(() => { btn.disabled = true; sendContinue(); }); });
     const waitTxt = h('p', { class: 'av-note' });
     later(() => api.sfx('reveal'), 250);
     const awayLine = h('p', { class: 'av-note' });
-    const el = h('div', { class: 'av-stack av-voted-screen' }, verdict, tally, grid, awayLine, needLine, trackLine, isLeader ? btn : waitTxt);
+    // a shared phone: the leader holds the table's screen — a reminder to show it before 繼續 (#4)
+    const showNote = h('p', { class: 'av-note av-show-note', text: T.voted.tableNote });
+    showNote.hidden = !(isLeader && api.shared && api.me !== null);
+    const el = h('div', { class: 'av-stack av-voted-screen' }, verdict, tally, grid, awayLine, needLine, trackLine, showNote, isLeader ? btn : waitTxt);
     return {
       el,
-      update(v) {
+      update(v, c) {
         const r = v.voted;
         verdict.textContent = r.ends ? T.voted.ends : r.approved ? T.voted.approved : T.voted.rejected;
         verdict.className = `av-verdict ${r.approved ? 'ok' : 'bad'}`;
@@ -470,7 +525,7 @@ export function mount(root, api) {
         needLine.textContent = T.voted.needed(r.needed);
         trackLine.textContent = r.approved ? T.voted.track(r.before, 0) : T.voted.track(r.before, r.after);
         btn.textContent = r.ends ? T.voted.nextEnd : T.voted.next;
-        btn.disabled = guard.busy;
+        btn.disabled = guard.busy || tableLocked(c);
         waitTxt.textContent = T.voted.waiting(nameOf(v.leader));
       },
       destroy() {},
@@ -508,8 +563,9 @@ export function mount(root, api) {
     const doneBox = h('div', { class: 'av-done' });
     const progress = h('p', { class: 'av-progress' });
     const wait = member ? null : waitBlock('🛡');
+    const hold = minHold(MIN_QUEST_MS);   // in every member's screen (good and evil keep one shape)
     const el = h('div', { class: 'av-stack' }, head, teamLine, banner, timer.el,
-      member ? [tiles, play, doneBox, rule] : wait.el, progress);
+      member ? [tiles, hold.el, play, doneBox, rule] : wait.el, progress);
     let lastFlip = null;
     return {
       el,
@@ -522,7 +578,7 @@ export function mount(root, api) {
         timer.update(v, c, [5]);
         progress.hidden = !q.progress;
         if (q.progress) progress.textContent = T.quest.progress(q.progress.done, q.progress.total);
-        if (!member) { wait.set(v.me === null ? T.quest.tableWait : T.quest.notMember); return; }
+        if (!member) { wait.set(v.me === null ? (api.shared ? T.quest.tableWaitShared : T.quest.tableWait) : T.quest.notMember); return; }
         const m = q.mine;
         if (m.flip !== lastFlip) { lastFlip = m.flip; tiles.replaceChildren(...(m.flip ? [fail, success] : [success, fail])); }
         const done = m.done;
@@ -533,12 +589,14 @@ export function mount(root, api) {
           b.setAttribute('aria-pressed', !done && choice === kind ? 'true' : 'false');
         }
         play.hidden = done;
-        play.disabled = !choice || guard.busy;
+        // U9: a shared phone holds 「確定出牌」 back for the same 4 s for good and evil (picking a tile works at once)
+        const held = hold.check(!!api.shared && q.mode === 'tap' && !done, T.quest.minWait);
+        play.disabled = !choice || guard.busy || held;
         play.textContent = T.quest.play(choice);
         doneBox.hidden = !done;
         doneBox.textContent = done ? `${T.quest.played}　${q.mode === 'timer' && v.deadline != null ? T.quest.playedWaitTimer : T.quest.playedWait}` : '';
       },
-      destroy() { timer.destroy(); },
+      destroy() { timer.destroy(); hold.destroy(); },
     };
   }
 
@@ -554,16 +612,18 @@ export function mount(root, api) {
     const score = h('p', { class: 'av-note' });
     const late = h('div', { class: 'av-late', style: { '--n': o0.pile.length } }, verdict, counts, noteTwo, score);
     const btn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', 'data-act': 'continue' });
-    btn.addEventListener('click', () => { guard.fire(() => { btn.disabled = true; api.send({ type: 'continue' }); }); });
+    btn.addEventListener('click', () => { guard.fire(() => { btn.disabled = true; sendContinue(); }); });
     const waitTxt = h('p', { class: 'av-note' });
     const pileNote = h('p', { class: 'av-note', text: T.result.pileHint });
     // the pile turns over one card at a time, then the verdict
     o0.pile.forEach((card, i) => later(() => api.sfx(card === 'fail' ? 'deny' : 'flip'), 350 * (i + 1)));
     later(() => api.sfx(o0.success ? 'reveal' : 'zero'), 350 * (o0.pile.length + 1));
-    const el = h('div', { class: 'av-stack av-result' }, h('h2', { class: 'av-h', text: T.result.title(o0.no) }), pile, pileNote, late, isLeader ? btn : waitTxt);
+    const showNote = h('p', { class: 'av-note av-show-note', text: T.voted.tableNote });
+    showNote.hidden = !(isLeader && api.shared && api.me !== null);
+    const el = h('div', { class: 'av-stack av-result' }, h('h2', { class: 'av-h', text: T.result.title(o0.no) }), pile, pileNote, late, showNote, isLeader ? btn : waitTxt);
     return {
       el,
-      update(v) {
+      update(v, c) {
         const o = v.outcome;
         verdict.textContent = o.success ? T.result.success : T.result.fail;
         verdict.className = `av-verdict ${o.success ? 'ok' : 'bad'}`;
@@ -572,7 +632,7 @@ export function mount(root, api) {
         noteTwo.textContent = T.result.twoFailNote;
         score.textContent = T.result.score(v.board.wins, v.board.losses);
         btn.textContent = T.result.next[o.next] ?? T.result.next.pick;
-        btn.disabled = guard.busy;
+        btn.disabled = guard.busy || tableLocked(c);
         waitTxt.textContent = T.result.waiting(nameOf(v.leader));
       },
       destroy() {},
@@ -655,18 +715,33 @@ export function mount(root, api) {
         else api.send({ type: 'decoy' });
       },
     });
-    const el = h('div', { class: 'av-stack' }, head, sub, timer.el, overtime, flipBox, picker.el, recorded);
+    // #27, one phone: evil talks first, face up — one table tap (the same button on every screen) calls the Assassin
+    const talkGuard = sendGuard();
+    const talkBtn = h('button', { class: 'btn btn-primary btn-lg av-talk-done', type: 'button', 'data-act': 'talked', text: T.assassinate.talkDone });
+    talkBtn.addEventListener('click', () => {
+      talkGuard.fire(() => {
+        if (api.shared && typeof api.tableSend === 'function') api.tableSend({ type: 'talked' });
+        else api.send({ type: 'talked' });
+      });
+    });
+    const el = h('div', { class: 'av-stack' }, head, sub, timer.el, overtime, flipBox, picker.el, talkBtn, recorded);
     return {
       el,
       update(v, c) {
         const a = v.assassinate;
+        const talk = !!a.talk;
+        head.textContent = talk ? T.assassinate.talkTitle : T.assassinate.title;
+        sub.textContent = talk ? T.assassinate.talkSub : T.assassinate.sub;
         timer.update(v, c, [30]);
         const left = v.deadline != null ? v.deadline - api.now() : null;
-        overtime.hidden = !(left !== null && left <= 0);
-        clearTimeout(wake);
+        overtime.hidden = talk || !(left !== null && left <= 0);
+        cancel(wake);
         wake = left !== null && left > 0 ? later(rerender, left + 50) : null;
-        picker.update(v, { disabled: v.me === null || (!a.canShoot && a.tapped) });
-        recorded.hidden = !(a.tapped && !a.canShoot);
+        picker.el.hidden = talk;
+        picker.update(v, { disabled: talk || v.me === null || (!a.canShoot && a.tapped) });
+        talkBtn.hidden = !talk;
+        talkBtn.disabled = talkGuard.busy || tableLocked(c);
+        recorded.hidden = talk || !(a.tapped && !a.canShoot);
         recorded.textContent = T.assassinate.recorded;
         flipBox.hidden = !a.flipped;
         if (a.flipped) {
@@ -674,7 +749,7 @@ export function mount(root, api) {
             ...a.flipped.map((f) => h('div', { class: 'av-flip-row' }, h('b', { text: nameOf(f.pid) }), ` ${S.roleLabel(f.role)}`)));
         }
       },
-      destroy() { clearTimeout(wake); picker.destroy(); timer.destroy(); },
+      destroy() { cancel(wake); picker.destroy(); timer.destroy(); },
     };
   }
 
@@ -711,9 +786,13 @@ export function mount(root, api) {
     };
   }
 
-  /** Who taps 繼續 on the public screens: the leader — or anybody at the table while the leader is marked 💤. */
-  const leads = (v) => v.me !== null && (v.me === v.leader
-    || ((v.absent ?? []).includes(v.leader) && !(v.absent ?? []).includes(v.me)));
+  /**
+   * Who taps 繼續 on the public screens: the leader — or anybody at the table while the leader is marked 💤 (on a shared
+   * phone lying in the middle, the table screen itself: one table tap, api.tableSend).
+   */
+  const leaderAway = (v) => (v.absent ?? []).includes(v.leader);
+  const leads = (v) => (v.me !== null && (v.me === v.leader || (leaderAway(v) && !(v.absent ?? []).includes(v.me))))
+    || (v.me === null && !!api.atTable && leaderAway(v));
 
   function keyFor(v) {
     const seat = v.me !== null;
@@ -728,7 +807,7 @@ export function mount(root, api) {
       case 'quest-result': return `result|${v.outcome.no}|${cont}`;
       case 'lady': return `lady|${v.lady.log.length}|${seat && v.me === v.ladyStep.holder}`;
       case 'lady-peek': return `peek|${v.lady.log.length}|${seat && v.me === v.ladyStep.holder}`;
-      case 'assassinate': return 'assassinate';
+      case 'assassinate': return `assassinate|${!!v.assassinate.talk}`;
       case 'shot': return `shot|${v.shot.canContinue}`;
       default: return 'over';
     }
@@ -755,8 +834,11 @@ export function mount(root, api) {
   // ---------- the mini identity card (everything after the reveal) ----------
 
   let mini = null;
-  function paintMini(v) {
-    const show = !!v.mine && v.phase !== 'reveal' && v.phase !== 'over';
+  function paintMini(v, c) {
+    // #22: a public step on a shared phone (the leader's pick, the reveal of the votes, the result…) is the table's screen —
+    // no hold-to-peek identity card in reach of the next thumb; a seat picked by hand (換人, private gate) keeps it
+    const openHere = !!api.shared && v.me !== null && !!c?.focus?.open && (c.focus.pids ?? []).includes(v.me);
+    const show = !!v.mine && v.phase !== 'reveal' && v.phase !== 'over' && !openHere;
     miniSlot.hidden = !show;
     if (!show) return;
     if (!mini) {
@@ -787,7 +869,7 @@ export function mount(root, api) {
       paintRoster(view);
       paintHistory(view);
       paintDeck(view);
-      paintMini(view);
+      paintMini(view, ctx);
 
       const key = keyFor(view);
       if (key !== bodyKey) {

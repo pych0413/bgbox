@@ -171,3 +171,30 @@
 .ct-day .c-timer { padding: 0; }
 .ct-day .c-timer-clock { font-size: 2.25rem; line-height: 1.1; }
 .ct-recapwrap .c-cover { aspect-ratio: 2.4 / 1; }
+
+/* ---------- one phone in the middle (DESIGN §7.1) ---------- */
+
+/* the night countdown with the seconds left in words (#7); the same on every phone */
+.ct-barwrap { display: flex; align-items: center; gap: .625rem; }
+.ct-barwrap .ct-bar { flex: 1; }
+.ct-bar-text { flex: none; min-width: 4.5rem; text-align: right; font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ct-bar-text:empty { display: none; }
+
+/* a shared phone lights only the names a tap can use (#36) */
+.ct-grid.is-dim, .ct-chip:disabled { opacity: .4; }
+.ct-chip:disabled { cursor: default; }
+
+/* several of the phone's seats awake together: one screen (U2), and each seat's own panel */
+.ct-co .ct-panel { height: auto; min-height: 7rem; max-height: 14rem; }
+.ct-co-shared, .ct-co-priv { display: flex; flex-direction: column; gap: .625rem; }
+.ct-co-ownlabel { margin: 0; text-align: center; font-size: .75rem; color: var(--text-dim); }
+.ct-co-own { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; }
+.ct-co-me .dot { background: var(--seat, var(--cheese)); }
+.ct-co-privtitle { margin: 0; text-align: center; font-size: 1rem; font-weight: 800; }
+.ct-co-dice { display: flex; align-items: center; justify-content: center; gap: .5rem; }
+.ct-co-dice .die { width: 2.5rem; height: 2.5rem; border-radius: .625rem; font-size: 1.25rem; padding: .3125rem; }
+.ct-co-dicelabel { font-size: .8125rem; color: var(--text-dim); }
+.ct-co .ct-ack { flex: none; min-height: 5.5rem; }
+
+/* the phone in the middle by day: the table's one tap (#5) */
+.ct-table-ready { align-self: stretch; }

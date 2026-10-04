@@ -22,6 +22,8 @@
 //   `secretChoice`  (default false) your own phone never prints whom you picked: the button reads 「確定投票」
 //                   and the voted state 「已投 ✓」 with no row lit — a neighbour's glance learns nothing
 //
+//   `youTag`        (default true) 「（你）」 after `me`; off on a shared phone (DESIGN §7.1 #20)
+//
 // A vote is two taps on purpose — pick, then 確定 — so a stray thumb on a
 // shared table does not lock somebody in.
 //
@@ -99,7 +101,7 @@ export function VotePanel(props = {}) {
         disabled: voted,
         onclick: () => { pending = pl.id; sfx('tap'); paint(); },
       }, dot(pl),
-      el('span', { class: 'c-votepanel-name', text: pl.name + (pl.id === p.me ? '（你）' : '') }),
+      el('span', { class: 'c-votepanel-name', text: pl.name + (pl.id === p.me && p.youTag !== false ? '（你）' : '') }),
       on ? el('span', { class: 'c-votepanel-tick', text: voted ? '✓' : '●' }) : null);
     });
 
@@ -197,7 +199,7 @@ export function VotePanel(props = {}) {
       return sig(['reveal', p.reveal, all, p.candidates ?? null, p.title ?? null]);
     }
     return sig(['ballot', players, p.me ?? null, hasVoted() ? (p.myVote ?? '@null') : '@none', pending, changing,
-      !!p.allowAbstain, p.allowChange !== false, p.title ?? null, !!p.secretChoice]);
+      !!p.allowAbstain, p.allowChange !== false, p.title ?? null, !!p.secretChoice, p.youTag !== false]);
   }
 
   function paint() {

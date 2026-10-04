@@ -20,6 +20,13 @@
 // 📓 notes cover); your own seat chip is marked only by the is-me ring. The uncovered screen is the same whatever
 // your card is (a UI test swaps the card and compares).
 //
+// One phone in the middle (DESIGN §7.1; api.shared = this phone holds 2+ seats — a phone of its own sees none of it):
+//  - wolves awake together (ctx.coWakers) share ONE night screen: the two info lines name them all and every tap
+//    carries `seats: ctx.coWakers`, so one pick and one 確定 count for every wolf (U2);
+//  - a seat that has confirmed at night gets 「📱 睇完，放返中間」 on the same 確定 button (real or decoy alike);
+//  - a speech / 遺言 is a public step (focus.open): the speaker's screen is the table's, so it names them (no 「輪到你」,
+//    no 「（你）」) and hides the role card and the 📓 cover; the table screen (api.atTable) is the public table view.
+//
 // Only api.components (RoleCard, Cover, VotePanel, Timer) and plain DOM are used. Every Cantonese line is in
 // script.js. Flow and wording: docs/games/werewolf.md.
 // ============================================================
@@ -59,10 +66,14 @@ export function mount(root, api) {
 
   const seatOf = (v, pid) => v.seats.find((s) => s.pid === pid) ?? null;
   const seatName = (v, pid) => `${seatOf(v, pid)?.no ?? ''}號${nameOf(pid)}`;
+  // #20 (DESIGN §7.1): a shared phone's screen is the whole table's — names only, never 「（你）」
+  const youTag = (v, pid) => (pid === v.me && !api.shared ? S.UI.common.you : '');
   const labelOf = (v, pid) => {
     const s = seatOf(v, pid);
-    return `${s ? `${s.no}號 ` : ''}${nameOf(pid)}${pid === v.me ? S.UI.common.you : ''}`;
+    return `${s ? `${s.no}號 ` : ''}${nameOf(pid)}${youTag(v, pid)}`;
   };
+  /** A public one-person step on a shared phone (a speech, 遺言): this seat holds the phone while the table watches (#4). */
+  const openHere = (v, c) => !!api.shared && !!v.me && !!c?.focus?.open && (c.focus.pids ?? []).includes(v.me);
 
   // ============================================================
   // persistent chrome
@@ -184,9 +195,10 @@ export function mount(root, api) {
     };
   }
 
-  function paintMe(v) {
+  function paintMe(v, c) {
     const my = v.my;
-    const hide = !my || v.phase === 'night' || v.phase === 'over' || v.phase === 'deal';
+    // a speech on a shared phone is the table's screen: no role card or 📓 cover in reach of the next thumb (#22)
+    const hide = !my || v.phase === 'night' || v.phase === 'over' || v.phase === 'deal' || openHere(v, c);
     setHidden(meBox, hide);
     if (hide) return;
     if (!roleCard) { roleCard = C.RoleCard(roleProps(v)); meRoleHost.append(roleCard.el); } else roleCard.update(roleProps(v));
@@ -340,16 +352,39 @@ export function mount(root, api) {
     const foot = el('div', { class: 'ww-foot' }, skip, ok);
     const node = el('div', { class: `ww-panel ww-${type}` }, info, grid.el, foot, hint);
     let infoSig = '';
+    let cur = null;   // { nt, co } as last painted: what a tap acts on
 
-    skip.addEventListener('click', () => api.send({ type, pick: null, lock: true }));
-    ok.addEventListener('click', () => api.send({ type, lock: true }));
+    // U2 (DESIGN §7.1): wolves awake together on ONE shared phone share this screen — one tap counts for all of them
+    const withMates = (a) => (cur?.co.length ? { ...a, seats: cur.co.slice() } : a);
+    /** A shared phone, this seat has confirmed: the same 確定 button now puts the phone back in the middle (real or decoy alike). */
+    const homeNow = () => type === 'night' && !!api.shared && typeof api.toTable === 'function' && !!cur?.nt.lock;
+
+    skip.addEventListener('click', () => api.send(withMates({ type, pick: null, lock: true })));
+    ok.addEventListener('click', () => {
+      if (homeNow()) { api.toTable({ card: false }); return; }
+      // together: the shown pick goes with the lock, so every wolf confirms the same target (never a silent 空刀)
+      api.send(withMates(cur?.co.length ? { type, pick: cur.nt.pick, lock: true } : { type, lock: true }));
+    });
 
     return {
       el: node,
-      update(v) {
+      update(v, c) {
         const nt = v.nt;
         if (!nt) return;
-        const lines = nt.info;
+        const co = type === 'night' && Array.isArray(c?.coWakers) && c.coWakers.length > 1 ? c.coWakers.slice() : [];
+        cur = { nt, co };
+        let lines = nt.info;
+        if (co.length) {
+          // one screen for everybody awake: the two info lines name them all (same two-line shape as every other panel)
+          // (a dead wolf on the same phone — two seats on one phone in a room of phones — is named apart: he points at nothing)
+          const out = (p) => seatOf(v, p)?.alive === false;
+          const awake = co.filter((p) => !out(p));
+          const gone = [...new Set([...co, ...(v.my?.mates ?? [])])].filter(out);
+          lines = [
+            S.PANEL.wolves.together(awake.map((p) => seatName(v, p)).join('、')) + (gone.length ? S.PANEL.wolves.deadMates(gone.map((p) => seatName(v, p)).join('、')) : ''),
+            S.PANEL.wolves.togetherPick,
+          ];
+        }
         const sg = sig(lines);
         if (sg !== infoSig) {
           infoSig = sg;
@@ -367,14 +402,19 @@ export function mount(root, api) {
         }));
         grid.paint(items, (pid) => {
           if (nt.stage !== 'run') return;
-          api.send({ type, pick: nt.pick === pid ? null : pid });
+          api.send(withMates({ type, pick: nt.pick === pid ? null : pid }));
         });
         const open = nt.stage === 'run';
-        const frozen = nt.lock && !nt.chips.some((c) => c.on);
+        const frozen = nt.lock && !nt.chips.some((x) => x.on);
         setText(skip, nt.skip);
         skip.disabled = !open || frozen;
-        setText(ok, nt.lock ? S.PANEL.okDone : nt.ok);
-        ok.disabled = !open || nt.lock || nt.pick == null;
+        if (homeNow()) {
+          setText(ok, S.PANEL.okHome);
+          ok.disabled = false;
+        } else {
+          setText(ok, nt.lock ? S.PANEL.okDone : nt.ok);
+          ok.disabled = !open || nt.lock || nt.pick == null;
+        }
         node.classList.toggle('is-locked', nt.lock);
         node.classList.toggle('is-open', open);
       },
@@ -416,7 +456,8 @@ export function mount(root, api) {
       update(v) {
         const my = v.my;
         // the stage card above already says what to do; only the people without a card need a note
-        setText(note, v.isMod ? S.UI.deal.modNote : !my ? S.UI.deal.spectator : '');
+        // a shared phone in the middle (api.atTable) is not a spectator: the deal walks round it seat by seat
+        setText(note, v.isMod ? S.UI.deal.modNote : !my ? (api.atTable ? S.UI.deal.table : S.UI.deal.spectator) : '');
         setHidden(note, !!my);
         setHidden(cardHost, !my);
         if (my) {
@@ -485,7 +526,11 @@ export function mount(root, api) {
         setHidden(done, !mine);
         done.disabled = !running;
         setText(done, S.UI.day.speakDone);
-        setText(note, mine ? (S.HINT.day[kind === 'speech' ? 'speech' : 'words'].me) : '');
+        // a shared phone: the speaker's screen is the table's (#20) — the line names them instead of 「輪到你」
+        const noteText = !mine ? ''
+          : api.shared ? (kind === 'speech' ? S.UI.day.speakShared : S.UI.day.wordsShared)(seatName(v, cur.pid))
+            : S.HINT.day[kind === 'speech' ? 'speech' : 'words'].me;
+        setText(note, noteText);
         setHidden(note, !mine);
         if (explode) explode.update(v);
       },
@@ -499,7 +544,8 @@ export function mount(root, api) {
       el('span', { class: 'ww-explode-main', text: S.UI.day.explode }), el('small', { text: S.UI.day.explodeHold }));
     const fill = el('i', { class: 'ww-explode-fill' });
     btn.append(fill);
-    const note = el('p', { class: 'ww-explode-note', text: S.UI.day.explodeNote });
+    // one phone: only the speaker holds it, so only their own speech can be cut by their own 💥 (#10)
+    const note = el('p', { class: 'ww-explode-note', text: api.shared ? S.UI.day.explodeNoteShared : S.UI.day.explodeNote });
     const box = el('div', { class: 'ww-explode-box' }, btn, note);
     let hold = null;
     const cancel = () => { if (hold) { clearTimeout(hold); timers.delete(hold); hold = null; } btn.classList.remove('holding'); };
@@ -657,7 +703,7 @@ export function mount(root, api) {
           const wolf = o.roles[s.pid] === 'werewolf';
           const won = o.win !== 'draw' && (o.win === 'wolves') === wolf;
           return el('div', { class: `ww-over-row${wolf ? ' wolf' : ''}${won ? ' won' : ''}${s.alive ? '' : ' is-dead'}`, style: { '--seat': colorOf(s.pid) } },
-            el('b', { text: String(s.no) }), el('span', { class: 'ww-over-name', text: nameOf(s.pid) + (s.pid === v.me ? S.UI.common.you : '') }),
+            el('b', { text: String(s.no) }), el('span', { class: 'ww-over-name', text: nameOf(s.pid) + youTag(v, s.pid) }),
             el('span', { class: 'ww-over-role', text: S.roleTag(o.roles[s.pid]) }),
             el('small', { text: s.alive ? S.UI.over.alive : `${s.at ? `第 ${s.at.n} ${s.at.time === 'night' ? '夜' : '日'}` : ''}${s.how ? S.HOW[s.how] : ''}` }));
         }));
@@ -715,7 +761,7 @@ export function mount(root, api) {
 
     paintStage(v, ctx);
     paintGod(v);
-    paintMe(v);
+    paintMe(v, ctx);
     const showRoster = v.phase !== 'night' && v.phase !== 'deal';
     setHidden(roster, !showRoster);
     if (showRoster) paintRoster(v);

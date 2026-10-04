@@ -87,9 +87,16 @@ export function mount(root, api) {
   let lastCtx = {};
   let prev = null;          // previous view, for sound transitions
   let peeking = false;      // this finger opened the role card
+  let peekedDeal = null;    // shared phone: the deal whose card this seat has looked at (then 「✓ 搞掂」 shows, #15)
+  let sentDeal = null;      // …and whose 「✓ 搞掂」 was just tapped (one tap only)
+  let sentTimer = null;
   let cup = null;           // DiceCup instance (card holders only)
   let card = null;          // RoleCard instance (card holders only)
   let cardDealId = null;
+
+  /** §7.1: a phone holding 2+ seats is passed round the table and read by everybody — never 「你」 to the table. */
+  const shared = () => api.shared === true;
+  const isMe = (id) => id != null && id === api.me && !shared();
 
   // ---------- banner ----------
   const status = h('div', { class: 'cu-status wait', text: '載入緊…' });
@@ -102,12 +109,18 @@ export function mount(root, api) {
   const diceCard = h('section', { class: 'cu-card', hidden: true },
     h('div', { class: 'cu-head' }, h('h3', { text: '骰盅' }), lockBadge, diceHint), diceSlot);
 
+  // ---------- shared phone: one hand-over per seat for the peek AND the dice (#15) ----------
+  const doneBtn = h('button', { type: 'button', class: 'cu-btn primary cu-done' });
+  const doneNote = h('small', { class: 'cu-hint cu-done-note' });
+  const doneBox = h('div', { class: 'cu-donebox', hidden: true }, doneBtn, doneNote);
+  doneBtn.addEventListener('click', () => handOn());
+
   // ---------- role card ----------
   const roleSlot = h('div', { class: 'cu-slot' });
   const roleCard = h('section', { class: 'cu-card', hidden: true },
-    h('div', { class: 'cu-head' }, h('h3', { text: '我嘅角色牌' })), roleSlot);
+    h('div', { class: 'cu-head' }, h('h3', { text: '我嘅角色牌' })), roleSlot, doneBox);
 
-  // ---------- no-card note (moderator / spectator) ----------
+  // ---------- no-card note (moderator / spectator / the table) ----------
   const noteCard = h('section', { class: 'cu-card cu-notecard', hidden: true });
 
   // ---------- showdown (dice revealed) ----------
@@ -172,6 +185,46 @@ export function mount(root, api) {
   function sendHost(type, node) {
     if (NEED_CONFIRM[type] && !confirmed(NEED_CONFIRM[type], node, type)) return;
     send({ type });
+    // §7.1 #22: on a shared phone the dice / roles are shown from the table screen, never by laying the host's own
+    // seat (card, cup, controls) face up
+    if ((type === 'reveal-dice' || type === 'reveal-roles') && shared()) {
+      try { api.toTable?.(); } catch (err) { console.error(err); }
+    }
+  }
+
+  /**
+   * Where 「✓ 搞掂」 sends the phone (#15): the next seat of this phone that still has to look, clockwise from this one
+   * (the shell's walk goes the same way), else back to the host (the controls live on that seat), else the middle.
+   * → { kind: 'next' | 'host' | 'table', pid }
+   */
+  function handTarget(v) {
+    const me = api.me;
+    const order = (Array.isArray(api.players) ? api.players : []).filter((p) => p && !p.spectator).map((p) => p.id);
+    const waiting = (lastCtx.focus?.pids ?? []).filter((id) => id !== me);
+    if (waiting.length) {
+      const i = order.indexOf(me);
+      const rank = (id) => { const j = order.indexOf(id); return j < 0 ? order.length : (j - i + order.length) % order.length; };
+      return { kind: 'next', pid: waiting.slice().sort((a, b) => rank(a) - rank(b))[0] };
+    }
+    const mine = Array.isArray(api.mySeats) ? api.mySeats : [];
+    if (v.host && v.host !== me && mine.includes(v.host)) return { kind: 'host', pid: v.host };
+    return { kind: 'table', pid: null };
+  }
+
+  /** 「✓ 搞掂」: this seat is done with its card and dice; the shell's walk (or handTo) moves the phone on. */
+  function handOn() {
+    const v = last;
+    if (!v?.me?.playing || v.me.seenRole || v.revealRoles || sentDeal === v.dealId) return;
+    const to = handTarget(v);
+    // one tap only (a double tap would hand the phone over twice); let go after 3.5 s in case it never got through
+    sentDeal = v.dealId;
+    clearTimeout(sentTimer);
+    sentTimer = setTimeout(() => { sentDeal = null; if (last) render(last); }, 3500);
+    render(v);
+    send({ type: 'seen' });
+    if (to.kind === 'host') {
+      try { api.handTo?.(to.pid, { why: '大家睇完牌' }); } catch (err) { console.error(err); }
+    }
   }
 
   function rollAll(node) {
@@ -190,13 +243,21 @@ export function mount(root, api) {
   const onRoll = () => send({ type: 'roll' });
   const onLockDice = () => send({ type: 'lock-dice' });
 
-  /** RoleCard callback. "Seen" is sent on RELEASE so a shared phone moves on only after the peek ends. */
+  /**
+   * RoleCard callback. "Seen" is sent on RELEASE so the table moves on only after the peek ends. On a shared phone the
+   * release sends nothing: the seat also rolls and locks its dice in the same turn, then taps 「✓ 搞掂」 (#15).
+   */
   function onOpen(open) {
     if (open) { peeking = true; return; }
     if (!peeking) return;
     peeking = false;
     const v = last;
-    if (v?.me?.playing && v.me.role && !v.me.seenRole && !v.revealRoles) send({ type: 'seen' });
+    if (!(v?.me?.playing && v.me.role && !v.me.seenRole && !v.revealRoles)) return;
+    if (shared()) {
+      if (peekedDeal !== v.dealId) { peekedDeal = v.dealId; render(v); }
+      return;
+    }
+    send({ type: 'seen' });
   }
 
   // ---------- components ----------
@@ -208,10 +269,15 @@ export function mount(root, api) {
     onRoll, onLock: v.me.diceLocked ? undefined : onLockDice, shakeToRoll: true,
   });
 
+  /** Shared phone: this seat still owes its look (and its dice) — the walk is waiting for its 「✓ 搞掂」. */
+  const inWalk = (v) => shared() && !!v.me?.playing && !v.me.seenRole && !v.revealRoles && v.phase === 'play';
+
   const cardProps = (v) => ({
     role: v.me.role ? { emoji: v.me.role.emoji, name: v.me.role.name, text: v.me.role.desc } : null,
     locked: v.me.roleLocked,
-    onLockToggle: v.can.lockRole || v.can.unlockRole ? onLockRole : undefined,   // no button once roles are open
+    // no button once roles are open; on a shared phone none while the walk waits for this seat either (latching the
+    // card counts as 「looked」 and would hand the phone on before the dice)
+    onLockToggle: (v.can.lockRole || v.can.unlockRole) && !inWalk(v) ? onLockRole : undefined,
     hint: v.revealRoles ? '大家嘅角色都公開咗' : undefined,
     onOpen,
   });
@@ -248,6 +314,9 @@ export function mount(root, api) {
     if (v.phase === 'ended') return ['done', '🏁 遊戲完咗'];
     if (v.revealRoles) return ['ok', '🔓 角色已經公開'];
     const waiting = v.seats.filter((s) => s.playing && !s.seenRole).length;
+    if (inWalk(v) && peekedDeal === v.dealId) {
+      return ['turn', v.me.mayRoll && !v.revealDice ? '睇完牌 ✓ 要搖骰就而家搖，搞掂㩒下面「✓ 搞掂」' : '睇完牌 ✓ 搞掂㩒下面「✓ 搞掂」'];
+    }
     if (v.me?.playing && !v.me.seenRole) return ['turn', '輪到你睇牌 👇 㩒住張牌'];
     if (v.revealDice) return ['ok', '👁 開咗盅 — 睇下面「開盅」'];
     if (waiting === 0) return ['ok', '大家都睇咗牌 ✓'];
@@ -309,7 +378,7 @@ export function mount(root, api) {
       let row = rows.get(s.id);
       if (!row) { row = makeRow(s.id); rows.set(s.id, row); }
       const p = playerFor(s.id);
-      const label = `${p?.name ?? s.name}${s.id === api.me ? '（你）' : ''}`;
+      const label = `${p?.name ?? s.name}${isMe(s.id) ? '（你）' : ''}`;
       if (row.name.textContent !== label) row.name.textContent = label;
       row.dot.style.background = p?.color || '';
       row.dot.classList.toggle('off', p ? p.connected === false : false);
@@ -324,7 +393,7 @@ export function mount(root, api) {
         }));
       }
       row.unlock.hidden = !(v.controller && s.diceLocked);
-      row.el.classList.toggle('me', s.id === api.me);
+      row.el.classList.toggle('me', isMe(s.id));
       if (roster.children[i] !== row.el) roster.insertBefore(row.el, roster.children[i] ?? null);
     });
     for (const [id, row] of rows) if (!alive.has(id)) { row.el.remove(); rows.delete(id); }
@@ -371,10 +440,13 @@ export function mount(root, api) {
     diceCard.hidden = !holds;
     roleCard.hidden = !holds;
     noteCard.hidden = holds;
+    syncDone(v);
     if (!holds) {
       noteCard.textContent = me
         ? (v.all ? '你係主持 🎙️ 今次你唔攞牌、唔擲骰。你睇到所有人嘅角色（下面）。' : '你係主持 🎙️ 今次你唔攞牌、唔擲骰，由你控制場面。')
-        : '你喺度睇緊 👀 下一局先加入到。';
+        // the table screen of a shared phone (§7.1): nobody's card or cup, only what is public
+        : api.atTable === true && shared() ? '📱 部機喺枱中間：開咗嘅骰同角色喺度一齊睇。'
+          : '你喺度睇緊 👀 下一局先加入到。';
       return;
     }
 
@@ -388,6 +460,20 @@ export function mount(root, api) {
 
     // role
     card?.update(cardProps(v));
+  }
+
+  /** Shared phone, this seat's walk turn, after its first peek: 「✓ 搞掂 · 交俾 阿明」 under the card (#15). */
+  function syncDone(v) {
+    const show = inWalk(v) && peekedDeal === v.dealId;
+    doneBox.hidden = !show;
+    if (!show) return;
+    const to = handTarget(v);
+    const name = to.pid ? (playerFor(to.pid)?.name ?? v.seats.find((s) => s.id === to.pid)?.name ?? '?') : '';
+    doneBtn.textContent = to.kind === 'next' ? `✓ 搞掂 · 交俾 ${name}`
+      : to.kind === 'host' ? `✓ 搞掂 · 交返俾房主 ${name}` : '✓ 搞掂 · 擺返中間';
+    doneBtn.disabled = sentDeal === v.dealId;
+    doneNote.textContent = v.me.mayRoll && !v.revealDice ? '要搖骰就而家搖、鎖埋先交' : '';
+    doneNote.hidden = !doneNote.textContent;
   }
 
   function syncControls(v) {
@@ -412,6 +498,21 @@ export function mount(root, api) {
     prev = v;
   }
 
+  /** Paint everything from a view (update, or a local change such as the first peek on a shared phone). */
+  function render(view) {
+    const [kind, text] = statusLine(view);
+    status.className = `cu-status ${kind}`;
+    status.textContent = text;
+    if (lastCtx.paused) status.textContent += '（暫停緊）';
+
+    syncMine(view);
+    syncShowdown(view);
+    syncRoster(view);
+    syncControls(view);
+    syncDeck(view);
+    syncLog(view);
+  }
+
   return {
     update(raw, ctx) {
       const view = normaliseView(raw);
@@ -420,21 +521,12 @@ export function mount(root, api) {
       lastCtx = isObj(ctx) ? ctx : {};
       sounds(view);
       ensureCards(view);
-
-      const [kind, text] = statusLine(view);
-      status.className = `cu-status ${kind}`;
-      status.textContent = text;
-      if (lastCtx.paused) status.textContent += '（暫停緊）';
-
-      syncMine(view);
-      syncShowdown(view);
-      syncRoster(view);
-      syncControls(view);
-      syncDeck(view);
-      syncLog(view);
+      render(view);
     },
 
     destroy() {
+      clearTimeout(sentTimer);
+      sentTimer = null;
       cup?.destroy();
       card?.destroy();
       cup = null;

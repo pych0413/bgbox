@@ -85,6 +85,15 @@
 .dg-word-meta { font-size: .75rem; color: var(--accent); }
 .dg-word-face { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; padding: .25rem .5rem; }
 .dg-word-cover { aspect-ratio: auto; height: 5.5rem; }
+.dg-word-cover.slim { height: 3.25rem; }   /* a shared phone's hold cover in canvas mode: the picture keeps the room (#22) */
+/* …so both faces are one slim row: the full-size 🙈 and the label stacked would be cut off at this height */
+.dg-word-cover.slim .c-cover-face { padding: .25rem .75rem; gap: .5rem; }
+.dg-word-cover.slim .c-cover-back { flex-direction: row; }
+.dg-word-cover.slim .c-cover-art { font-size: 1.625rem; }
+.dg-word-cover.slim .dg-word-face { flex-direction: row; flex-wrap: wrap; align-content: center; column-gap: .625rem; padding: 0; }
+.dg-word-cover.slim .dg-word-text { font-size: 1.375rem; line-height: 1.2; }
+.dg-word-cover.slim .dg-word-text.long { font-size: 1.125rem; }
+.dg-word-cover.slim .dg-word-alt { order: 3; flex-basis: 100%; white-space: nowrap; }
 
 /* ---------- play: shout mode, the drawer's name chips ---------- */
 .dg-chipsbox { display: flex; flex-direction: column; gap: .375rem; }
@@ -145,6 +154,9 @@
 .dg-canvas.reveal { --c-chrome: 30rem; }          /* the word and the points sit above it */
 .dg-canvas.drawer { --c-chrome: 36rem; }     /* timer, word, name chips and the toolbar share this screen */
 .dg-play.is-typed .dg-canvas.drawer { --c-chrome: 33rem; }   /* typed: no name chips (the feed sits below and scrolls) — never smaller than the guessers' */
+/* a shared phone lies in the middle and the table guesses from the drawer's own screen: the name chips sit under the
+   canvas, so the picture takes the full width (D9) */
+.dg-canvas.drawer.table { --c-chrome: 28rem; }
 .dg .dg-canvas .c-canvas { --c-chrome: inherit; }
 
 /* ---------- foul, moderator, abandon ---------- */

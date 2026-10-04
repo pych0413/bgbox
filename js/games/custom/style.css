@@ -71,6 +71,10 @@
 .cu-card > .cu-head + .cu-grid { margin-top: 0; }
 .cu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .625rem; }
 .cu-grid .cu-btn { font-size: .875rem; }
+/* one phone (#15): 「✓ 搞掂 · 交俾 阿明」 under the card, once the seat has looked */
+.cu-donebox { display: flex; flex-direction: column; gap: .375rem; margin-top: .75rem; }
+.cu-donebox[hidden] { display: none; }
+.cu-done-note { text-align: center; }
 
 /* ---------- roster ---------- */
 .cu-roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }

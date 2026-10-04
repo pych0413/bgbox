@@ -9,7 +9,7 @@
 // Each game's own `game.js` meta is the single source of truth (G16). The
 // copy below exists only so the picker needs no module; tests/core.test.mjs
 // fails if a field here drifts from game.js. Mirrored fields:
-//   name, emoji, players, minutes, blurb, singleDevice, narration
+//   name, emoji, players, minutes, blurb, singleDevice, narration, eyesClosed (U1: no 靜音 on one phone)
 // (`batch` lives only here: 1 = shipped, 2 = probed before it is offered. All ten shipped 2026-10-03.)
 // ============================================================
 
@@ -17,21 +17,21 @@ export const GAMES = [
   {
     id: 'cheese-thief',
     meta: { name: '芝士大盜', emoji: '🧀', players: [4, 8], minutes: [10, 15], batch: 1,
-      singleDevice: 'full', narration: 'required',
+      singleDevice: 'full', narration: 'required', eyesClosed: true,
       blurb: '每人一粒秘密骰仔，天黑咗按點鐘睜眼 — 有人偷咗芝士，揪出大盜。' },
     load: () => import('./cheese-thief/index.js?v=1'),
   },
   {
     id: 'onuw',
     meta: { name: '一夜終極狼人', emoji: '🐺', players: [3, 10], minutes: [10, 20], batch: 1,
-      singleDevice: 'partial', narration: 'recommended',
+      singleDevice: 'partial', narration: 'recommended', eyesClosed: true,
       blurb: '一晚換牌、一次投票，連自己係邊個都未必肯定。' },
     load: () => import('./onuw/index.js?v=1'),
   },
   {
     id: 'werewolf',
     meta: { name: '狼人殺', emoji: '🐺', players: [6, 13], minutes: [25, 60], batch: 1,
-      singleDevice: 'partial', narration: 'required',
+      singleDevice: 'partial', narration: 'required', eyesClosed: true,
       blurb: '手機做上帝：夜晚閉眼、天光投票，揪出狼人。' },
     load: () => import('./werewolf/index.js?v=1'),
   },
@@ -89,4 +89,4 @@ export const GAMES = [
 export const gameEntry = (id) => GAMES.find((g) => g.id === id) ?? null;
 
 /** The fields every registry entry mirrors from its game's own meta (checked by tests). */
-export const MIRRORED_META = Object.freeze(['name', 'emoji', 'players', 'minutes', 'blurb', 'singleDevice', 'narration']);
+export const MIRRORED_META = Object.freeze(['name', 'emoji', 'players', 'minutes', 'blurb', 'singleDevice', 'narration', 'eyesClosed']);

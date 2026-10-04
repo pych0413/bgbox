@@ -44,12 +44,33 @@ export function cueLap({ lap, laps, first }) {
   return `第 ${lap}/${laps} 圈，由${first}開始。`;
 }
 
-export function cueVote() {
-  return '畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！';
+/** `pass`: one phone goes round (secret ballots one by one), so no 「三、二、一」 — and nobody talks until the last ballot. */
+export function cueVote({ pass = false } = {}) {
+  return pass
+    ? '輪流投票，投完交俾下一個。全部投完先好講。'
+    : '畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！';
 }
 
-export function cueRevote() {
-  return '平票！冇被指嘅人再投一次，只可以喺平票嘅人入面揀。';
+export function cueRevote({ pass = false } = {}) {
+  return pass
+    ? '平票！冇被指嘅人輪流再投一次，只可以喺平票嘅人入面揀，全部投完先好講。'
+    : '平票！冇被指嘅人再投一次，只可以喺平票嘅人入面揀。';
+}
+
+/** One phone, secret ballots: the finished picture lies in the middle first. */
+export function cueLook() {
+  return '畫完喇！部手機擺喺中間，大家睇清楚幅畫，可以傾，但唔好講題目。傾完就開始投票。';
+}
+
+/** 一齊指 (U7): look, talk, then the 3-2-1. */
+export function cuePoint({ second = false } = {}) {
+  return second
+    ? '平票！冇被指嘅人再一齊指一次，只可以指平票嘅人。準備好就數三、二、一。'
+    : '畫完喇！大家睇清楚幅畫，可以傾，但唔好講題目。傾完就數三、二、一，一齊指住你覺得係假畫家嘅人。';
+}
+
+export function cuePointGo() {
+  return '三、二、一，指！指住唔好郁。';
 }
 
 export function cueTally({ top, caught, fake, revote }, nm) {
@@ -119,10 +140,13 @@ export function hintFor(c) {
       if (c.role === 'qm') return '你唔使畫，睇住大家畫；假畫家贏，你都贏。';
       return `睇住${c.drawerName}畫；留意邊個畫得唔似。`;
     case 'vote':
+      if (c.look) return '大家睇清楚幅畫，可以傾，唔好講題目；傾完㩒「開始投票」，輪流投。';
+      if (c.point) return c.role === 'qm' ? '你唔使指，等大家一齊指。' : '傾完就數三、二、一，一齊指住你覺得係假畫家嘅人；一個人㩒邊個指邊個。';
       if (c.role === 'qm') return '你唔使投票，等大家投完。';
       if (c.role === 'table') return '大家揀緊邊個係假畫家。';
       return c.voted ? '投咗喇，等其他人投完。' : '揀你覺得係假畫家嘅人再確定；唔可以投自己。';
     case 'revote':
+      if (c.point) return '平票：冇被指嘅人再一齊指一次，只可以指平票嘅人。';
       return c.canVote ? '平票：喺平票嘅人入面再揀一個。' : '平票：等冇被指嘅人再投一次。';
     case 'tally':
       return '睇吓邊個投邊個，幾秒後自動繼續。';

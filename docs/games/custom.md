@@ -215,8 +215,10 @@ ids (`<preset>_<n>`), so a renamed card can never be matched to the wrong text.
 
 - **Peek.** Hold the card, release to cover. The cover also closes on `visibilitychange`, `blur`,
   `pagehide` (inside `Cover`). A card that has been latched refuses the press with a shake.
-- **Seen.** `seen` is sent (via `RoleCard.onOpen(false)`) when the finger is **released** after a peek, never on press. On a shared phone the
-  pass gate therefore moves on only once the peek is over. Latching the card (`lock-role on`) also counts as seen.
+- **Seen.** `seen` is sent (via `RoleCard.onOpen(false)`) when the finger is **released** after a peek, never on press. On a
+  **shared phone** (`api.shared`, one-phone playtest #15) the release sends nothing: the seat looks, rolls and locks its dice
+  in the same turn, then taps 「✓ 搞掂 · 交俾 阿明」 under the card, which sends `seen` (§4). Latching the card (`lock-role on`)
+  also counts as seen — so on a shared phone the latch button is hidden while the walk waits for that seat.
 - **Role lock** (owner only, both ways): a friend mashing your phone sees nothing; it refuses the peek, even
   for the owner, until the owner unlocks. Cleared by the reveal (nothing left to hide) and by every deal.
 - **Dice lock** (owner locks, **only the host lifts**): freezes the roll. You can still read your own number,
@@ -264,13 +266,25 @@ This game has no night, so the tells are about the *table*:
 
 `singleDevice: 'full'`. One phone on the table, every seat on it.
 
-- After every deal the engine's `focus` names all card holders that have not looked yet, in seat order, so the
-  shell walks the pass gate: 交俾 阿明 · 其他人唔好望 → peek, release → next seat. After everyone has seen,
-  `focus` is `null` and the phone is free to switch seats through the header.
+- After every deal the engine's `focus` names all card holders that have not looked yet, in seat order, with
+  `label: '睇牌、搖骰'` (only the host rolls: `'睇牌'`), so the shell walks the pass gate clockwise from the holder:
+  「交俾 阿明 · 其他人唔好望 · 睇牌、搖骰 · 搞掂 1/3」.
+- **One hand-over per seat for the card AND the dice (#15).** The seat peeks (the release sends nothing on a shared
+  phone), rolls and locks if it wants, and taps the one button under the card: 「✓ 搞掂 · 交俾 阿明」 (the next seat of this
+  phone still to look, clockwise — where the shell's walk goes), with the line 「要搖骰就而家搖、鎖埋先交」 when it may roll.
+  The tap sends `seen`; the walk gates the next seat. The **last** seat's button reads 「✓ 搞掂 · 交返俾房主 阿聰」: it sends
+  `seen` and `api.handTo(host, { why: '大家睇完牌' })` — the host controls live on that seat (C3). When the host is the last
+  one, or sits on another phone, it reads 「✓ 搞掂 · 擺返中間」 and the shell puts the phone in the middle.
 - A moderator or a seat that has no card never appears in `focus`.
-- Dice: switch to a seat, hold the cup, roll. Or host: 🎲 全體搖骰, then everyone peeks at their own cup in turn.
-- **Host controls live on the host's seat.** To use them switch to the host seat. That is deliberate: nobody
-  can hit 開晒角色 by accident while looking at their own card.
+- Dice after 🎲 全體搖骰: everyone looks at their own cup by taking the phone with 換人 (a hand-picked seat holds, §7.1).
+- **Host controls live on the host's seat.** That is deliberate: nobody can hit 開晒角色 by accident while looking at
+  their own card. **開盅 and 開角色 are shown from the middle (#22):** right after 👁 開晒啲骰 / 🔓 開晒角色 the UI calls
+  `api.toTable()`, so the phone goes to the middle behind the shell's 「📱 部手機擺返中間」 card and shows the table view —
+  the roster, 開盅 and the revealed roles, with nobody's card, cup or controls (`api.atTable`: 「📱 部機喺枱中間：開咗嘅骰同角色
+  喺度一齊睇。」). Nobody has to lay the host's own seat face up.
+- No screen of a shared phone says 「你」: no 「（你）」 on the roster, no `.me` row (#20).
+- Not done (minor, C4): with 主持睇到所有人角色 the host seat's 👁 role tags are not behind a separate hold; that seat is
+  only on screen behind its own private gate, and the public moments use the table screen.
 - `autoAct` for a stalled or disconnected seat is `seen` (skip their peek) so a dead phone cannot hold up the walk.
 - Paper mode: none (`paperMode: false`).
 
@@ -341,6 +355,7 @@ never legal (the fuzzer relies on it).
 ```
 phase, round, dealId, title '通用派牌', subtitle '第 N 回合'
 controller            // this seat is the host
+host                  // the host's pid (public: whose seat has the controls — one phone hands the phone back there)
 selfRoll, dice {count, sides}, roles [...]            // public
 revealRoles, revealDice
 seats: [{ id, name, playing, seenRole, rolled, rolls, roleLocked, diceLocked,   // rolls = this round's rolls
@@ -359,8 +374,8 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 
 ### focus / autoAct / result
 
-- `focus` → `{ pids: [card holders who have not seen their card] }` (seat order), `null` while all have seen,
-  after the reveal, and after the end.
+- `focus` → `{ pids: [card holders who have not seen their card], label: '睇牌、搖骰' | '睇牌' }` (seat order), `null` while
+  all have seen, after the reveal, and after the end.
 - `autoAct` → `{ type: 'seen' }` for such a seat, else `null`.
 - `result` → `null` until `end`; then `{ winners: [], noScore: true, summary: '通用派牌：玩咗 N 回合', lines, carry }` (#10).
   `noScore: true` tells the shell this game keeps no score: the results screen says 「邊個贏由你哋講」 instead of a
@@ -416,6 +431,9 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 | UI renders every seat + table through random games, idempotent, never shows the hint, host controls only on the host | `custom ui: every seat and the table render…` |
 | UI ignores a foreign view (the statusLine crash), defaults a partial one, tolerates odd api | `custom ui: a view that is not ours is ignored…` |
 | UI taps → engine-accepted actions (seen on release, latch, roll, lock, per-seat unlock, every host button) | `custom ui: taps send the actions…` |
+| One phone #15: no `seen` on release, 「✓ 搞掂 · 交俾 X」 after the peek (roll + lock in the same turn), the last seat hands back to the host (`handTo`), host-last / host elsewhere → 擺返中間, no latch while the walk waits, no dice line when only the host rolls | `custom ui: one phone — #15 the walk covers peek, roll and lock…` |
+| One phone #22: the table screen holds no card / cup / controls, 開盅 / 開角色 call `toTable`, no 「（你）」; phones of their own unchanged | `custom ui: one phone — #22 the table screen holds nobody's card or cup…` |
+| Through the REAL play screen (one whole-table phone): private gates with 睇牌、搖骰 · 搞掂 k/n, the release keeps the phone, a roll in the same turn, 「✓ 搞掂」 → the next gate, the last seat → the host's gate (大家睇完牌), 📱 擺返中間 → nobody's card or cup | `custom, one phone through the real play screen…` |
 | per-round roll count: counts every roll (after an unlock too), kept by a lock and a re-deal, 1 after roll-all, 0 next round | `the roster counts this round's rolls…` |
 | UI: 🎲 已搖 ×N, the 開盅 status line, the locked-cup badge (no greyed-out buttons), 開盅 under the cup | `custom ui: 已搖 ×N, the 開盅 status line…` |
 | the rules name the lock like its button (鎖定點數) | `the rules call the dice lock by the button's name…` |
@@ -426,7 +444,8 @@ Outside `me`, `controller`, `can`, `all`, `hint`, a player's view is deep-equal 
 
 ## 7. 貼心 touches
 
-- **Walk the table.** On a shared phone the app itself calls the next person to look (focus → pass gate).
+- **Walk the table.** On a shared phone the app itself calls the next person (focus → pass gate), and each turn covers
+  the card and the dice in one hand-over; the last one hands it back to the host.
 - **已睇牌 / 等緊 N 個人睇牌.** Nobody has to ask "咁大家睇咗未？".
 - **Latch before you hand your phone over.** One tap and even you cannot peek until you unlock.
 - **Locks that cannot be cheated.** The host owns the key to a cup.

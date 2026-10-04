@@ -80,6 +80,8 @@ guess, spoken aloud.
 | `turnSecs` | 每筆限時（秒） | seconds 0–60 | 0 | 0 = no clock; a timed-out stroke is **given up** (the slot is used, no second chance) |
 | `antiStreak` | 上一輪嘅假畫家呢輪唔做 | bool | false | BACKLOG #20; only while ≥ 3 other candidates remain. Also covers the first round of the next game (`carry.lastFake`) |
 | `topics` | 題目類別 | categories → `{ cats, levels }` | `{ cats: [], levels: [] }` | empty cats = every drawable category; empty levels = 簡單 + 中等 (level 3 is not drawable one stroke at a time). Only affects words the app picks (手機出題, and the QM's 🎲) |
+| `vote` | 投票方式 | select `ballot` / `point` | `ballot`; `point` in a one-phone room | `ballot` = each artist picks on a phone in secret (one phone: in turn, behind hand-over cards). `point` = **一齊指** (U7, the research's physical 3-2-1 point): the table counts 「三、二、一，指！」, everybody points at once, one person enters who pointed at whom (§3.5) |
+| `passPhone` | — (hidden) | bool | `false`; `true` in a one-phone room | set by `config.defaults` from `env.singleDevice` (DESIGN §7.1 #3): the phone goes round, so secret ballots start with a shared look at the picture and the cues say 「輪流投」 (§3.5) |
 
 **Drawable categories.** The bank also holds charades-style categories (`成語`, `歇後語與俗語`, `抽象`, `電影與故事場面`, `動作`);
 they are listed in `EXCLUDED_CATEGORIES` and never offered or drawn. A test fails if the bank gains or loses a category without
@@ -89,7 +91,10 @@ or one of its aliases, or the word contains the category (e.g. `小鳥` under `�
 `config.defaults(n, prev, { singleDevice })` keeps every taste from the last game, re-checks the head-count (`qm: 'player'` falls back
 to `app` below 4 players, `first: 'qm'` falls back to `auto` without a QM) and ignores junk. Old configs missing newer keys validate.
 With `singleDevice` (one phone holds every seat) it picks pass-the-phone defaults: `qm: 'app'` (research: the shared phone cannot show a QM
-the fake privately; the app asks) and `turnSecs: 0` (handing the phone over would eat into a stroke clock); every other taste is kept.
+the fake privately; the app asks), `turnSecs: 0` (handing the phone over would eat into a stroke clock), `vote: 'point'` (U7) and the hidden
+`passPhone: true`; every other taste is kept. A later room with several phones (`singleDevice: false`) and `prev.passPhone` gets
+`vote: 'ballot'` and `passPhone: false` back. `validate(cfg, n, env)` warns on one phone with secret ballots:
+「一部手機建議揀「一齊指」：唔使逐個傳部機投票，亦冇人聽到前面點投」.
 
 ### Presets with a reason (BACKLOG #8)
 
@@ -237,8 +242,28 @@ fake position) against an independent oracle, then sampled with 5 and 6 artists.
 a second tie falls back to must-guess (the fake was in the first top) → caught. A new `r{n}:revote` cue: 「平票！冇被指嘅人再投一次，只可以喺平票嘅人入面揀。」
 Then a second tally (「再投結果」).
 
-**Narration (cue `r{n}:vote`):** 「畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！」
+**Narration (cue `r{n}:vote`):** 「畫完喇！睇清楚幅畫，揀你覺得邊個係假畫家。三、二、一，投！」 (one phone, secret ballots: the look first,
+then 「輪流投票，投完交俾下一個。全部投完先好講。」 — below)
 **Narration (cue `r{n}:tally:{1|2}`):** 「最高票係阿明、阿B。平票。假畫家逃過一劫。」 / 「…阿C係假畫家！」
+
+**One phone, secret ballots (`vote: 'ballot'` with `passPhone`).** The vote opens with `vote.look: true`: no focus — the finished
+picture lies in the middle (one-phone playtest #2, F2), the table screen reads 「部手機擺喺中間，大家睇清楚幅畫：可以傾，唔好講題目。傾完就開始投票
+（輪流投，全部投完先好講）。」 and anybody's 「🗳️ 開始投票」 (`{type:'start-vote'}`, a whole-table tap from the phone in the middle) starts the walk.
+Cue `r{n}:vote:look`: 「畫完喇！部手機擺喺中間，大家睇清楚幅畫，可以傾，但唔好講題目。傾完就開始投票。」 The host's ⏭ during the look starts the
+walk (it never turns the ballots into abstentions). The ballots then go round behind private gates labelled 「投票 · 全部投完先好講」 (#30), the
+ballot reads 「投票中 — 全部投完先好講」 and the cue 「輪流投票，投完交俾下一個。全部投完先好講。」 (revote: 「平票！冇被指嘅人輪流再投一次…」).
+
+**一齊指 (`vote: 'point'`, U7).** Nobody is handed the phone one by one (`focus` is `null`, nobody is `blocking`): every phone (on one phone, the
+table screen) shows the picture and 「畫完喇！一齊指」 — 「大家睇清楚幅畫，可以傾，唔好講題目。傾完就㩒，數到「指」大家同時指住你覺得係假畫家嘅人。」
+1. 「▶ 3、2、1，一齊指！」 → `{type:'count'}` (any seat): `vote.countAt` = now; every phone counts **3 · 2 · 1** from the host clock
+   (`COUNT_MS` 3 s) and then shows 「指！」; cue `r{n}:vote:go:{k}` 「三、二、一，指！指住唔好郁。」 (counting again re-says it).
+2. 「指住唔好郁！」: one row per voter (「阿明 指 →」 + a chip per candidate other than themselves, and 「冇指」); 「✓ 確定（4/5）」 is enabled when
+   every row is filled and takes **two taps** (「再㩒一次確定」). → `{type:'point', votes: { voter: target | null }}` — refused unless it is after
+   the count and names every current voter once, each pointing at a candidate other than itself (or `null`). 「↺ 再數一次」 counts again.
+3. The tally, the tie rule and the result run exactly as for ballots (who pointed at whom is kept, so 「邊個投邊個」 and 🔍 最醒目 still work).
+   A revote under `tieRule: 'revote'` is pointing too: only the artists outside the tie, only at the tied (cue 「平票！冇被指嘅人再一齊指一次…」).
+Individual `vote` actions are refused in this mode; `autoAct` returns nothing (it is the table's step); ⏭ abstains everybody as before.
+Works on any number of phones (anybody enters it); the default only on one phone.
 
 ### 3.6 guess — the caught fake's one guess
 
@@ -324,13 +349,29 @@ public (`view.absent`, 💤 on the order chips and the score strip) and are neve
 
 ## 4. Single-device play and paper mode
 
-**One phone, 📱.** The app is the QM (`config.defaults(n, prev, { singleDevice: true })` sets it, and drops any stroke clock). The shell's pass gate follows `focus`: at `deal` it walks the artists who have not looked; at `draw` it
-hands the phone to the drawer (「交俾 阿B ・ 其他人唔好望」) who draws one stroke on the same Canvas; at `vote` it walks the voters (sequential secret ballots
-— not simultaneous, but nobody sees a ballot before the tally); the judge gets the phone for 啱／錯. This is the "pass the phone clockwise, one stroke each" play the
-research describes as fitting the official design well.
+**One phone, 📱** — the shared-phone contract (DESIGN §7.1; one-phone playtest 2026-10-04: F1–F8, #2, #4, #5, #29, #30, U7). The app is the QM
+(`config.defaults(n, prev, { singleDevice: true })` sets it, drops any stroke clock and picks 一齊指). The shell follows `focus`:
+- **deal**: the private walk of the artists who have not looked (`label: '睇卡'`).
+- **draw**: every stroke is a **public** step — `focus = { pids: [drawer], open: true, step: 'draw:{turn}', label: '畫第 N 筆' }` — so the shell
+  hands over with the light public card 「輪到 阿B · 畫第 3 筆 · 大家一齊睇 · 阿B 㩒一下開始」, never 「其他人唔好望」, and the picture stays in
+  view (#4, F1). The drawer's screen is everybody's: it names the drawer (no 「輪到你畫！」) and hides the 「㩒住睇返我張卡」 card. A drawer who
+  forgot the title taps 「🔒 唔記得題目？」 → `api.handTo(me, { why: '睇返張卡' })` (the private card) → the card with the pen down →
+  「✓ 記得喇 · 交返出嚟畫」 → `api.handTo(me, { open: true })` (the public card again) → draw. The request is taken once, by the
+  screen built behind that private card: a drawer who puts the phone back with the shell's 📱 擺返中間 instead gets a plain stroke screen
+  after the public card, never the card again.
+- **vote**: 一齊指 on the table screen (§3.5); with secret ballots, the shared look first, then the walk with 「全部投完先好講」 (§3.5, #2, #30).
+- **tally / result**: focus is `null`, so the phone goes to the middle behind the shell's public card. The result's
+  「大家睇完 ✓（一下就得）」 is a whole-table tap (`{ type: 'next', seats, table: true }`, locked while the table card is up, U5) with no
+  「等緊：…」 list (F7, #5).
+- **spoken guess** (#29, F6): `focus = { pids: [judge], open: true, label: '開口估題目' }` — the public card, and the judge's screen puts the
+  **picture first**, then the covered answer: 「部手機擺喺中間俾 阿明 睇幅畫（答案冚住）；佢講完，判斷嗰個先㩒住睇答案，再㩒啱或者錯。」 Typing a guess
+  stays private (`label: '打字估題目'`), and so does a typed guess's judge (`step: 'judge'`).
+- A shared phone never says 「你」 to the table: no 「（你）」 on the points list, no is-me score chip (#20); VotePanel drops it too.
+- **Engine convention for whole-table taps:** `next` with `table: true` counts every listed reader, whichever seat carried it.
+- **Multi-phone play is unchanged** (`ballot`, no look; single-seat phones ignore `open` / `step` / `label`).
 
-**One phone, 📝.** The same, but the phone is only passed for the private steps; during drawing the table can leave it in the middle, any seat on the
-device taps 畫完 (the shell's seat switcher), or the QM keeps the table moving.
+**One phone, 📝.** The same, but the phone is only passed for the private steps; during drawing the public card hands it to the drawer, who taps
+畫完 after drawing on the paper (the QM may tap for them).
 
 **Paper mode in general.** Needs a sheet and one pen per artist (colour = the seat colour; names and order numbers are shown too). The picture is not stored,
 so the result shows the drawing order instead of a replay.
@@ -388,7 +429,10 @@ All from a seat (`pid` must be one of the players); anything else is ignored and
 | `{type:'vote', target}` | vote / revote | sender is in `vote.voters`, has not voted, target ∈ candidates and ≠ self (or `null` = abstain, used by the host) | record; all voted → tally |
 | `{type:'guess', text}` | guess (typed) | sender is the fake, text a string | match → result; empty → wrong; else → judge |
 | `{type:'verdict', correct}` | guess (spoken) / judge | sender is the judge, `correct` a boolean | result |
-| `{type:'next', seats?}` | result | an artist or the QM at the table who has not tapped yet | 睇完: mark it (and `seats`, the other seats of a passed-round phone); every present artist + QM → next round, or `over` |
+| `{type:'next', seats?, table?}` | result | an artist or the QM at the table who has not tapped yet (`table: true`: any present seat; the listed readers count) | 睇完: mark it (and `seats`, the other seats of a passed-round phone); every present artist + QM → next round, or `over` |
+| `{type:'start-vote'}` | vote, `look` | any present seat | the shared look at the picture is over: the ballot walk starts |
+| `{type:'count'}` | vote / revote, `point` | any present seat | 一齊指: `countAt` = now (again: a new count) |
+| `{type:'point', votes}` | vote / revote, `point`, after a count | any present seat; every current voter once, each → a candidate ≠ itself or `null` | the ballot is that entry → tally |
 | `@cue-done {id}` / `@next` (host) | any | id matches the current cue / — | `@next` first acknowledges the cue, then skips the step (below) |
 | `@void-round` (host, 呢鋪唔計) | any before `result` | — | the round is thrown away (no points, wins or stats; its fake does not count for anti-streak), recorded as voided for the recap; a fresh round under the same number: new word, new fake, the next QM (research: a QM who drops is replaced by the next in order), a new picture, the redo cue 「上一鋪唔計，重新嚟過。」. In `result`/`over` nothing happens (the round is already scored); `engine.canVoid(state)` says so with a reason (§8.3) |
 
@@ -411,13 +455,16 @@ give the stroke up (paper: counts as done); `vote`/`revote` missing ballots beco
 
 - `view(state, pid)` builds a fresh object: `me, phase, title, subtitle, round {n, total, key, redo}, mode {…, scoring}, qm, artists, seats, pens, scores, wins, absent` (D4, 💤), `theme, fake` (null until caught / round over),
   `myRole` (`artist` / `fake` / `question-master`, own role only), `mine` (the card: `{role, theme, word}` — `word: null` for the fake — and `fake` only for the QM),
-  `draft` (QM), `ready`, `first`, `draw` (`current, lap, laps, total, turn, order, counts, canDraw, canDone, minLen`), `vote` (`candidates, voters, done, total, canVote`, and `myVote` only the viewer's own),
+  `draft` (QM), `ready`, `first`, `draw` (`current, lap, laps, total, turn, order, counts, canDraw, canDone, minLen`), `vote` (`candidates, voters, done, total, canVote, mode, look, countAt, counts, countMs`, and `myVote` only the viewer's own),
   `tally` (after the reveal), `guess` (`judge, stage, text, canGuess, canJudge`, `word` for the judge only), `reveal`, `seen` (result: `{ who, total }`, D3), `last`, `deadline`, `hint`.
-- `focus`: `qm-input`/`first` → QM; `deal` → artists not yet looked; `draw` → the drawer; `vote`/`revote` → voters not yet voted; `guess` → the judge (spoken) or the fake (typed);
-  `judge` → the judge; otherwise `null`.
+- `focus`: `qm-input`/`first` → QM (`label` 出題 / 揀邊個先畫); `deal` → artists not yet looked (`label: '睇卡'`); `draw` → the drawer, `open: true`,
+  `step: 'draw:{turn}'`, `label: '畫第 N 筆'`; `vote`/`revote` → voters not yet voted (`step: 'vote:{1|2}'`, `label` 「投票 · 全部投完先好講」 /
+  「再投 · …」) — `null` during the shared look and in 一齊指; `guess` → the judge (spoken: `open: true`, `label: '開口估題目'`) or the fake (typed:
+  `label: '打字估題目'`); `judge` → the judge (`step: 'judge'`); otherwise `null`. `open` / `step` / `label` are one-phone hints (DESIGN §7.1).
 - `blocking(state, pid)` (stall detection): the seats in `focus`, and on the result a present artist / QM that has not tapped 睇完 (so a dead
   phone there gets 代佢做 = 睇完); nobody during the tally linger; never an absent seat. Tested: whenever there is no deadline and no result,
-  somebody is blocking, has a legal action, and 代佢做 moves the game.
+  somebody is blocking, has a legal action, and 代佢做 moves the game — except the shared look and 一齊指, the table's own steps (nobody is
+  waited on, like a discussion; anybody's tap or the host's ⏭ moves them).
 - `canInk(state, pid)`: phase `draw`, phone mode, `pid` is the current drawer.
 
 ### 5.5 autoAct (a stalled seat)
@@ -506,6 +553,9 @@ every other seat's hint (and every public cue) is unchanged. Roles are explained
 | D3: 睇完 from every present seat of the round, one tap is not enough, `seats` for a shared phone, host forces | `D3: the result moves on once every seat…` |
 | D4: absent artist not waited on, strokes skipped (also mid-turn), no vote / no candidate, ballot closes; absent fake / QM voids; caught fake gives no answer; an escaped fake keeps its win; judge replaced; refusals; fuzz | `D4: …` (6 tests) |
 | UI: 睇完 n / m after the lock, `secretChoice`, 💤, `seats` from a shared phone, the absent phone's note | `fake-artist UI D3/D4/D6…` |
+| one phone: strokes public (`open`), ballots / guesses named; the shared look before secret ballots (⏭ starts the walk); 一齊指 count → entry → tally, refused entries, revote by pointing; fuzz over one-phone configs; whole-table 睇完; rules / help wording; defaults and the warning | `fake-artist one phone: …` (7 tests), `config.defaults with { singleDevice }…` |
+| one phone UI: the drawer's public screen without the re-peek card, 「唔記得題目？」 private hand-over and back; 一齊指 on the table screen; the look → 開始投票; 「全部投完先好講」; the judge's picture first; one-tap 大家睇完 | `fake-artist ui one phone: …` (3 tests) |
+| one phone through the real play screen: deal walk, a public card for every stroke, 一齊指 in the middle, the public guess card, one-tap result, the next deal gated | `fake-artist, one phone through the real play screen …` |
 
 Browser checks done (own headless Chrome via CDP, iPhone-size viewport, the real app in local mode): deal with peek (fake vs artist), pass gates, ten strokes drawn on the
 real Canvas with the mouse (an accidental tap on turn 3 was discarded and did not advance the turn), vote/tally/guess/result in both draw modes, the typed-guess and

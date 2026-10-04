@@ -55,13 +55,13 @@ role, so even the hint sheet reads the same for good and evil.
 | `discussSecs` | seconds 0–600 | `0` | team-talk timer shown while the leader picks. A nudge only: nothing happens at 0:00 |
 | `assassinSecs` | seconds 0–600 | `120` | talk timer during the assassination, **soft** (decision D8, 2026-10-04): the clock shows, nothing happens at 0:00 (every phone says 「⏰ 夠鐘 — 等刺客揀，唔會自動揀」), the Assassin can still pick any time, and the host can add 60 s (⋯ → ⏱️ 刺殺 ＋60 秒, up to 5 times). `0` = no clock |
 | `cfgRev` | number (not a form field) | `2` | the setup mark: a setup saved before 2026-10-04 (no mark) that still holds the old default `assassinSecs: 0` moves to 120 once; a table that picks 0 afterwards keeps it |
-| `passPhone` | bool (not a form field) | `false` | set by `defaults` when one phone holds every seat; remembers that the two clocks were zeroed *for* the shared phone |
+| `passPhone` | bool (not a form field) | `false` | set by `defaults` when one phone holds every seat; remembers that the two clocks were zeroed *for* the shared phone, and turns on the one-phone flow of §4 (the reveal line, evil's face-up talk before the Assassin is called) |
 
 `defaults(n, prev, env)`: keeps every valid key of `prev`, drops junk, coerces numeric strings. `roles` follows the
 recommendation unless the preset is `custom` (so switching to 自訂 starts from the right deck for this head-count);
 on `custom` it is repaired for a new `n` (Percival kept, then Morgana, Mordred, Oberon while evil has room).
 `env.singleDevice` (the room passes it: local play, or every seat on the host's phone) sets `revealSecs = questSecs = 0` and
-`passPhone = true`; the lobby summary adds `📱 一部手機玩：唔計時，逐個交電話`. When the room later asks with
+`passPhone = true`; the lobby summary adds `📱 一部手機玩：逐個交電話，睇身份最少 8 秒、出牌最少 4 秒`. When the room later asks with
 `singleDevice: false` (the host opened the room alone, then friends joined on their own phones) and `passPhone` is set, the
 clocks go back to 25 s / 12 s — otherwise a multi-phone game would silently run untimed, which leaks who looks long or plays
 slowly. A table that chose 0 s itself (no `passPhone`) keeps it. Valid for every `n` in 5–10 and every preset (tested).
@@ -160,9 +160,9 @@ the names grid (always reserves two rows of space) / a one-line note. The *conte
 
 | role | label | names | note |
 |---|---|---|---|
-| Merlin | 你睇到嘅邪惡 | the evil seats except Mordred (Oberon included unless `oberonSeenByMerlin` is off), shuffled | （睇唔到莫德雷德，亦唔知有幾多個冇俾你睇到） |
+| Merlin | 你睇到嘅邪惡 | the evil seats except Mordred (Oberon included unless `oberonSeenByMerlin` is off), shuffled | from the **public deck and setup** (`mine.knows.blind = { mordred, oberon }`, both false for every other role, so the card keeps one shape): 「（全部邪惡你都見到）」 · 「（莫德雷德你睇唔到）」 · 「（奧伯倫你睇唔到）」 · 「（莫德雷德同奧伯倫你睇唔到）」 (one-phone playtest #28: a deck without Mordred no longer sends Merlin looking for a third evil) |
 | Percival | 梅林係 (one name) or 其中一個係梅林，另一個係莫甘娜 (two) | Merlin (+ Morgana), shuffled | 保護梅林 / （你分唔出邊個真邊個假） |
-| Assassin, Morgana, Mordred, Minion | 你嘅邪惡同伴 | the evil seats except yourself and Oberon, shuffled | （唔知佢哋嘅角色）, or （冇人認得你，你都唔識其他人） when nobody is left |
+| Assassin, Morgana, Mordred, Minion | 你嘅邪惡同伴 | the evil seats except yourself and Oberon, shuffled | （唔知佢哋嘅角色）; one partner （唔知佢嘅角色） (#28); （冇人認得你，你都唔識其他人） when nobody is left |
 | Oberon | 你唔識任何人 | — | 邪惡同伴都唔識你 |
 | Servant | 你冇特別情報 | — | 靠觀察、投票同推理 |
 
@@ -175,7 +175,9 @@ finger movement tell nothing; it does nothing public. At the deadline the phase 
 card that stays on screen for the rest of the game.
 
 **Tap mode (`revealSecs = 0`).** No clock; each seat has a 「我睇完」 button under the card; the phase ends when all have tapped. The button
-is the same for every role.
+is the same for every role. **On a shared phone** (decision U9) the button waits **8 s** from the moment that seat's screen opens — its
+hand-over card was tapped — the same for every role, with a filling bar and 「仲有 N 秒先交得」, and the note reads
+「人人最少睇 8 秒先㩒得「我睇完」，咁就睇唔出邊個有情報。」. A Servant can no longer be told from Merlin by how fast the phone moves on.
 
 Anti-tell: the window is one host deadline (all phones the same); every seat gets the same card, the same back, the same release
 sound; servants hold a card with an empty names grid of the same height; no "已睇 4/6" counter exists.
@@ -195,6 +197,8 @@ rejection 「呢個係最後一次提議，再被否決，邪惡陣營就即刻�
 
 The leader's half-picked team never leaves their phone. The team is stored in seat order. The leader may include themselves or not.
 Sound: `turn` on the leader's phone only (the leader is public).
+On a shared phone the pick is a **public step** (§4): the leader's screen is the table's, so the line names the leader —
+「阿明 係隊長：揀 2 個人（可以包括自己），大家傾好先確定。」 — never 「你係隊長」, and the identity mini card is not on it.
 
 ### 3.3 `vote` — everybody votes, in secret
 
@@ -242,6 +246,9 @@ A picked Fail looks exactly like a picked Success and the button says 「確定�
 could only ever appear on an evil phone and is readable across the table; a tinted border on the *other* tile would give the pick away
 just the same. Only the emoji and words inside the tile say which card it is. Test: the CSS has no rule that tells the two tiles apart,
 and a good seat with Success picked and an evil seat with Fail picked have the same picked-tile classes and the same button.
+
+**One shared phone (U9).** 「確定出牌」 waits **4 s** from the moment the member's screen opens (its hand-over card), for good and evil alike;
+picking a tile works at once. The bar and 「仲有 N 秒先出得牌」 are in every member's screen, so the quest screen keeps one shape.
 
 **The clock is a minimum.** In timed mode (`questSecs > 0`) nothing resolves early, even when every card is in: the result appears at the
 later of the deadline and the last card. A card still missing at the deadline is **waited for** (the engine never plays success on an evil
@@ -302,6 +309,14 @@ the Assassin is. With `flipEvil` an extra box lists the evil seats with their ro
 
 Any seat is a legal target (the engine accepts the Assassin naming an evil seat or themself and simply loses; the UI never offers self).
 Evil may talk it over out loud; the Assassin decides alone.
+
+**One phone (`passPhone`, one-phone playtest #27).** The step starts with `talk: true`: the phone lies **face up in the middle**, nobody is called
+(`focus` null), the soft clock already runs, and every screen (the table's and any seat's) shows 「邪惡陣營公開商量」 /
+「邪惡可以開口傾；好人同梅林唔好出聲。傾好就㩒下面，其他人閉埋眼，刺客先拎部手機。」, the timer, the flipped evil cards (with `flipEvil`) and
+one button 「🗡️ 傾好喇 · 刺客拎部手機」 — a whole-table tap (`api.tableSend({ type: 'talked' })`, locked while the table card is up). Any seat's
+`{type:'talked'}` (or the host's ⏭) ends the talk; then the anonymous gate 「刺客請拎起部手機」 opens and the cue says
+「其他人閉埋眼。刺客請拎起部手機，揀邊個係梅林。」 (id `…:assassinate:pick`). Nobody can shoot or decoy during the talk; `legalActions` and
+`autoAct` offer only `talked`, and `blocking` names nobody. Phones of their own never have the talk step.
 
 ### 3.9 `shot` — the result, before the results page
 
@@ -374,22 +389,28 @@ what you do and how you win (both tested through `ui/logic.js roleParts`).
 `meta.singleDevice = 'full'`. Config: `revealSecs = 0`, `questSecs = 0` — chosen automatically, because the room passes `env.singleDevice` to
 `config.defaults` (and the clocks come back if the table later spreads over several phones, §2). The phone moves by `focus`:
 
-1. `reveal` (tap mode): `focus.pids` = every seat that has not tapped 「我睇完」, so the shell walks the seats in seat order, one pass gate each
-   (「交俾 阿明 · 其他人唔好望」). Each holds the card, taps 「我睇完」, the next gate appears.
-2. `pick`, `voted`, `quest-result`: `{ pids: [leader] }` — the leader's gate. After `voted` and `quest-result` the phone is the public
-   scoreboard: pass it round or read it out loud, then the leader taps 繼續.
-3. `vote`: every seat that has not voted, in seat order; the vote stays hidden (the view only ever carries the viewer's own vote); after the last
-   one the reveal screen goes to the leader.
-4. `quest`: only the team members who still owe a card, in seat order; the phone goes back to the leader for the result. Team membership is public,
-   so the gates name people.
-5. `lady` / `lady-peek`: the holder (public).
-6. `assassinate`: `{ pids: [assassin], anonymous: '刺客請拎起部手機' }` — the gate says **刺客請拎起部手機 · 其他人閉埋眼，唔好望** and never a name, so
-   passing the phone does not announce who the Assassin is. The other evil players can still murmur; the phone is a single screen, so the decoy
-   taps do not exist here.
-7. `shot`: the Assassin, then the results.
+The shell's one-phone contract (DESIGN §7.1) does the hand-overs: the walk goes clockwise from the holder (#17), private steps get the
+「交俾 X · 其他人唔好望 · {label} · 搞掂 k/n」 card, public steps a light card 「輪到 X · {label} · 大家一齊睇」, and the phone lies in the
+middle (the public table view) between them. The engine marks each step (`focus`, §5):
 
-A shared phone cannot hide *how long* a player holds it. Tell people to take about the same time at every turn (the card, the vote, the quest
-card). Timed windows cannot work on one phone (one clock for N hand-overs) — hence the 0 s settings.
+1. `reveal` (tap mode): every seat that has not tapped 「我睇完」, label 「睇身份」 — one private card each. The cue says
+   「部手機會逐個交：輪到你先㩒住張卡睇你嘅身份同情報，每人最少睇 8 秒…」, and 「我睇完」 waits 8 s from the card (U9, §3.1).
+2. `pick` (**open**, 「揀隊員」): a public card for the leader; the table watches the pick (#4). No identity card on that screen (#22).
+3. `vote` (private, 「任務 N 投票」): every seat that has not voted. The leader comes from a public step, so **their own ballot is gated
+   again** even though they hold the phone (#2: a new `step` key); the vote stays hidden (the view only ever carries the viewer's own vote).
+4. `voted` (**open**, 「投票結果」): the reveal with names goes to the leader on a public card — never 「其他人唔好望」 — and the table reads it
+   with them; the leader taps 繼續. With the leader 💤 the focus is null and the table screen itself has 繼續 (one table tap).
+5. `quest` (private, 「任務 N 出牌」): only the members who still owe a card; a leader on the team is gated again for their own card (#2).
+   「確定出牌」 waits 4 s from the card (U9, §3.5).
+6. `quest-result` (**open**, 「任務 N 結果」): the leader, publicly, as for `voted`.
+7. `lady` (**open**: whom the holder checks is public) → `lady-peek` (private, gated again: only the holder reads the answer).
+8. `assassinate`: first evil's face-up talk (§3.8, #27), then `{ pids: [assassin], anonymous: '刺客請拎起部手機' }` — the gate says
+   **刺客請拎起部手機 · 其他人閉埋眼，唔好望** and never a name.
+9. `shot` (**open**, 「刺殺結果」): the Assassin, then the results.
+
+The identity mini card hides itself on a public step for the seat that holds the phone (`ctx.focus.open`); a seat picked by hand (換人, private
+gate) keeps it. Holding time is no longer a tell where it mattered (U9: the role card ≥ 8 s, the quest card ≥ 4 s, the same for every role);
+the vote itself has no minimum. Timed windows cannot work on one phone (one clock for N hand-overs) — hence the 0 s settings.
 
 Two people on one phone (a dead battery) work the same way: a device with several seats gets a gate between them. No data at all: one phone,
 everybody present (`app.local`); the page works offline once loaded.
@@ -418,18 +439,19 @@ seen [pid…], decoyed [pid…]            internal bookkeeping for the two deco
 voids [{q, no, k, phase, leader}]      the host's 呢鋪唔計 (public; recapped in the results with k)
 absent [pid…]                          💤 seats the host marked absent (public, D4); voteLog entries carry `absent` when somebody did not vote
 leaderSkips, extends                   the token moved past a seat that went 💤 in `pick` (fresh cue id) / the host's ＋60 秒 on this assassination
+talk                                   one phone (passPhone): evil is still talking before the Assassin is called (public, §3.8)
 lady {holder, held [pid…], step {holder, target, loyalty PRIVATE (holder only)}, log [{q, holder, target, loyalty}]}
 shot {assassin, target, hit, merlin}, pendingEnd {winner, reason}, winner, reason, final {winners, summary, lines, points}
 ```
 
 `view(state, pid)` is built field by field. Common: `me, phase, n, title, subtitle, hint, deadline?, timerLabel?, order, deck, board {sizes, need, results, questNo,
 wins, losses}, track {rejects, max}, leader, absent [pid…], proposalNo, lady {holder, held, log, step}|null, history [public proposals, each with `absent`], quests [public quests],
-opts {reveal, quest, flipEvil}`, and `redo: true` while a step restarted by 呢鋪唔計 is running (public). Seats also get `mine {role, knows {kind, pids}, seen}`; the table view has no `mine`.
+opts {reveal, quest, flipEvil}`, and `redo: true` while a step restarted by 呢鋪唔計 is running (public). Seats also get `mine {role, knows {kind, pids, blind {mordred, oberon}}, seen}` (`blind`: whom Merlin cannot see, from the public deck and setup; both false for every other role); the table view has no `mine`.
 Per phase: `pick {leader, size, need, canPick}` · `vote {leader, team, progress {done,total}, mine}` · `voted {leader, team, votes, approves, rejects,
 approved, needed, before, after, ends, nextLeader, absent}` · `quest {no, team, size, need, mode, mine, progress?}` where `mine` is
 `{member, done, flip, canFail}` for a member (the **same keys for good and evil**) and `null` otherwise · `outcome {no, team, leader, successes, fails,
 need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (holder only), held, mine {loyalty} (holder only, peek stage)}` ·
-`assassinate {canShoot, tapped, candidates, flipped}` (**the same keys for every seat**) · `shot {assassin, target, hit, merlin, canContinue}` ·
+`assassinate {canShoot, tapped, candidates, flipped, talk}` (**the same keys for every seat**; `talk` is public) · `shot {assassin, target, hit, merlin, canContinue}` ·
 `end {winner, reason, summary, roles, knows, quests (with played), lady (with loyalty), shot}` only in `over`.
 
 ### Actions (validated; bad input returns the state unchanged and never throws)
@@ -444,7 +466,8 @@ need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (hol
 | `{type:'lady', target}` | the holder | `lady` | not themself, not a past holder → `lady-peek` |
 | `{type:'lady-done'}` | the holder | `lady-peek` | token → target, next quest |
 | `{type:'assassinate', target}` | the Assassin | `assassinate` | any seat id → `shot` (Merlin → evil, otherwise good) |
-| `{type:'decoy'}` | any seat except the Assassin | `assassinate` | once per seat, changes nothing public |
+| `{type:'decoy'}` | any seat except the Assassin | `assassinate` | once per seat, changes nothing public (not during the one-phone talk) |
+| `{type:'talked', seats?, table?}` | any present seat (one phone: the table screen's whole-table tap) | `assassinate` while `talk` | ends evil's talk; the Assassin is called (§3.8) |
 | `{type:'continue'}` | the Assassin | `shot` | → `over` |
 | `@cue-done {id}` | host | any | acknowledges the cue if `id` matches |
 | `@next` | host | any | first acknowledges a pending cue; then skips: `reveal` → `pick`, `voted`/`quest-result` → continue, `quest` → play success for every missing card (recorded in `auto`) and resolve, `lady-peek` → done, `shot` → `over`. `pick`, `vote`, `lady`, `assassinate` need a real decision and are left alone |
@@ -463,14 +486,19 @@ just beeps; the assassination clock stays on 0:00 until the shot or the host's �
 ### `focus`
 
 `reveal` → present seats that have not looked · `pick`/`voted`/`quest-result` → `[leader]` (`voted`/`quest-result` with the leader 💤 → null: anybody taps 繼續) · `vote` → present seats that have not voted · `quest` → members who have not played ·
-`lady`/`lady-peek` → `[holder]` · `assassinate` → `{ pids: [shooter], anonymous: '刺客請拎起部手機' }` (the Assassin, or the stand-in when the Assassin is 💤) · `shot` → `[assassin]` · `over` → null.
+`lady`/`lady-peek` → `[holder]` · `assassinate` → `{ pids: [shooter], anonymous: '刺客請拎起部手機' }` (the Assassin, or the stand-in when the Assassin is 💤; null during the one-phone talk) · `shot` → `[assassin]` · `over` → null.
+
+One-phone hints on the named steps (DESIGN §7.1; a phone of its own ignores them, so they ride along in every room): `open: true` on
+`pick`, `voted`, `quest-result`, `lady`, `shot` (#4); `step` keys `pick:<proposalNo>~<voids>`, `vote:<proposalNo>~<voids>`, `voted:<proposalNo>`,
+`quest:<questNo>~<voids>`, `result:<questNo>`, `lady:<n>`, `peek:<n>`, `shot` (#2: a new key for the same seat gates again, also after 呢鋪唔計);
+`label` 睇身份 · 揀隊員 · 任務 N 投票 · 投票結果 · 任務 N 出牌 · 任務 N 結果 · 湖中女神 · 刺殺結果 (#33).
 
 ### `blocking(state, pid)` — is the table really waiting on this seat?
 
 Stall detection (`Session.blocking`) asks this instead of `legalActions`, because the anti-tell taps give every seat something legal:
 `reveal` → only in tap mode, the seats that have not tapped 「我睇完」 (timed: **nobody**, the clock ends it; `seen` is a decoy) ·
 `pick`/`voted`/`quest-result` → the leader · `vote` → seats that have not voted · `quest` → members who owe a card · `lady`/`lady-peek` → the holder ·
-`assassinate` → **the Assassin only** (the decoys never block) · `shot`/`over` → nobody (the shot's 8 s clock ends it). Tested per phase, as a property over
+`assassinate` → **the Assassin only** (the decoys never block; nobody during the one-phone talk) · `shot`/`over` → nobody (the shot's 8 s clock ends it). Tested per phase, as a property over
 fuzzed games (a blocker always has a legal action; outside the timed reveal and the shot it equals `focus`), and in a real `Room`: a disconnected
 non-assassin during the assassination is never listed in `stalled`; a disconnected Assassin is, and 代佢做 then shoots. A seat marked 💤 never blocks.
 
@@ -478,7 +506,7 @@ non-assassin during the assassination is never listed in `stalled`; a disconnect
 
 `reveal` → `seen` · `pick` → a random team · `vote` → **approve** (a dead phone has no opinion; reject would risk the fifth-rejection loss) · `quest` → **success**
 (never a surprise sabotage; an evil player on a dead phone does not sabotage) · `voted`/`quest-result`/`lady-peek`/`shot` → continue / done · `lady` → a random legal
-target · `assassinate` → the Assassin shoots a random seat; every other seat answers `decoy` (so a disconnected decoy seat is cleared by 代佢做).
+target · `assassinate` → the Assassin shoots a random seat; every other seat answers `decoy` (so a disconnected decoy seat is cleared by 代佢做); during the one-phone talk every seat answers `talked`.
 `autoAct` is only ever the host's 代佢做; the soft assassination clock never calls it (D8). A seat marked 💤 gets `null` (nobody waits on it).
 
 ### `legalActions(state, pid)`
@@ -555,6 +583,20 @@ Decisions 2026-10-04 (D8, D4)
 - D8: `assassinSecs` is 120 at every n with no warning and a summary line that says 唔會自動揀; an old saved 0 (no `cfgRev`) moves to 120 once, a later 0 stays; at and long after the deadline `advance` changes nothing (no shot); ⏱️ ＋60 秒 from the host only, from now when the clock ran out, stacking on a running clock, at most 5, only in the assassination with a clock; the Assassin still shoots after 0:00; the UI shows 「⏰ 夠鐘」 on every phone with one screen shape. The results keep who played which card (one 出牌 line per quest).
 - D4 💤: a seat that is away does not vote (6 of 7 voting, a 3:3 tie rejects with 4 needed), a ballot cast before going away is dropped, the vote record and the recap say 💤 冇投; a quest member who is away plays Success at once (in `auto`); the leader token, the Lady and the tap reveal skip the seat; anybody at the table may 繼續 while the leader is away; an Assassin who is away is replaced by the next evil seat at the table (one screen shape, one real confirm, anonymous focus), no evil left → `no-shot` good win; refused below 3 seats; its own actions ignored; a fuzz with random 💤 / back keeps every game finishing with the leak sweep at every step. UI: 💤 on the roster, 💤 冇投 on the vote result, 繼續 for anybody while the leader is away.
 
+One phone in the middle (2026-10-04, one-phone playtest #2 #4 #14 #17 #20 #22 #27 #28, decision U9)
+- `focus`: `open` on the public steps, a `step` key on every step (a voided vote is a new step), `label`s; the Lady's pick open, her answer private.
+- #27: the talk — no focus, no shot or decoy, only `talked` in `legalActions` / `autoAct`, `blocking` nobody, the clock runs, the cue first says
+  傾好喇 then 閉埋眼; a table tap or the host's ⏭ ends it; phones of their own have no talk; random one-phone games still finish with the leak sweep.
+- #28: `merlinNote` per deck; Merlin's face note at 5 (all seen) and 9 (Mordred); one evil partner reads 佢; `knows.blind` in every seat's card
+  (one shape), never a role name in a view.
+- #19: the one-phone reveal cue and the lobby line (8 s / 4 s); the rules state the minimum.
+- UI (fake DOM): U9 — 「我睇完」 held 8 s and 「確定出牌」 4 s from the hand-over, the same screen for Merlin / a Servant / the Assassin and for a
+  good / an evil member, untouched on a phone of its own; #22 — no mini card on the leader's public pick and the vote reveal, back on the private
+  ballot and for a seat picked by hand; #20 — the leader is named, never 「你係隊長」; #27 — one talk screen on every seat, no picker, one table
+  tap locked behind the table card; 繼續 on the table screen only while the leader is 💤.
+- Through the real play screen (`js/ui/screens/play.js`, a Sim-driven whole-table phone): every reveal card is private and holds 「我睇完」 8 s;
+  the pick is a public card with no identity card and the leader named; the leader's own ballot then gets its own private card (#2).
+
 ## 7. 貼心 touches
 
 - The reason for the recommended deck is shown in the lobby, per head-count, plus a gentle 「基本版（新手）」 for new friends.
@@ -568,6 +610,9 @@ Decisions 2026-10-04 (D8, D4)
 - Narration is announcements only; with 靜音 the same lines scroll on the host phone. Nothing waits for it.
 - The results explain the whole game, including what each seat knew at the start and who played which card — the 「原來係咁」 moment.
 - A dead phone never stops the table: 代佢做 votes approve, plays success, or answers the decoy.
+- One phone: the public screens (the pick, the votes with names, the result) are shown to the table, not hidden behind 「其他人唔好望」; the leader's
+  own ballot still gets its own card; everybody holds the role card 8 s and the quest card 4 s, so nobody's speed tells; evil talks face up before
+  anyone closes their eyes; Merlin's card says exactly whom he cannot see.
 
 ## 8. Framework requests
 
@@ -580,6 +625,11 @@ Decisions 2026-10-04 (D8, D4)
    turn order. (The rules sheet's 手機點用 says it; nothing in the lobby does.)
 6. **呢鋪唔計 button.** `app.hostCtl.voidRound()` exists but no screen offers it yet. For 阿瓦隆 it only does something in `pick`, `vote` and `quest`
    (it returns false elsewhere), so the stalled-seat card is the natural place: 「代佢做 · 呢鋪唔計 · 再等」, with a toast when it returns false.
+7. **The gate-tap time (U9).** The 8 s / 4 s minimums count from the moment this seat's UI mounts, which is the hand-over card's tap. A
+   `ctx.handedAt` (host ms of the tap) would make that exact even if a screen were ever mounted before its gate is tapped.
+8. **Whether the room is one phone, at setup.** One-phone behaviour keys off the hidden `cfg.passPhone` that `defaults` sets from
+   `env.singleDevice`; a host who edits the setup and then has friends join keeps the stale flag. `engine.setup({ …, env })` (or the Room
+   re-running `defaults` for that key alone) would remove the drift.
 
 ## 9. Rules verification (QA, 2026-10-03 UTC)
 

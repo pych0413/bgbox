@@ -426,3 +426,20 @@ Effort: S ≤ half a day · M ≈ 1 day · L = several days, tests included. Ite
 - No table is running. `tools/playtest/.sessions/` has no `sp-*.json` session files (only the `sp-*.chat.jsonl` logs), and no `pt.mjs` daemon process is alive, so nothing needed `pt.mjs stop`.
 - At merge time, per-game reports exist on disk for 9upper, avalon, draw-guess, fake-artist, onuw and undercover. The cheese-thief, spyfall, werewolf and custom findings above come from the reviewers' structured output; their `single/<id>.md` files were not found.
 - No code was edited.
+
+## Decisions (user, 2026-10-04 10:45 UTC — "全部照你建議")
+
+| # | decision |
+|---|---|
+| U1 | One-phone room + eyes-closed game (cheese-thief, werewolf, onuw): hide 🔇 靜音. Keep 📜 讀稿 with a warning that a non-player should read. |
+| U2 | Co-wakers (wolves, Masons, any seats awake in the same secret step) share ONE combined night screen on a shared phone; no chained hand-over. |
+| U3 | 間諜 🛑 停鐘 on a shared phone freezes the clock the moment it is tapped (from the table screen, then the tapper picks their name). |
+| U4 | Table mode is automatic: whenever focus leaves this phone's seats outside the night, the phone goes to the middle behind a public 「擺返中間」 card that is tapped once. |
+| U5 | Whole-table taps (睇完, 下一輪…) stay locked until the table card is dismissed. 誰是臥底 開始投票 on a whole-table phone needs a second tap. |
+| U6 | Night hand-over padding: cheese-thief hour 15 → 20 s on one phone; onuw +8 s per step on one phone. |
+| U7 | 假畫家 one-phone vote: a 一齊指 mode (3-2-1 countdown, everyone points, one person enters the result). |
+| U8 | 一夜狼人 one-phone night keeps pick-up-from-the-middle, with an ambient sound bed on every step so reaching for the phone is masked. |
+| U9 | 阿瓦隆 one-phone equal time: role reveal ≥ 8 s and quest card ≥ 4 s, counted from the gate tap. |
+| U10 | 你畫我猜: the room clock does not run while a pass gate is up. |
+| U11 | 間諜 on one phone: the question tracker is hidden by default. |
+| U12 | Fix the playtest console first, then re-run all ten one-phone tables. |

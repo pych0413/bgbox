@@ -113,7 +113,9 @@
 
 .g9-judgebtns { display: grid; grid-template-columns: 1fr 1.4fr; gap: .625rem; }
 .g9-judgebtns.solo { grid-template-columns: 1fr; }
+.g9-judgebtns.pass { grid-template-columns: 1fr 1fr; }   /* one phone: 「✅ 講完 · 下一位」 next to 「我決定咗，要揀人」, neither wraps */
 .g9-judgebtns .btn { font-size: .9375rem; padding: .625rem .5rem; }
+.g9-skip { align-self: center; color: var(--text-dim); }    /* one phone: the rare 「⏭ 佢唔喺度，跳過」 */
 
 /* 系統派: the phone announces who speaks now and who is next */
 .g9-announce {

@@ -124,7 +124,8 @@ export function SeatEditor(props = {}) {
     li.append(dot);
 
     li.append(el('span', { class: 'c-seateditor-name' },
-      el('span', { class: 'c-seateditor-label', text: pl.name + (mine ? '（你）' : '') }),
+      // #20: 「（你）」 only on a phone of your own — on a shared phone every seat here would say it
+      el('span', { class: 'c-seateditor-label', text: pl.name + (mine && mySeats().length === 1 ? '（你）' : '') }),
       pl.isHost ? el('span', { class: 'tag host', text: '房主' }) : null,
       pl.spectator ? el('span', { class: 'tag', text: '旁觀' }) : null,
       pl.connected === false ? el('span', { class: 'tag off', text: '斷咗線' }) : null));

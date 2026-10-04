@@ -276,7 +276,7 @@ test('cheese-thief: night starts only when everyone is ready', () => {
   for (const id of ids(5).slice(0, 4)) sim.act(id, { type: 'ready' });
   assert.equal(sim.state.phase, 'roll');
   assert.equal(view(sim, 'p5').ready.done, 4);
-  assert.deepEqual(engine.focus(sim.state), { pids: ['p5'] });
+  assert.deepEqual(engine.focus(sim.state), { pids: ['p5'], label: '睇牌・擲骰' }, 'the step name a shared phone\'s gate shows (#33)');
   sim.act('p5', { type: 'ready' });
   assert.equal(sim.state.phase, 'night');
 });
@@ -1110,9 +1110,19 @@ function leakCheck(sim) {
     if (s.phase !== 'over') assert.ok(!('recap' in v), 'the night recap is published only at the end');
     assert.equal(typeof v.hint, 'string');
 
-    // the public part of a step says nothing about who is awake
-    if (s.phase === 'night') assert.deepEqual(Object.keys(v.step).sort(), ['h', 'ix', 'k', 'stage', 'total']);
+    // the public part of a step says nothing about who is awake: windowMs is the step kind's fixed length (#7)
+    if (s.phase === 'night') {
+      assert.deepEqual(Object.keys(v.step).sort(), ['h', 'ix', 'k', 'stage', 'total', 'windowMs']);
+      assert.equal(v.step.windowMs, fixedWindow(s.cfg, v.step.k), `${v.step.k}: the bar's length is the step kind's`);
+    }
   }
+}
+
+/** The length every window of a step kind has (docs/games/cheese-thief.md §3.2), one phone's hand-over pad included. */
+function fixedWindow(cfg, k) {
+  const pad = cfg.passPhone ? game.PASS_PAD_SEC * 1000 : 0;
+  const hour = cfg.hourSec * 1000;
+  return { begin: 3000, open: hour + pad, 'rec-pick': hour + pad, 'rec-meet': Math.max(5000, Math.round(hour / 2)) + pad, dawn: 1500 }[k] ?? 2000;
 }
 
 test('cheese-thief: leak check on scripted scenarios, every step', () => {
@@ -1148,7 +1158,8 @@ test('cheese-thief: the table view (spectator/host screen) never carries a secre
     const t = sim.view(null);
     assert.equal(t.seat, null);
     for (const k of ['my', 'notes', 'candidates', 'myVote', 'revealed', 'debrief']) assert.ok(!(k in t), k);
-    assert.deepEqual(Object.keys(t.step).sort(), ['h', 'ix', 'k', 'stage', 'total']);
+    assert.deepEqual(Object.keys(t.step).sort(), ['h', 'ix', 'k', 'stage', 'total', 'windowMs']);
+    assert.ok(!('acks' in t), 'no tap counter on the table: on a shared phone only the awake seats tap');
     assert.ok(paths(t, (x) => x === 'thief' || x === 'sleepyhead').length === 0);
     if (sim.state.stage === 'cue') sim.cueDone(); else sim.advance();
   }
@@ -2069,10 +2080,12 @@ test('cheese-thief: 5p 家規 pick5 — off by default; labelled 家規 in field
     assert.ok(!config.summary(on, n).join('\n').includes('🤝 家規'));
   }
   assert.equal(config.defaults(5, on).pick5, true);
-  // one phone passed around gets longer hours by default (an explicit choice still wins)
-  assert.equal(config.defaults(5, undefined, { singleDevice: true }).hourSec, 15);
-  assert.equal(config.defaults(5, { hourSec: 10 }, { singleDevice: true }).hourSec, 10);
+  // one phone: the official hour plus the hand-over pad (U6), the hour itself stays the host's choice
+  assert.equal(config.defaults(5, undefined, { singleDevice: true }).hourSec, 10);
+  assert.equal(config.defaults(5, undefined, { singleDevice: true }).passPhone, true);
+  assert.equal(config.defaults(5, { hourSec: 12 }, { singleDevice: true }).hourSec, 12);
   assert.equal(config.defaults(5, undefined, { singleDevice: false }).hourSec, 10);
+  assert.equal(config.defaults(5, undefined, { singleDevice: false }).passPhone, false);
 });
 
 test('cheese-thief: 5p 家規 pick5 — no witness follower at the theft; the 6p night-end pick, script and meeting instead', () => {
@@ -2298,37 +2311,38 @@ test('cheese-thief in a real Room: one phone per seat — exactly the awake seat
   for (const pid of order.slice(1, 4)) assert.equal(lastViews(deviceOf.get(pid)).bySeat[pid].my.crew, undefined);
 });
 
-test('cheese-thief in a real Room: one shared phone — the pass gate walks through every awake seat as each one hands it on', async () => {
-  // 5p on one phone: seat 0 steals at three with seats 1 and 2 watching; seat 3 is alone at four
+test('cheese-thief in a real Room: one shared phone — the seats awake together stay in focus all hour (ONE combined screen, U2); the thief picks from the same phone; the pad holds', async () => {
+  // 5p on one phone: seat 0 steals at three with seats 1 and 2 watching (it owes a pick); seat 3 is alone at four
   const R = await cheeseRoom(5, { shared: true, dice: [3, 3, 3, 4, 6] });
   const { room, run, order, lastViews, s } = R;
+  assert.equal(s().cfg.passPhone, true, 'the room told config.defaults it is one phone');
   const focus = () => lastViews('dev_host').focus;
-  // the shell gates the FIRST focus seat of this phone (seat order); a seat that is done leaves
-  const walked = [];
+  const seat = (pid) => lastViews('dev_host').bySeat[pid];
+  let windows = 0;
+  let picked = false;
   for (let guard = 0; guard < 4000 && s().phase === 'night'; guard++) {
     const st = s().steps[s().ix];
     if (s().stage === 'window' && st.k === 'open' && st.h === 3) {
+      windows++;
       const f = focus();
       assert.equal(f.anonymous, '擲到三點嘅請拎起部手機');
-      if (!f.pids.length) { run(250); continue; }
-      const here = order.filter((p) => f.pids.includes(p));
-      assert.deepEqual(f.pids, here, 'seat order');
-      const cur = here[0];
-      walked.push(cur);
-      const v = lastViews('dev_host').bySeat[cur];
-      assert.equal(v.nightSeat.awake, true);
-      if (v.nightSeat.recruit) room.act('dev_host', cur, { type: 'recruit', targets: [v.nightSeat.recruit.among[0]] });
-      room.act('dev_host', cur, { type: 'done' });
-      continue;
+      assert.deepEqual(f.pids, order.slice(0, 3), 'thief and both witnesses, in seat order, the whole hour');
+      assert.equal(seat(order[0]).step.windowMs, 20000);
+      if (!picked) {
+        picked = true;
+        assert.ok(seat(order[0]).nightSeat.recruit, 'the thief owes its pick');
+        // the combined screen sends the pick AS the thief and acks for all three — all from the one phone
+        assert.ok(room.act('dev_host', order[0], { type: 'recruit', targets: [order[2]] }));
+        assert.ok(room.act('dev_host', order[1], { type: 'ack', seats: order.slice(0, 3) }));
+        assert.deepEqual(focus().pids, order.slice(0, 3), 'acting never drops anyone');
+        assert.equal(seat(order[1]).nightSeat.picked, order[2], 'the witnesses see whom the thief picked');
+      }
     }
-    if (s().stage === 'window' && st.k === 'open' && st.h === 4) {
-      assert.deepEqual(focus().pids, [order[3]], 'a lone seat needs no walk');
-    }
+    if (s().stage === 'window' && st.k === 'open' && st.h === 4) assert.deepEqual(focus().pids, [order[3]]);
     run(250);
   }
-  assert.deepEqual(walked, order.slice(0, 3), 'thief, then each witness, got the phone in turn');
-  assert.equal(s().followers.length, 1);
-  assert.ok([order[1], order[2]].includes(s().followers[0]), 'the thief picked on the phone, not at random after the hour');
+  assert.ok(windows >= 40, `the hour ran its full 20 s (${windows} looks)`);
+  assert.deepEqual(s().followers, [order[2]], 'picked on the phone, not at random after the hour');
 });
 
 // ---------- phone UI ----------
@@ -2410,44 +2424,259 @@ test('cheese-thief ui: at dawn every phone shows the same re-check line under it
   });
 });
 
-test('cheese-thief ui: on a phone passed around, the last tap hands it on (`done`); a one-seat phone only ever acks', async () => {
+/**
+ * One seat of a SHARED phone (DESIGN §7.1), as the play screen mounts it: api.shared / wholeTable, sendAs for the
+ * co-wakers, tableSend for the phone in the middle (it ticks every seat, as the room's `seats` filter allows).
+ */
+function mountShared(ui, sim, pid, sent, { whole = true } = {}) {
+  const comps = stubComponents();
+  const cards = [];
+  const RC = comps.RoleCard;
+  comps.RoleCard = (p) => { const c = RC(p); cards.push(c); return c; };
+  const root = new FEl('div');
+  const all = sim.players.map((p) => p.id);
+  const act = (as, a) => { const changed = sim.act(as, a); sent.push({ pid: as, a, changed }); return changed; };
+  const api = {
+    me: pid, players: sim.players, isHost: true, meta: game.meta, config: sim.state.cfg,
+    shared: true, wholeTable: whole, atTable: pid === null, mySeats: all,
+    send: (a) => (pid ? act(pid, a) : false),
+    sendAs: (as, a) => act(as, a),
+    tableSend: (a) => act(all[0], { ...a, seats: all, table: true }),
+    ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: comps,
+  };
+  return { pid, root, api, cards, handle: ui.mount(root, api) };
+}
+
+/** The ctx a shared phone gives the seat it mounted for: `coWakers` / `views` while several of its seats are awake. */
+function sharedCtx(sim, co = [], extra = {}) {
+  const f = engine.focus(sim.state);
+  return {
+    focus: f, paused: false, narrationMode: 'voice', shared: true, wholeTable: true, atTable: false, tableLocked: false,
+    coWakers: co, views: Object.fromEntries(co.map((p) => [p, sim.view(p)])), asked: null, clockHeld: false, ...extra,
+  };
+}
+
+/** Update twice, as the shell may: the screen must be the same after both. */
+function showTwice(seat, view, ctx) {
+  seat.handle.update(view, ctx);
+  const a = serialize(seat.root);
+  seat.handle.update(clone(view), clone(ctx));
+  assert.equal(serialize(seat.root), a, `update() is not idempotent for ${seat.pid ?? 'table'}`);
+}
+
+const byCls = (root, c) => findAll(root, (n) => hasCls(n, c));
+const visibleText = (root) => {
+  const out = [];
+  const go = (n) => { if (n instanceof FText) out.push(n.data); else if (!n.hidden) n.children.forEach(go); };
+  go(root);
+  return out.join(' ');
+};
+
+test('cheese-thief ui: one phone, several awake in one hour — ONE combined screen; the thief\'s pick goes out as the thief and everyone sees it; one tap acks for all; never `done` (U2)', async () => {
   await withFakeDom(async (ui) => {
+    // 5p, official witness rule: p1 steals at three with p2 and p3 watching, so it owes a pick
     const sim = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 3, p4: 1, p5: 6 } });
-    const sent = [];
-    const seats = mountAll(ui, sim, sent);
     openHour(sim, 3);
-    const shared = (pids) => ({ focus: { pids, anonymous: '擲到三點嘅請拎起部手機' }, paused: false, narrationMode: 'voice' });
-    const show = (x, ctx) => seats[x].handle.update(sim.view(x), ctx);
-    const big = (x) => findAll(seats[x].root, (n) => hasCls(n, 'ct-ack'))[0];
-    const sub = (x) => findAll(seats[x].root, (n) => hasCls(n, 'ct-ack-sub'))[0].textContent;
-    const last = (x) => sent.filter((s) => s.pid === x).at(-1)?.a;
-    // a witness on the shared phone: one tap hands it on
-    show('p2', shared(['p1', 'p2', 'p3']));
-    assert.equal(sub('p2'), '睇完就㩒：交畀下一位');
-    click(big('p2'));
-    assert.deepEqual(last('p2'), { type: 'done' });
-    // the thief owes a pick: the bare button never hands the phone on
-    show('p1', shared(['p1', 'p3']));
-    click(big('p1'));
-    assert.deepEqual(last('p1'), { type: 'ack' });
-    click(findAll(seats.p1.root, (n) => hasCls(n, 'ct-chip') && n.textContent === '玩家3')[0]);
-    click(big('p1'));
-    assert.deepEqual(last('p1'), { type: 'recruit', targets: ['p3'] });
-    show('p1', shared(['p1', 'p3']));
-    assert.equal(sub('p1'), '睇完就㩒：交畀下一位');
-    click(big('p1'));
-    assert.deepEqual(last('p1'), { type: 'done' });
-    assert.deepEqual(engine.focus(sim.state).pids, ['p3']);
-    // the last awake seat on the phone, and any one-seat phone: a plain ack, the screen stays as it is
-    show('p3', shared(['p3']));
-    assert.notEqual(sub('p3'), '睇完就㩒：交畀下一位');
-    click(big('p3'));
-    assert.deepEqual(last('p3'), { type: 'ack' });
-    // a sleeper is never "walking", whatever the focus says
-    show('p4', shared(['p3']));
-    click(big('p4'));
-    assert.deepEqual(last('p4'), { type: 'ack' });
+    const co = ['p1', 'p2', 'p3'];
+    const sent = [];
+    const seat = mountShared(ui, sim, 'p1', sent);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    const r = seat.root;
+    assert.equal(byCls(r, 'ct-co').length, 1, 'the combined screen');
+    const txt = visibleText(r);
+    assert.ok(txt.includes('你哋一齊醒：玩家1、玩家2、玩家3'), txt);
+    assert.ok(txt.includes('玩家1 偷走咗芝士 — 你哋都睇到'), 'they all watched the theft');
+    assert.ok(txt.includes('玩家1 要喺 玩家2、玩家3 入面揀 1 位做共犯'), 'the pick is made in front of the witnesses');
+    assert.ok(!/你醒咗|同你一齊醒/.test(txt), 'written for all of them, not for one 「你」');
+    // the pick: only the witnesses are live; the big button sends it AS THE THIEF
+    const chip = (name) => byCls(r, 'ct-chip').find((n) => n.textContent === name);
+    assert.equal(chip('玩家4').disabled, true, 'a sleeper cannot be picked');
+    click(chip('玩家3'));
+    click(byCls(r, 'ct-ack').find((n) => !n.hidden && n.parentNode && hasCls(n.parentNode, 'ct-co-shared')));
+    assert.deepEqual(sent.at(-1), { pid: 'p1', a: { type: 'recruit', targets: ['p3'] }, changed: true });
+    assert.deepEqual(sim.state.followers, ['p3']);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    assert.ok(visibleText(r).includes('大盜揀咗 玩家3 做共犯'), 'every co-waker sees whom the thief picked');
+    assert.ok(!visibleText(r).includes('要喺'), 'the pick is done');
+    // the plain tap: "we have all seen it" — one ack for every co-waker, the hour keeps its length
+    const d = sim.state.deadline;
+    click(byCls(r, 'ct-ack').find((n) => n.parentNode && hasCls(n.parentNode, 'ct-co-shared')));
+    assert.deepEqual(sent.at(-1).a, { type: 'ack', seats: co });
+    for (const p of co) assert.ok(sim.state.acked.includes(p), `${p} acked`);
+    assert.equal(sim.state.deadline, d, 'the window never ends early');
+    assert.deepEqual(engine.focus(sim.state).pids, co, 'everyone stays awake (in focus) all hour');
+    assert.ok(!sent.some((x) => x.a.type === 'done'), 'the old chained walk is gone');
+    seat.handle.destroy();
+  });
+});
+
+test('cheese-thief ui: co-wakers — what only one of them knows or may do sits behind its own 🤫 panel; the shared part never shows who the thief is (4p wait-or-steal)', async () => {
+  await withFakeDom(async (ui) => {
+    // 4p: p1 (thief, wakes at two and five) and p2 (keeps its two) are awake together at two; the cheese is still there
+    const make = (thief) => {
+      const sim = scenario(4, { thief, dice: { p1: [2, 5], p2: [2, 6], p3: [1, 1], p4: [3, 4] }, pick4: { p2: 2, p3: 1, p4: 3 }, config: { ...config.defaults(4, undefined, { singleDevice: true }) } });
+      openHour(sim, 2);
+      return sim;
+    };
+    const sim = make('p1');
+    assert.equal(sim.view('p1').nightSeat.steal.can, true);
+    const co = ['p1', 'p2'];
+    const sent = [];
+    const seat = mountShared(ui, sim, 'p1', sent);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    const r = seat.root;
+    const shared = () => byCls(r, 'ct-co-shared')[0];
+    const own = () => byCls(r, 'ct-co-priv')[0];
+    // at a glance the shared part is word for word what it would be if p1 were a plain sleepyhead
+    const other = make('p4');           // p4 wakes at three and four: at two, p1 and p2 are plain sleepyheads
+    const twin = mountShared(ui, other, 'p1', []);
+    showTwice(twin, other.view('p1'), sharedCtx(other, co));
+    assert.equal(visibleText(shared()), visibleText(byCls(twin.root, 'ct-co-shared')[0]), 'the shared part says nothing about who may steal');
+    assert.ok(!visibleText(shared()).includes('大盜'));
+    assert.ok(visibleText(shared()).includes('芝士仲喺枱上'));
+    // 🤫 玩家1: only now does p1 read its choice; the same-shaped button steals
+    const ownBtn = (name) => byCls(r, 'ct-co-me').find((n) => n.textContent.includes(name));
+    click(ownBtn('玩家1'));
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    assert.equal(shared().hidden, true, 'the shared part steps aside');
+    assert.ok(visibleText(own()).includes('淨係 玩家1 睇 — 其他人望開'));
+    assert.ok(visibleText(own()).includes('等五點鐘'), 'its own choice: steal now or wait');
+    assert.equal(byCls(own(), 'die').length, 2, 'its own two dice');
+    const shapeOf = (n) => JSON.stringify(n.children.map((c) => [c.tag, [...c.cls].sort()]));
+    const p1Shape = shapeOf(own());
+    click(byCls(own(), 'ct-ack')[0]);
+    assert.deepEqual(sent.at(-1), { pid: 'p1', a: { type: 'steal' }, changed: true });
+    click(byCls(own(), 'ct-co-back')[0]);
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    assert.ok(visibleText(shared()).includes('玩家1 偷走咗芝士 — 你哋都睇到'), 'the witness saw the cheese go');
+    // 🤫 玩家2: the same panel, nothing to do — its tap acks as p2
+    click(ownBtn('玩家2'));
+    showTwice(seat, sim.view('p1'), sharedCtx(sim, co));
+    assert.equal(shapeOf(own()), p1Shape, 'every co-waker\'s own panel has the same shape');
+    assert.ok(visibleText(own()).includes('冇嘢要做'));
+    click(byCls(own(), 'ct-ack')[0]);
+    assert.deepEqual(sent.at(-1).pid, 'p2');
+    assert.deepEqual(sent.at(-1).a, { type: 'ack' });
+    seat.handle.destroy();
+    twin.handle.destroy();
+  });
+});
+
+test('cheese-thief ui: the 7p meeting on one phone — the crew is shared; whether a follower knows the thief stays on its own panel', async () => {
+  await withFakeDom(async (ui) => {
+    // p1 steals at three with p2 watching; p3 never saw it
+    const sim = scenario(7, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 5, p4: 1, p5: 2, p6: 4, p7: 6 } });
+    runTo(sim, stepIndex(sim, 'rec-pick'), 'window');
+    assert.ok(sim.act('p1', { type: 'recruit', targets: ['p2', 'p3'] }));
+    runTo(sim, stepIndex(sim, 'rec-meet'), 'window');
+    const co = ['p2', 'p3'];
+    const seat = mountShared(ui, sim, 'p2', []);
+    showTwice(seat, sim.view('p2'), sharedCtx(sim, co));
+    const shared = byCls(seat.root, 'ct-co-shared')[0];
+    assert.ok(visibleText(shared).includes('共犯：玩家2、玩家3'));
+    assert.ok(!visibleText(shared).includes('玩家1'), 'who the thief is never reaches the shared part');
+    const open = (name) => {
+      click(byCls(seat.root, 'ct-co-me').find((n) => n.textContent.includes(name)));
+      showTwice(seat, sim.view('p2'), sharedCtx(sim, co));
+      return visibleText(byCls(seat.root, 'ct-co-priv')[0]);
+    };
+    assert.ok(open('玩家2').includes('大盜係 玩家1（你夜晚親眼見到佢偷）'));
+    click(byCls(seat.root, 'ct-co-back')[0]);
+    assert.ok(open('玩家3').includes('你唔知大盜係邊個'));
+    seat.handle.destroy();
+  });
+});
+
+test('cheese-thief ui: one phone, a lone sleepyhead — the peek is ONE tap; unusable names are dimmed; the bar runs from the fixed window and says 時間到 (#7, #36)', async () => {
+  await withFakeDom(async (ui) => {
+    const cfg = config.defaults(5, undefined, { singleDevice: true });
+    const sim = scenario(5, { thief: 'p1', dice: { p1: 6, p2: 1, p3: 2, p4: 3, p5: 4 }, config: cfg });
+    openHour(sim, 1);
+    const len = sim.state.deadline - sim.now;
+    assert.equal(len, (10 + game.PASS_PAD_SEC) * 1000, 'the official hour plus the hand-over pad');
+    assert.equal(sim.view('p2').step.windowMs, len);
+    sim.now = sim.state.deadline - 5000;          // the gate and the pick-up took 15 s
+    const sent = [];
+    const seat = mountShared(ui, sim, 'p2', sent);
+    showTwice(seat, sim.view('p2'), sharedCtx(sim));
+    const r = seat.root;
+    const bar = byCls(r, 'ct-bar')[0];
+    assert.equal(byCls(r, 'ct-bar-text')[0].textContent, '仲有 5 秒');
+    assert.equal(bar.children[0].styleMap.transform, 'scaleX(0.250)', 'drawn from the fixed 20 s, not from when the screen mounted');
+    assert.equal(bar.attrs.role, 'progressbar');
+    assert.equal(bar.attrs['aria-valuetext'], '仲有 5 秒');
+    const lines = byCls(r, 'ct-line');
+    assert.ok(lines.length <= 3, `a short awake card on one phone (${lines.length} lines)`);
+    assert.ok(visibleText(r).includes('㩒一個名就即刻偷睇'));
+    // one tap on a name is the peek
+    click(byCls(r, 'ct-chip').find((n) => n.textContent === '玩家4'));
+    assert.deepEqual(sent.at(-1), { pid: 'p2', a: { type: 'peek', target: 'p4' }, changed: true });
+    showTwice(seat, sim.view('p2'), sharedCtx(sim));
+    assert.ok(byCls(r, 'ct-chip').every((n) => n.disabled), 'nothing left to pick: every name is dimmed');
+    assert.equal(byCls(r, 'ct-grid')[0].cls.has('is-dim'), true);
+    assert.equal(byCls(r, 'ct-ack-sub')[0].textContent, ui.ACK_SHARED);
+    assert.ok(!visibleText(r).includes('自己部機'), 'never 「望住自己部機」 on the phone in the middle');
+    sim.now = sim.state.deadline;
+    showTwice(seat, sim.view('p2'), sharedCtx(sim));
+    assert.equal(byCls(r, 'ct-bar-text')[0].textContent, ui.TIME_UP_SHARED);
+    seat.handle.destroy();
+    // a phone of its own keeps the two-tap peek (it must look like a sleeper's decoy)
+    const own = scenario(5, { thief: 'p1', dice: { p1: 6, p2: 1, p3: 2, p4: 3, p5: 4 } });
+    openHour(own, 1);
+    const s2 = [];
+    const seats = mountAll(ui, own, s2);
+    pushViews(own, seats);
+    click(findAll(seats.p2.root, (n) => hasCls(n, 'ct-chip') && n.textContent === '玩家4')[0]);
+    assert.equal(s2.length, 0, 'a name tap alone sends nothing on a phone of its own');
+    assert.ok(findAll(seats.p2.root, (n) => hasCls(n, 'ct-chip')).every((n) => !n.disabled));
     for (const s of Object.values(seats)) s.handle.destroy();
+  });
+});
+
+test('cheese-thief ui: by day on a whole-table phone — 夠鐘投票 is one tap from the middle (locked while the card is up), a seat\'s own screen points there, and no shared screen says 「你」 (#5, #20)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 1, p3: 2, p4: 4, p5: 5 } });
+    finishNight(sim);
+    const sent = [];
+    const table = mountShared(ui, sim, null, sent);
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true, tableLocked: true }));
+    const btn = byCls(table.root, 'ct-table-ready')[0];
+    assert.equal(btn.hidden, false);
+    assert.equal(btn.textContent, '🗳️ 大家夠鐘投票 ✓（一下就得）');
+    assert.equal(btn.disabled, true, 'U5: locked until the 「擺返中間」 card is tapped');
+    assert.ok(!visibleText(table.root).includes('想投票：'), 'no n / m waiting list');
+    assert.ok(byCls(table.root, 'c-timer').length === 1, 'the clock is on the table screen');
+    showTwice(table, sim.view(null), sharedCtx(sim, [], { atTable: true, tableLocked: false }));
+    click(btn);
+    assert.deepEqual(sent.at(-1).a, { type: 'day-ready', on: true, seats: ids(5), table: true });
+    assert.equal(sim.state.phase, 'vote', 'one tap is the table\'s decision');
+    table.handle.destroy();
+
+    // a seat picked by hand by day: its own card, dice and 📓 — and where the table button is
+    const day = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 1, p3: 2, p4: 4, p5: 5 } });
+    finishNight(day);
+    const seat = mountShared(ui, day, 'p2', []);
+    showTwice(seat, day.view('p2'), sharedCtx(day));
+    assert.ok(!findAll(seat.root, (n) => n.tag === 'button' && !n.hidden && n.textContent.includes('夠鐘投票')).length, 'no per-seat 夠鐘投票');
+    assert.ok(visibleText(seat.root).includes('擺返中間，喺枱面㩒「夠鐘投票」'));
+    assert.equal(seat.cards.at(-1).props.onLockToggle, undefined, '#36: no 🔓 lock on a phone passed round (it would not survive the hand-over)');
+    seat.handle.destroy();
+
+    // a spectator table (not a shared phone) has no table button
+    const spect = mountAll(ui, day, []);
+    pushViews(day, spect);
+    assert.equal(byCls(spect.table.root, 'ct-table-ready')[0].hidden, true);
+    for (const s of Object.values(spect)) s.handle.destroy();
+
+    // the end: 🧀 完咗 for the whole table, never 「你贏咗」 / 「（你）」 on a shared phone
+    const end = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 1, p3: 2, p4: 4, p5: 5 } });
+    playOut(end, {});
+    const over = mountShared(ui, end, 'p2', []);
+    showTwice(over, end.view('p2'), sharedCtx(end));
+    const t = visibleText(over.root);
+    assert.ok(t.includes('🧀 完咗'));
+    assert.ok(!/你贏咗|你輸咗|（你）/.test(t), t);
+    over.handle.destroy();
   });
 });
 
@@ -2696,4 +2925,91 @@ test('cheese-thief ui: with seats marked 💤 and back through whole random game
       for (const s of Object.values(seats)) s.handle.destroy();
     }
   });
+});
+
+// ============================================================
+// one phone in the middle (DESIGN §7.1; one-phone playtest #5, #7, #8, U2, U6)
+// ============================================================
+
+test('cheese-thief: one phone (passPhone, U6) — every awake window gets the same 10 s hand-over pad, empty or not; it follows the room; an old 15 s one-phone hour migrates', () => {
+  const one = config.defaults(5, undefined, { singleDevice: true });
+  assert.equal(one.passPhone, true);
+  assert.equal(one.hourSec, 10, 'the hour itself stays the official 10 s');
+  assert.equal(config.fields(one, 5).some((f) => f.key === 'passPhone'), false, 'a hidden marker, not a form field');
+  assert.ok(config.fields(one, 5).find((f) => f.key === 'hourSec').help.includes('加 10 秒交機'));
+  assert.equal(config.validate(one, 5).ok, true);
+  assert.ok(config.summary(one, 5).some((l) => l.includes('每個點鐘 20 秒（含交機 10 秒）')));
+  assert.ok(config.summary(config.defaults(5), 5).some((l) => l.includes('每個點鐘 10 秒 ·')));
+  // a second phone joins: the room re-runs defaults with prev = the config
+  const joined = config.defaults(5, one, { singleDevice: false });
+  assert.equal(joined.passPhone, false);
+  assert.equal(config.defaults(5, joined, { singleDevice: true }).passPhone, true);
+  assert.equal(config.defaults(5, one).passPhone, true, 'no env: kept as it was');
+  // a config saved before the pad (its 15 s was the one-phone default) becomes 10 + pad; a choice made since stays
+  assert.equal(config.defaults(5, { hourSec: 15 }, { singleDevice: true }).hourSec, 10);
+  assert.equal(config.defaults(5, { hourSec: 15, passPhone: true }, { singleDevice: true }).hourSec, 15);
+  assert.equal(config.defaults(5, { hourSec: 15 }, { singleDevice: false }).hourSec, 15);
+  // the night: every window the length of its kind — crowded or empty, acted in or not
+  for (const n of [4, 5, 6, 7, 8]) {
+    const cfg = config.defaults(n, undefined, { singleDevice: true });
+    const sim = scenario(n, { dice: { p1: 1, p2: 1, p3: 3, p4: 5, p5: 5, p6: 6, p7: 6, p8: 6 }, config: cfg });
+    const tl = nightTimeline(sim, (x) => { for (const id of ids(n)) x.act(id, { type: 'ack' }); });
+    const opens = tl.filter((r) => r[0] === 'window' && r[1] === 'open');
+    assert.equal(opens.length, 6);
+    for (const r of tl) if (r[0] === 'window') assert.equal(r[3], fixedWindow(cfg, r[1]), `n=${n} ${r[1]}${r[2] ?? ''}`);
+    for (const r of opens) assert.equal(r[3], 20000, 'the official 10 s + the 10 s hand-over pad');
+  }
+});
+
+test('cheese-thief: one phone — the begin and vote lines put the phone in the middle; one phone each keeps its own lines', () => {
+  const one = scenario(5, { config: config.defaults(5, undefined, { singleDevice: true }) });
+  assert.equal(one.state.steps[one.state.ix].k, 'begin');
+  assert.equal(one.cue().text, narrate({ k: 'begin' }, 5, { passPhone: true }));
+  assert.ok(one.cue().text.includes('部手機擺喺枱中間') && !one.cue().text.includes('面前'));
+  toVote(one);
+  assert.ok(one.cue().text.includes('部手機逐個交'));
+  const own = scenario(5);
+  assert.equal(own.cue().text, narrate({ k: 'begin' }, 5));
+  assert.ok(own.cue().text.includes('手機放喺面前'));
+  toVote(own);
+  assert.equal(own.cue().text, VOTE_CALL);
+  // the hour lines never change: a phone in the middle still hears the same frame every hour
+  for (let h = 1; h <= 6; h++) assert.equal(narrate({ k: 'open', h }, 5, { passPhone: true }), narrate({ k: 'open', h }, 5));
+});
+
+test('cheese-thief: `seats` (§7.1) — one whole-table tap readies every listed seat for the vote; co-wakers ack together; a seat of its own still counts once', () => {
+  const sim = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 3, p4: 1, p5: 6 } });
+  openHour(sim, 3);
+  const d = sim.state.deadline;
+  assert.ok(sim.act('p2', { type: 'ack', seats: ['p2', 'p3', 'nobody', 7, null] }));
+  assert.deepEqual(sorted(sim.state.acked), ['p2', 'p3']);
+  assert.equal(sim.state.deadline, d, 'acking never ends a window');
+  assert.deepEqual(engine.focus(sim.state).pids, ['p1', 'p2', 'p3'], 'and never drops a seat from focus');
+  finishNight(sim);
+  assert.ok(sim.act('p1', { type: 'day-ready', on: true, seats: ['p1', 'p2'] }));
+  assert.equal(sim.view('p4').dayReady.done, 2);
+  assert.ok(sim.act('p3', { type: 'day-ready', on: true }));
+  assert.equal(sim.view('p4').dayReady.done, 3, 'a seat of its own counts once');
+  assert.ok(sim.act('p1', { type: 'day-ready', on: false, seats: ['p1', 'p2'] }));
+  assert.equal(sim.view('p4').dayReady.done, 1, 'and both can take it back at once');
+  assert.equal(sim.act('p1', { type: 'day-ready', on: true, seats: 'p2' }), true, 'junk seats: only the sender counts');
+  assert.equal(sim.view('p4').dayReady.done, 2);
+  assert.ok(sim.act('p1', { type: 'day-ready', on: true, seats: ids(5), table: true }));
+  assert.equal(sim.state.phase, 'vote', 'the phone holding the whole table decides in one tap');
+  assert.deepEqual(engine.focus(sim.state), { pids: ids(5), label: '投票' }, 'the vote gate names the step (#33)');
+});
+
+test('cheese-thief: the table view (the phone in the middle) carries the clock and 想投票, and no night tap counter', () => {
+  const sim = scenario(5, { thief: 'p1', dice: { p1: 3, p2: 3, p3: 3, p4: 1, p5: 6 } });
+  openHour(sim, 3);
+  for (const id of ids(5)) sim.act(id, { type: 'ack' });
+  const t = sim.view(null);
+  assert.equal(t.night, true, 'night on the table view: the shell can tell dawn from it');
+  assert.ok(!('acks' in t), 'the table never counts taps (on a shared phone only the awake would tap)');
+  assert.ok('acks' in sim.view('p4'), 'a seat still has its own count');
+  finishNight(sim);
+  const day = sim.view(null);
+  assert.equal(day.night, undefined);
+  assert.equal(typeof day.deadline, 'number');
+  assert.deepEqual(day.dayReady, { done: 0, total: 5 });
 });

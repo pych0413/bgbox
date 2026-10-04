@@ -24,9 +24,17 @@
 // ============================================================
 
 import * as S from './script.js?v=1';
-import { MIN_STROKE_LEN, TALLY_MS, checkEntry, penColor, strokeLength, textLen } from './game.js?v=1';
+import { COUNT_MS, MIN_STROKE_LEN, TALLY_MS, checkEntry, penColor, strokeLength, textLen } from './game.js?v=1';
 
 const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
+
+/**
+ * One phone (DESIGN §7.1): a drawer who wants to see their card again mid-stroke takes the phone behind a private
+ * hand-over card (api.handTo) — the UI is mounted afresh for it, so the request is remembered here, outside the mount:
+ * `{ seat, turn, key, at }` of the stroke it was asked for (a stale one — another turn, another round, or too old — never matches).
+ */
+let peekFor = null;
+const PEEK_FRESH_MS = 120_000;     // a request older than this (a stroke skipped meanwhile, a later game) is stale
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -60,7 +68,18 @@ export function mount(root, api) {
   const seatColor = (pid) => api.players.find((p) => p.id === pid)?.color ?? '#f5c518';
   const pen = (pid) => view?.pens?.[pid] ?? penColor(seatColor(pid));
   const noScore = (v) => v?.mode?.scoring === 'none';
-  const seatName = (pid, me) => nameOf(pid) + (pid === me ? '（你）' : '');
+  // ---- one phone (DESIGN §7.1) ----
+  /** This phone holds 2+ playing seats: the whole table reads it, so it never says 「你」 to them (#20). */
+  const shared = () => api.shared === true;
+  /** …lying in the middle (no seat on screen): the public table screen. */
+  const atTable = () => shared() && api.me == null;
+  /** …holding every seated player: one tap there is the table's (U5). */
+  const wholeTable = () => atTable() && api.wholeTable === true;
+  /** A public one-person step on a shared phone (a stroke, the spoken guess, #4): the screen is everybody's. */
+  const openStep = () => shared() && ctx.focus?.open === true;
+  /** A table control: from the phone in the middle a whole-table tap (api.tableSend), else the seat's own send. */
+  const sendT = (action) => (atTable() ? (ctx.tableLocked ? false : api.tableSend?.(action) ?? false) : api.send(action));
+  const seatName = (pid, me) => nameOf(pid) + (pid === me && !shared() ? '（你）' : '');
   const dot = (pid, cls = '') => h('span', { class: `fk-dot ${cls}`.trim(), style: `--seat:${pen(pid)}` });
   /**
    * The players for a VotePanel, each carrying their PEN colour: a stroke's colour is how the table ties it to a
@@ -150,7 +169,7 @@ export function mount(root, api) {
       .map((p) => {
         const d = delta.get(p.id);
         return h('div', {
-          class: 'fk-score' + (p.id === v.me ? ' me' : '') + (p.id === v.qm ? ' qm' : '') + (v.phase === 'over' && t[p.id] === best ? ' lead' : ''),
+          class: 'fk-score' + (p.id === v.me && !shared() ? ' me' : '') + (p.id === v.qm ? ' qm' : '') + (v.phase === 'over' && t[p.id] === best ? ' lead' : ''),
           role: 'listitem', style: `--seat:${pen(p.id)}`,
         },
         h('span', { class: 'fk-score-dot' }),
@@ -335,10 +354,11 @@ export function mount(root, api) {
       onShort: () => { api.sfx('deny'); api.toast('一筆太短喇，再畫過'); },
     };
 
+    let noDraw = false;
     function paintTag() {
       const v = view;
       const d = v?.draw;
-      if (!interactive || !d || v.phase !== 'draw' || !d.canDraw) { tag.hidden = true; return; }
+      if (!interactive || !d || v.phase !== 'draw' || !d.canDraw || noDraw) { tag.hidden = true; return; }
       tag.hidden = false;
       if (sentTurn === d.turn) tag.replaceChildren('✓ 畫完喇，等緊…');
       else tag.replaceChildren(dot(v.me), ' 一筆過畫完，放手就算一筆');
@@ -363,12 +383,15 @@ export function mount(root, api) {
 
     return {
       el: wrapEl,
-      /** `over` = { ink, colorOf } to show something other than the live picture (result: replay, highlight). */
+      /**
+       * `over` = { ink, colorOf } to show something other than the live picture (result: replay, highlight);
+       * `over.noDraw` keeps the pen down for now (a drawer re-reading their card on a shared phone).
+       */
       update(v, c, over) {
         const d = v.draw;
         const props = {
           ink: over?.ink ?? c.ink ?? { epoch: 0, strokes: [] },
-          canDraw: interactive && !!d?.canDraw,
+          canDraw: interactive && !!d?.canDraw && !over?.noDraw,
           tools: 'none',
           color: pen(v.me),
           me: v.me ?? undefined,
@@ -377,9 +400,10 @@ export function mount(root, api) {
           colorOf: pen,
           ...callbacks,
         };
+        noDraw = !!over?.noDraw;
         if (!canvas) { canvas = Canvas(props); holder.replaceChildren(canvas.el); } else canvas.update(props);
         paintTag();
-        if (interactive) fallback(v, c);
+        if (interactive && !noDraw) fallback(v, c);
       },
       destroy() {
         cancel(fallbackAt);
@@ -438,7 +462,7 @@ export function mount(root, api) {
     btn?.addEventListener('click', () => guard.fire(() => { btn.disabled = true; api.sfx('tap'); api.send({ type: 'ready' }); }));
     const note = h('p', { class: 'fk-note' });
     const el = h('div', { class: 'fk-stack' },
-      h('h2', { class: 'fk-h', text: '睇你張卡' }),
+      h('h2', { class: 'fk-h', text: atTable() ? '逐個睇卡' : '睇你張卡' }),   // (the phone in the middle: no 「你」, #20)
       card?.el, btn, prog.el, note);
     return {
       el,
@@ -452,7 +476,7 @@ export function mount(root, api) {
         }
         note.textContent = away(v.me) ? AWAY
           : role === 'qm' ? '你知題目同假畫家係邊個。等大家睇完卡，就開始畫。'
-          : role === 'table' ? '大家睇緊自己張卡…'
+          : role === 'table' ? (atTable() ? '部手機逐個傳：輪到嘅人睇自己張卡。' : '大家睇緊自己張卡…')
             : v.ready.mine ? '之後都可以隨時㩒住張卡再睇。' : '㩒住張卡睇，放手就冚返。睇卡嗰陣唔好露出表情。';
       },
       destroy() { card?.destroy(); },
@@ -521,30 +545,72 @@ export function mount(root, api) {
     });
     const note = h('p', { class: 'fk-note' });
     const card = role !== 'table' ? makeCard('㩒住睇返我張卡') : null;
-    const el = h('div', { class: 'fk-stack' }, head, sub, timer.el, board?.el, doneBtn, note, order.el, card?.el);
+    // One phone (#4): a stroke is a public step, so the re-peek card is not on the screen everybody watches. A drawer
+    // who forgot the title asks for the phone privately (api.handTo → 「其他人唔好望」), reads it with the pen down, then
+    // hands it back to the table with the public card.
+    const peekAsk = h('button', { class: 'btn btn-ghost btn-sm fk-peekask', type: 'button', text: '🔒 唔記得題目？' });
+    const peekDone = h('button', { class: 'btn btn-primary fk-peekdone', type: 'button', text: '✓ 記得喇 · 交返出嚟畫' });
+    const el = h('div', { class: 'fk-stack' }, head, sub, timer.el, board?.el, doneBtn, note, order.el, card?.el, peekDone, peekAsk);
+    // The request is taken by the FIRST screen built for that seat after the private hand-over (this mount), and only
+    // once: if the drawer puts the phone back with the shell's 📱 擺返中間 instead of 「記得喇」, the public card that
+    // follows opens a plain stroke screen, never the card again on a screen the table watches.
+    let peekMine = null;             // { turn, key } of the look this mount was handed the phone for
+    let peekChecked = false;
+    peekAsk.addEventListener('click', () => {
+      const v = view;
+      if (!v?.me || v.phase !== 'draw') return;
+      peekFor = { seat: v.me, turn: v.draw.turn, key: v.round.key, at: api.now() };
+      api.sfx('tap');
+      if (api.handTo?.(v.me, { why: '睇返張卡' }) !== true) peekFor = null;
+    });
+    peekDone.addEventListener('click', () => {
+      const v = view;
+      peekFor = null;
+      peekMine = null;
+      api.sfx('tap');
+      card?.close();
+      if (v?.me) api.handTo?.(v.me, { open: true });
+      rerender();
+    });
     return {
       el,
       update(v, c) {
         const d = v.draw;
-        const mine = d.current === v.me;
+        // on a shared phone the table watches this screen: names, never 「輪到你」 (#20)
+        const mine = d.current === v.me && !shared();
+        const pub = openStep() && role !== 'table';
+        if (!peekChecked) {
+          peekChecked = true;
+          if (peekFor && peekFor.seat === v.me && peekFor.turn === d.turn && peekFor.key === v.round.key
+            && api.now() - peekFor.at < PEEK_FRESH_MS) peekMine = { turn: d.turn, key: v.round.key };
+          if (peekMine) peekFor = null;
+        }
+        const peeking = pub && !!peekMine && peekMine.turn === d.turn && peekMine.key === v.round.key;
         head.replaceChildren(mine
           ? h('span', {}, dot(d.current, 'lg'), ' 輪到你畫！')
           : h('span', {}, '輪到 ', dot(d.current, 'lg'), ` ${nameOf(d.current)} 畫`));
         head.classList.toggle('mine', mine);
         sub.textContent = `第 ${d.lap}/${d.laps} 圈 · 第 ${Math.min(d.turn + 1, d.total)}/${d.total} 筆`;
-        board?.update(v, c);
+        board?.update(v, c, peeking ? { noDraw: true } : undefined);
         order.update(v);
         timer.update(v, c, [10]);
         if (doneBtn) {
           doneBtn.hidden = !d.canDone;
-          doneBtn.textContent = mine ? '畫完' : `${nameOf(d.current)} 畫完喇（幫佢㩒）`;
+          doneBtn.textContent = d.current === v.me ? '畫完' : `${nameOf(d.current)} 畫完喇（幫佢㩒）`;
           doneBtn.disabled = guard.busy;
         }
-        note.textContent = paper
-          ? (mine ? '喺紙上用自己嘅筆一筆過畫完（筆唔好離開紙），畫完就㩒「畫完」。' : `等 ${nameOf(d.current)} 喺紙上畫一筆。`)
-          : (mine ? '' : role === 'qm' ? '你唔使畫，睇住大家畫。' : '');
+        note.textContent = peeking ? '睇完張卡，㩒「記得喇」將部機交返出嚟，大家一齊睇住你畫。'
+          : paper
+            ? (d.current === v.me ? '喺紙上用自己嘅筆一筆過畫完（筆唔好離開紙），畫完就㩒「畫完」。' : `等 ${nameOf(d.current)} 喺紙上畫一筆。`)
+            : (d.current === v.me ? '' : role === 'qm' ? '你唔使畫，睇住大家畫。' : '');
         note.hidden = !note.textContent;
-        card?.set(faceFor(v));
+        if (card) {
+          card.el.hidden = pub && !peeking;
+          if (card.el.hidden) card.close();
+          card.set(faceFor(v));
+        }
+        peekAsk.hidden = !(pub && !peeking && d.current === v.me);
+        peekDone.hidden = !peeking;
       },
       destroy() { board?.destroy(); timer.destroy(); card?.destroy(); },
     };
@@ -574,7 +640,10 @@ export function mount(root, api) {
       update(v, c) {
         const vt = v.vote;
         const second = vt.round === 2;
-        heading.textContent = second ? '平票！再投一次' : '邊個係假畫家？';
+        // #30: on one phone the ballots go round one by one — nobody says who they picked until the last one is in
+        heading.textContent = shared()
+          ? (second ? '平票！再投 — 全部投完先好講' : '投票中 — 全部投完先好講')
+          : second ? '平票！再投一次' : '邊個係假畫家？';
         board?.update(v, c);
         prog.set(vt.done, vt.total);
         if (panel) {
@@ -593,12 +662,149 @@ export function mount(root, api) {
         wait?.set(role === 'qm'
           ? '你知邊個係假畫家，靜靜哋等大家投票。'
           : away(v.me) ? AWAY
+          : atTable() ? '部手機會逐個交俾要投嘅人 — 全部投完先好講。'
           : second && !vt.voters.length ? '等緊…'
             : second ? '平票嘅人唔使再投，等其他人揀。'
               : '大家揀緊邊個係假畫家…');
         card?.set(faceFor(v));
       },
       destroy() { board?.destroy(); panel?.destroy(); card?.destroy(); },
+    };
+  }
+
+  /**
+   * The table's vote screen, the same on every phone: the shared look at the finished picture (one phone, secret
+   * ballots → 「🗳️ 開始投票」, #2), or 一齊指 (U7): 「▶ 3、2、1，一齊指！」 → the count on every phone at once →
+   * 「指！」 → one person enters where every finger points, then confirms with a second tap. Anybody may tap; on the
+   * phone in the middle those are whole-table taps (api.tableSend), locked while the 「擺返中間」 card is up (U5).
+   */
+  function tableVoteBody(role, sub) {
+    const phone = view.mode.draw === 'phone';
+    const board = phone ? makeBoard({ interactive: false }) : null;
+    const paperNote = !phone ? h('p', { class: 'fk-note', text: '望住張紙，諗吓邊個畫得唔似。' }) : null;
+    const heading = h('h2', { class: 'fk-h' });
+    const note = h('p', { class: 'fk-note' });
+    const big = h('div', { class: 'fk-count', 'aria-live': 'polite' });
+    const goBtn = h('button', { class: 'btn btn-primary btn-lg fk-go', type: 'button' });
+    const rows = h('div', { class: 'fk-point' });
+    const okBtn = h('button', { class: 'btn btn-primary btn-lg fk-point-ok', type: 'button' });
+    const again = h('button', { class: 'btn btn-ghost btn-sm fk-point-again', type: 'button', text: '↺ 再數一次' });
+    const guard = sendGuard(rerender);          // 開始投票 · 3-2-1 · 再數一次
+    const okGuard = sendGuard(rerender);        // the entry (its own guard: a count just sent must not lock it)
+    let picks = {};                  // 一齊指 entry: voter → pid | null (冇指)
+    let rowsKey = '';
+    let ticking = null;
+    let armed = null;                // the confirm takes two taps (the entry decides the round)
+    let forRound = null;
+    const el = h('div', { class: 'fk-stack fk-tablevote' }, heading, board?.el, paperNote, note, big, goBtn, rows, okBtn, again);
+
+    const counting = (vt) => vt.countAt != null && api.now() < vt.countAt + (vt.countMs ?? COUNT_MS);
+    const full = (vt) => vt.voters.every((p) => p in picks);
+
+    goBtn.addEventListener('click', () => {
+      const vt = view?.vote;
+      if (!vt) return;
+      guard.fire(() => { api.sfx(sub === 'look' ? 'tap' : 'deal'); sendT(sub === 'look' ? { type: 'start-vote' } : { type: 'count' }); });
+      rerender();
+    });
+    again.addEventListener('click', () => {
+      picks = {};
+      rowsKey = '';
+      guard.fire(() => { api.sfx('deal'); sendT({ type: 'count' }); });
+      rerender();
+    });
+    okBtn.addEventListener('click', () => {
+      const vt = view?.vote;
+      if (!vt || !full(vt)) return;
+      if (!armed) {
+        armed = later(() => { armed = null; rerender(); }, 3000);
+        api.sfx('tap');
+        rerender();
+        return;
+      }
+      cancel(armed);
+      armed = null;
+      const votes = Object.fromEntries(vt.voters.map((p) => [p, picks[p] ?? null]));
+      okGuard.fire(() => { api.sfx('lock'); sendT({ type: 'point', votes }); });
+      rerender();
+    });
+
+    /** One row per voter: who they point at (any candidate but themselves), or 冇指. */
+    function paintRows(vt) {
+      const k = JSON.stringify([vt.voters, vt.candidates, picks]);
+      if (k === rowsKey) return;
+      rowsKey = k;
+      rows.replaceChildren(...vt.voters.map((voter) => {
+        const chip = (target, label) => {
+          const on = picks[voter] === target && voter in picks;
+          const b = h('button', {
+            class: 'fk-point-chip' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+            style: target ? `--seat:${pen(target)}` : null,
+          }, target ? dot(target) : null, label);
+          b.addEventListener('click', () => { api.sfx('tap'); picks = { ...picks, [voter]: target }; disarm(); rerender(); });
+          return b;
+        };
+        return h('div', { class: 'fk-point-row' },
+          h('span', { class: 'fk-point-who' }, dot(voter), h('strong', { text: nameOf(voter) }), ' 指 →'),
+          h('span', { class: 'fk-point-chips' },
+            ...vt.candidates.filter((c) => c !== voter).map((c) => chip(c, ` ${nameOf(c)}`)),
+            chip(null, '冇指')));
+      }));
+    }
+    const disarm = () => { if (armed) { cancel(armed); armed = null; } };
+
+    return {
+      el,
+      update(v, c) {
+        const vt = v.vote;
+        const second = vt.round === 2;
+        const locked = atTable() && !!c.tableLocked;
+        if (vt.round !== forRound) { forRound = vt.round; picks = {}; rowsKey = ''; disarm(); }   // a re-vote starts blank
+        board?.update(v, c);
+        // keep only picks that still fit this ballot (a seat may have left or come back)
+        for (const p of Object.keys(picks)) {
+          if (!vt.voters.includes(p) || (picks[p] !== null && !vt.candidates.includes(picks[p]))) { const { [p]: _, ...rest } = picks; picks = rest; }
+        }
+        const counted = vt.countAt != null && !counting(vt);
+        if (sub === 'look') {
+          heading.textContent = '畫完喇！';
+          note.textContent = '部手機擺喺中間，大家睇清楚幅畫：可以傾，唔好講題目。傾完就開始投票（輪流投，全部投完先好講）。';
+          goBtn.textContent = '🗳️ 開始投票';
+        } else if (vt.countAt == null) {
+          heading.textContent = second ? '平票！再一齊指' : '畫完喇！一齊指';
+          note.textContent = second
+            ? `只有冇被指嘅人指，只可以指 ${vt.candidates.map(nameOf).join('、')}。準備好就㩒，數到「指」大家同時指。`
+            : '大家睇清楚幅畫，可以傾，唔好講題目。傾完就㩒，數到「指」大家同時指住你覺得係假畫家嘅人。';
+          goBtn.textContent = '▶ 3、2、1，一齊指！';
+        } else if (!counted) {
+          heading.textContent = '準備…';
+          note.textContent = '數到「指」，大家同時指住你覺得係假畫家嘅人。';
+        } else {
+          heading.textContent = '指住唔好郁！';
+          note.textContent = `一個人幫大家㩒：每個人指緊邊個（填咗 ${vt.voters.filter((p) => p in picks).length}/${vt.voters.length}）。`;
+        }
+        // the count runs on every phone from the host's clock
+        if (sub === 'point' && vt.countAt != null) {
+          const left = vt.countAt + (vt.countMs ?? COUNT_MS) - api.now();
+          big.textContent = left > 0 ? String(Math.min(3, Math.ceil(left / 1000))) : '指！';
+          big.hidden = false;
+          if (left > 0 && ticking == null) ticking = later(() => { ticking = null; rerender(); }, Math.min(250, left));
+        } else big.hidden = true;
+        goBtn.hidden = !(sub === 'look' || vt.countAt == null);
+        goBtn.disabled = guard.busy || locked;
+        const entering = sub === 'point' && counted;
+        rows.hidden = !entering;
+        okBtn.hidden = !entering;
+        again.hidden = !entering;
+        if (entering) {
+          paintRows(vt);
+          okBtn.textContent = armed ? '再㩒一次確定' : `✓ 確定（${vt.voters.filter((p) => p in picks).length}/${vt.voters.length}）`;
+          okBtn.classList.toggle('armed', !!armed);
+          okBtn.disabled = !full(vt) || okGuard.busy || locked;
+          again.disabled = guard.busy || locked;
+        }
+      },
+      destroy() { board?.destroy(); cancel(ticking); disarm(); },
     };
   }
 
@@ -648,6 +854,7 @@ export function mount(root, api) {
     const guard = sendGuard(rerender);
     const wrapEl = h('div', { class: 'fk-stack' }, h('h2', { class: 'fk-h', text: '估題目' }), banner);
     const parts = { destroy: [] };
+    let boardPlaced = false;
     let paint = () => {};
 
     if (sub === 'guess') {                                   // I am the fake, typed mode
@@ -701,10 +908,18 @@ export function mount(root, api) {
         yes.classList.toggle('armed', armed === true);
         no.classList.toggle('armed', armed === false);
       };
-      wrapEl.append(h('p', { class: 'fk-note', text: peek ? '你係判斷嗰個人：㩒住張卡睇答案，唔好俾人望到。' : '你係判斷嗰個人：只有你睇到答案。' }),
+      // #29 one phone, spoken guess: the phone lies in the middle for the caught fake to study the picture (the step is
+      // public), so the picture comes first and the answer stays covered until the fake has said the guess
+      const middle = peek && shared();
+      const judgeNote = h('p', { class: 'fk-note' });
+      if (middle && board) { wrapEl.append(board.el); boardPlaced = true; }
+      wrapEl.append(judgeNote,
         cover ? h('div', { class: 'fk-judge-peek' }, cover.el) : face, saidEl,
         h('div', { class: 'fk-judgebtns' }, yes, no));
       paint = (v) => {
+        judgeNote.textContent = middle
+          ? `部手機擺喺中間俾 ${nameOf(v.fake)} 睇幅畫（答案冚住）；佢講完，判斷嗰個先㩒住睇答案，再㩒啱或者錯。`
+          : peek ? '你係判斷嗰個人：㩒住張卡睇答案，唔好俾人望到。' : '你係判斷嗰個人：只有你睇到答案。';
         wordEl.textContent = v.guess?.word ?? '';
         saidEl.textContent = v.guess?.text ? `${nameOf(v.fake)} 估：「${v.guess.text}」（同答案唔完全一樣，你決定算唔算）` : `等 ${nameOf(v.fake)} 大聲講出佢估嘅題目，再㩒啱或者錯。`;
         paintBtns();
@@ -721,7 +936,7 @@ export function mount(root, api) {
       };
     }
 
-    if (board) wrapEl.append(board.el);                      // the action comes first: the picture is for the fake to look at
+    if (board && !boardPlaced) wrapEl.append(board.el);     // the action comes first: the picture is for the fake to look at
     return {
       el: wrapEl,
       update(v, c) {
@@ -747,9 +962,12 @@ export function mount(root, api) {
     const lines = h('div', { class: 'fk-reveal-lines' });
     const pts = h('div', { class: 'fk-deltas' });
     const guard = sendGuard(rerender);
-    // D3: the table moves on once every present seat of the round has tapped 睇完 (the host's 下一步 can force it)
-    const nextBtn = role !== 'table' ? h('button', { class: 'btn btn-primary btn-lg', type: 'button', disabled: true }) : null;
-    const waitTxt = role === 'table' ? h('p', { class: 'fk-note', text: '睇緊結果…' }) : null;
+    // D3: the table moves on once every present seat of the round has tapped 睇完 (the host's 下一步 can force it).
+    // The shared phone in the middle taps once for every seat it holds (api.tableSend, §7.1; F7): on a one-phone
+    // table 「大家睇完 ✓（一下就得）」, with no waiting list, locked while the 「擺返中間」 card is up (U5)
+    const table = atTable();
+    const nextBtn = role !== 'table' || table ? h('button', { class: 'btn btn-primary btn-lg', type: 'button', disabled: true }) : null;
+    const waitTxt = role === 'table' && !table ? h('p', { class: 'fk-note', text: '睇緊結果…' }) : null;
     const seenTxt = h('p', { class: 'fk-note fk-seen' });
 
     let hl = null;                   // pid highlighted in the legend
@@ -791,11 +1009,18 @@ export function mount(root, api) {
       replayTimer = later(() => stepReplay(total), 350);
     });
 
-    nextBtn?.addEventListener('click', () => guard.fire(() => {
-      nextBtn.disabled = true;
-      const mates = deviceMates();
-      api.send(mates.length ? { type: 'next', seats: mates } : { type: 'next' });
-    }));
+    nextBtn?.addEventListener('click', () => {
+      if (table) {
+        if (ctx.tableLocked) return;
+        guard.fire(() => { nextBtn.disabled = true; sendT({ type: 'next' }); });
+        return;
+      }
+      guard.fire(() => {
+        nextBtn.disabled = true;
+        const mates = deviceMates();
+        api.send(mates.length ? { type: 'next', seats: mates } : { type: 'next' });
+      });
+    });
 
     /**
      * Who pointed at whom stays on the result screen (the tally only lingers a few seconds), in pen colours, so the
@@ -880,15 +1105,25 @@ export function mount(root, api) {
             h('span', { class: 'fk-delta-t', text: totalText(v, pid) }));
         }));
         const seen = v.seen ?? { who: [], total: 0 };
-        const mine = !!v.me && seen.who.includes(v.me);
-        if (nextBtn) {
+        const readers = [...v.artists, ...(v.qm ? [v.qm] : [])];
+        if (table && nextBtn) {
+          const mates = (api.mySeats ?? []).filter((p) => readers.includes(p) && !away(p));
+          const done = mates.length > 0 && mates.every((p) => seen.who.includes(p));
+          nextBtn.hidden = !mates.length;
+          nextBtn.textContent = done ? (wholeTable() ? '✓ 睇完' : '✓ 睇完 · 等緊其他人')
+            : wholeTable() ? '大家睇完 ✓（一下就得）' : '睇完 ✓（呢部機嘅人）';
+          nextBtn.disabled = !unlocked || guard.busy || done || !!c.tableLocked;
+        } else if (nextBtn) {
+          const mine = !!v.me && seen.who.includes(v.me);
           const out = away(v.me) || !(v.artists.includes(v.me) || v.me === v.qm);
           nextBtn.hidden = out;
           nextBtn.textContent = mine ? '✓ 睇完 · 等緊其他人' : '睇完 ✓';
           nextBtn.disabled = !unlocked || guard.busy || mine;
         }
-        // the same on every phone: 「睇完 3 / 5 · 等緊：阿明、小美 · 齊人就開下一輪」
-        const left = [...v.artists, ...(v.qm ? [v.qm] : [])].filter((p) => !seen.who.includes(p) && !away(p));
+        // the same on every phone: 「睇完 3 / 5 · 等緊：阿明、小美 · 齊人就開下一輪」 — not on the one phone of the
+        // whole table, where one tap does it
+        const left = readers.filter((p) => !seen.who.includes(p) && !away(p));
+        seenTxt.hidden = wholeTable();
         seenTxt.textContent = `睇完 ${seen.who.length} / ${seen.total}${left.length ? ` · 等緊：${left.map(nameOf).join('、')}` : ''}`
           + ` · ${v.last ? '齊人就睇總結' : '齊人就開下一輪'}`;
       },
@@ -916,7 +1151,11 @@ export function mount(root, api) {
   /** Which part of a phase this seat is in (the body is rebuilt when it changes). */
   function subOf(v, role) {
     if (v.phase === 'draw') return v.mode.draw;
-    if (v.phase === 'vote' || v.phase === 'revote') return v.vote?.voters.includes(v.me) ? 'voter' : 'watch';
+    if (v.phase === 'vote' || v.phase === 'revote') {
+      if (v.vote?.mode === 'point') return 'point';         // 一齊指: the table's screen on every phone
+      if (v.vote?.look) return 'look';                      // one phone: the finished picture in the middle first
+      return v.vote?.voters.includes(v.me) ? 'voter' : 'watch';
+    }
     if (v.phase === 'guess' || v.phase === 'judge') {
       if (v.guess?.canGuess) return 'guess';
       if (v.guess?.canJudge) return 'judge';
@@ -931,7 +1170,7 @@ export function mount(root, api) {
       case 'deal': return dealBody(role);
       case 'first': return firstBody(role);
       case 'draw': return drawBody(role);
-      case 'vote': case 'revote': return voteBody(role, sub);
+      case 'vote': case 'revote': return sub === 'point' || sub === 'look' ? tableVoteBody(role, sub) : voteBody(role, sub);
       case 'tally': return tallyBody();
       case 'guess': case 'judge': return guessBody(role, sub);
       case 'result': return resultBody(role);

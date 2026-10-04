@@ -29,9 +29,10 @@ export function cueChoose({ n, drawer, team }) {
   return `第 ${n} 輪，${who}畫。${drawer}，請揀一個詞。`;
 }
 
-export function cuePlay({ secs, boxes, typed }) {
+export function cuePlay({ secs, boxes, typed, pass = false }) {
   const len = boxes > 0 ? `答案有 ${boxes} 隻字。` : '';
-  return `開始！限時 ${secs} 秒。${len}${typed ? '打字估，估中咗唔好出聲。' : '估到就大聲講出嚟。'}`;
+  // one phone (#16): the table watches the drawer's phone, so it lies flat in the middle
+  return `開始！${pass ? '部手機擺喺中間。' : ''}限時 ${secs} 秒。${len}${typed ? '打字估，估中咗唔好出聲。' : '估到就大聲講出嚟。'}`;
 }
 
 export function cueCat({ cat }) {

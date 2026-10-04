@@ -7,7 +7,7 @@ import {
   headingOf, resultSections, sectionsOpen, turnOrderMatters, TURN_ORDER_GAMES, pictureFileName,
   savedOrderDiffers, savedGroupNames, presetMatches,
   scoreboardMode, resultHero, confettiSet, turnBadge, skipNeedsConfirm, SKIP_CONFIRM, recentFolds,
-  nightChrome, NIGHT_WORDS, hintRoleText,
+  nightChrome, NIGHT_WORDS, hintRoleText, focusSig, walkOrder, gateSubtitle, narrationChoices,
 } from '../js/ui/logic.js';
 import { paintStrokes, PAPER } from '../js/ui/ink.js';
 import { isIOS, motionWords, motionDeviceName } from '../js/core/shake.js';
@@ -418,6 +418,7 @@ class FEl extends FNode {
   }
   get childNodes() { return this.children; }
   get firstElementChild() { return this.children.find((c) => c instanceof FEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof FEl) ?? null; }
   get outerHTML() { return `<${this.tag} ${JSON.stringify([this.className, this.attrs, this.hidden, this.disabled])}>${this.children.map((c) => (c instanceof FEl ? c.outerHTML : c.data)).join('')}</${this.tag}>`; }
   get offsetWidth() { return 0; }
   get offsetHeight() { return 0; }
@@ -1064,4 +1065,643 @@ test('ui #3: 📋 複製連結 — when the clipboard refuses, the link shows in
       if (savedPrompt === undefined) delete globalThis.prompt; else globalThis.prompt = savedPrompt;
     }
   });
+});
+
+// ============================================================
+// one phone in the middle (docs/playtest/single/SUMMARY.md, DESIGN §7.1) — the shell side
+// ============================================================
+
+test('§7.1 logic: focusSig ignores `together`; walkOrder goes clockwise from the holder; gateSubtitle; narrationChoices (U1)', () => {
+  assert.equal(focusSig(null), '');
+  assert.equal(focusSig({ pids: ['p3', 'p2'] }), focusSig({ pids: ['p2', 'p3'], together: true }), 'other phones\' progress never re-gates');
+  assert.notEqual(focusSig({ pids: ['p2'] }), focusSig({ pids: ['p2'], open: true }), 'open → private is a new step (#2)');
+  assert.notEqual(focusSig({ pids: ['p2'], step: 'pick' }), focusSig({ pids: ['p2'], step: 'vote' }), 'a new step key for the same seat');
+  assert.notEqual(focusSig({ pids: [], anonymous: 'a' }), focusSig({ pids: [], anonymous: 'b' }));
+
+  const order = ['p1', 'p2', 'p3', 'p4', 'p5'];
+  assert.deepEqual(walkOrder(['p1', 'p2', 'p3', 'p4', 'p5'], order, { from: 'p3' }), ['p3', 'p4', 'p5', 'p1', 'p2'], 'the holder first while called');
+  assert.deepEqual(walkOrder(['p1', 'p2', 'p4', 'p5'], order, { from: 'p3' }), ['p4', 'p5', 'p1', 'p2'], 'then round the table');
+  assert.deepEqual(walkOrder(['p5', 'p1'], order, {}), ['p1', 'p5'], 'nobody held it yet: seat order');
+  assert.deepEqual(walkOrder(['p5', 'p1'], order, { from: 'p3', ordered: true }), ['p5', 'p1'], 'ordered keeps the engine order');
+  assert.deepEqual(walkOrder(['p1', 'p2', 'p4'], order, { from: 'p1', deferred: ['p1'] }), ['p2', 'p4', 'p1'], '#18 a skipped seat goes last');
+
+  assert.equal(gateSubtitle(), '其他人唔好望');
+  assert.equal(gateSubtitle({ label: '第 1 輪投票', done: 2, total: 5 }), '其他人唔好望 · 第 1 輪投票 · 搞掂 2/5');
+  assert.equal(gateSubtitle({ done: 0, total: 1 }), '其他人唔好望', 'a lone hand-over has no progress');
+
+  const eyes = { narration: 'required' };
+  assert.deepEqual(narrationChoices(eyes, { singleDevice: true }).modes, ['voice', 'read']);
+  assert.match(narrationChoices(eyes, { singleDevice: true }).note, /要搵個唔玩嘅人讀/);
+  assert.deepEqual(narrationChoices(eyes, { singleDevice: false }).modes, ['voice', 'read', 'silent'], 'phones of their own keep 靜音 (D1)');
+  assert.deepEqual(narrationChoices({ narration: 'recommended', eyesClosed: true }, { singleDevice: true }).modes, ['voice', 'read']);
+  assert.deepEqual(narrationChoices({ narration: 'optional' }, { singleDevice: true }).modes, ['voice', 'read', 'silent']);
+});
+
+test('§7.1 nightChrome: a shared phone in the middle at night is covered in every mode, with 「擺返中間」 words; single-seat phones unchanged', () => {
+  for (const mode of ['voice', 'read', 'silent']) {
+    const c = nightChrome({ seat: null, night: true, mode, shared: true, table: true });
+    assert.equal(c.on, true);
+    assert.equal(c.level, 'opaque');
+    assert.equal(c.words, mode === 'silent' ? NIGHT_WORDS.middleOpen : NIGHT_WORDS.middle);
+  }
+  assert.equal(nightChrome({ seat: null, night: false, shared: true, table: true }).on, false, 'by day the table view is lit');
+  assert.equal(nightChrome({ seat: 'p2', night: true, inFocus: false, mode: 'voice', shared: true }).words, NIGHT_WORDS.middle);
+  assert.deepEqual(nightChrome({ seat: 'p2', night: true, inFocus: false, mode: 'voice' }), { on: true, level: 'dark', words: NIGHT_WORDS.closed }, 'a phone of your own: as before');
+  assert.ok(!NIGHT_WORDS.middle.title.includes('你') && !NIGHT_WORDS.middle.hint.includes('你'));
+});
+
+test('§7.1 PassGate kinds: data-gate, a public card that keeps the screen visible, the escape row; opaque from frame one (#34)', async () => {
+  await withDom(async () => withRaf(async () => {
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    const gateEl = () => findAll(fakeDocument.body, (n) => n.cls.has('c-passgate'))[0];
+    let done = false;
+    PassGate.show({ title: '交俾 阿明', subtitle: '其他人唔好望' }).then(() => { done = true; });
+    assert.equal(gateEl().attrs['data-gate'], 'private');
+    assert.ok(!gateEl().cls.has('is-public'));
+    assert.ok(gateEl().textContent.includes('🔒'));
+    assert.equal(PassGate.kind(), 'private');
+    PassGate.show({ title: '輪到 小美', subtitle: '大家一齊睇', kind: 'public', extra: Object.assign(new FEl('div'), {}) });
+    await Promise.resolve();
+    assert.equal(done, true, 'a new gate replaces (and resolves) the old one');
+    assert.equal(findAll(fakeDocument.body, (n) => n.cls.has('c-passgate')).length, 1, 'never two');
+    assert.ok(gateEl().cls.has('is-public'));
+    assert.equal(gateEl().attrs['data-gate'], 'public');
+    assert.ok(!gateEl().textContent.includes('🔒'));
+    PassGate.show({ title: '狼人請醒', kind: 'anon' });
+    assert.equal(gateEl().attrs['data-gate'], 'anon');
+    PassGate.show({ title: 'x', kind: 'nonsense' });
+    assert.equal(gateEl().attrs['data-gate'], 'private', 'an unknown kind is the safe one');
+    PassGate.hide();
+    assert.equal(PassGate.isOpen(), false);
+    assert.equal(PassGate.kind(), null);
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'css', 'base.css'), 'utf8');
+    const rule = css.slice(css.indexOf('.c-passgate {'), css.indexOf('}', css.indexOf('.c-passgate {')));
+    assert.ok(!/opacity:\s*0/.test(rule), '#34: the backdrop is not faded in');
+    assert.ok(/\.c-passgate\.in \.c-passgate-card/.test(css), 'only the card fades');
+  }));
+});
+
+test('§7.1 NarratorBar: `modes` hides 靜音 (U1); `hideSkip` drops the ghost ⏭ but keeps the 讀稿 下一步 (#35)', async () => {
+  await withDom(async ({ NarratorBar }) => {
+    const bar = NarratorBar({ cue: { id: 'c', text: '天黑請閉眼' }, mode: 'voice', onNext() {}, onMode() {}, modes: ['voice', 'read'], hideSkip: true });
+    fakeDocument.body.append(bar.el);
+    const modeBtn = (m) => findAll(bar.el, (n) => n.attrs['data-mode'] === m)[0];
+    assert.equal(modeBtn('silent').hidden, true);
+    assert.equal(modeBtn('read').hidden, false);
+    const next = () => findAll(bar.el, (n) => n.cls.has('c-narratorbar-next'))[0];
+    assert.equal(next().hidden, true, 'no ghost skip on a whole-table phone');
+    bar.update({ cue: { id: 'c', text: '天黑請閉眼' }, mode: 'read', onNext() {}, onMode() {}, hideSkip: true });
+    assert.equal(next().hidden, false, 'the 讀稿 narrator still moves the table on');
+    assert.equal(modeBtn('silent').hidden, false, 'no `modes`: all three');
+    bar.destroy();
+  });
+});
+
+test('§7.1 #20 SeatEditor: 「（你）」 only on a phone of your own', async () => {
+  await withDom(async () => {
+    const { SeatEditor } = await import('../js/ui/components/SeatEditor.js?v=1');
+    const players = [{ id: 'p1', name: '阿明', seat: 0, color: '#111' }, { id: 'p2', name: '小美', seat: 1, color: '#222' }];
+    const one = SeatEditor({ players, me: 'p1', isHost: true, onMove() {}, onColor() {}, onKick() {} });
+    assert.ok(one.el.textContent.includes('阿明（你）'));
+    const shared = SeatEditor({ players, me: 'p1', mySeats: ['p1', 'p2'], isHost: true, onMove() {}, onColor() {}, onKick() {} });
+    assert.ok(!shared.el.textContent.includes('（你）'), 'a shared phone is read by everybody');
+    one.destroy(); shared.destroy();
+  });
+});
+
+const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+
+/**
+ * The play screen on ONE shared phone (call inside withDom + withRaf). Every seat is on this phone (a whole-table
+ * phone unless `room.singleDevice: false`). setActiveSeat changes the state at once, like the real app; `up(patch)`
+ * applies a state patch and re-renders. The game UI records every mount (its api) and every update (view, ctx).
+ */
+async function sharedPhone(dom, clock, { st: patch = {}, hostCtl = {}, meta = {}, seats = ['p1', 'p2', 'p3', 'p4'] } = {}) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+  const calls = [];
+  const acts = [];
+  const mounts = [];
+  const ambient = [];
+  const players = [
+    { id: 'p1', name: '阿明', seat: 0, color: '#111', connected: true },
+    { id: 'p2', name: '小美', seat: 1, color: '#222', connected: true },
+    { id: 'p3', name: '大熊', seat: 2, color: '#333', connected: true },
+    { id: 'p4', name: '阿珍', seat: 3, color: '#444', connected: true },
+  ];
+  const room = { phase: 'playing', gameId: 'g', players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [], singleDevice: true };
+  const dayViews = () => Object.fromEntries(seats.map((pid) => [pid, { phase: 'day', title: '日頭', me: pid, secret: `秘密-${pid}` }]));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats, activeSeat: null, conn: 'online',
+    views: dayViews(), table: { phase: 'day', title: '枱中間' }, focus: null, cue: null, waiting: false, hostActions: [],
+    ...patch,
+    room: { ...room, ...(patch.room ?? {}) },
+  };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => true, pause() {}, resume() {},
+      autoAct: (pid) => { calls.push(`auto:${pid}`); return true; },
+      markAbsent: (pid) => { calls.push(`absent:${pid}`); return true; },
+      markPresent: () => true,
+      holdClock: (on) => { calls.push(`hold:${on}`); return true; },
+      ...hostCtl,
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); return Promise.resolve(true); },
+    ink() {}, clock: { now: () => clock.t },
+    setActiveSeat(pid) {
+      if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return;
+      st.activeSeat = pid;
+    },
+  };
+  const game = {
+    meta: { id: 'g', name: '測試', ...meta },
+    ui: {
+      mount: (root, api) => {
+        const m = { api, updates: [], destroyed: false };
+        mounts.push(m);
+        return { update: (view, ctx) => m.updates.push({ view, ctx }), destroy() { m.destroyed = true; } };
+      },
+    },
+  };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new FEl('button'), strip: () => new FEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new FEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient: (on) => ambient.push(on) },
+    gameMeta: () => ({ id: 'g', name: '測試', emoji: '🧪', narration: 'optional', ...meta }),
+    cached: () => game, loadGame: async () => game,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  const screen = mountPlay(sh);
+  fakeDocument.body.append(screen.el);
+  const render = async () => { screen.update(st); await settle(); screen.update(st); await settle(); };
+  const up = async (p = {}) => {
+    const { room: r, ...rest } = p;
+    Object.assign(st, rest);
+    if (r) Object.assign(st.room, r);
+    await render();
+  };
+  const gateEl = () => findAll(fakeDocument.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gateKind = () => gateEl()?.attrs['data-gate'] ?? null;
+  const gateText = () => gateEl()?.textContent ?? '';
+  const tapGate = async () => {
+    const b = findAll(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0];
+    tap(b);
+    await settle();
+    await render();
+  };
+  const live = () => mounts.filter((m) => !m.destroyed).at(-1) ?? null;
+  const ctx = () => live()?.updates.at(-1)?.ctx ?? null;
+  const viewNow = () => live()?.updates.at(-1)?.view ?? null;
+  const chip = () => findAll(screen.el, (n) => n.cls.has('seat-chip'))[0];
+  const home = () => findAll(screen.el, (n) => n.cls.has('seat-home'))[0];
+  const menu = () => findAll(fakeDocument.body, (n) => n.cls.has('menu-sheet')).at(-1);
+  const destroy = () => { screen.destroy(); PassGate.hide(); };
+  await render();
+  return { screen, st, app, calls, acts, mounts, ambient, up, render, gateEl, gateKind, gateText, tapGate, live, ctx, viewNow, chip, home, menu, destroy };
+}
+
+test('§7.1 #1: a shared phone starts in the middle — the public table view, api.me null, 「📱 枱中間」; a pick of your name goes through a gate', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { st: { activeSeat: 'p3' } });   // a stale seat from before
+    assert.equal(ph.st.activeSeat, null, 'never a seat\'s private screen without a gate');
+    assert.equal(ph.live().api.me, null);
+    assert.equal(ph.live().api.atTable, true);
+    assert.equal(ph.live().api.shared, true);
+    assert.equal(ph.live().api.wholeTable, true);
+    assert.deepEqual(ph.live().api.mySeats, ['p1', 'p2', 'p3', 'p4']);
+    assert.equal(ph.viewNow().title, '枱中間', 'the table view, nothing private');
+    assert.equal(ph.ctx().atTable, true);
+    assert.ok(ph.chip().textContent.includes('📱 枱中間 — 㩒你個名睇自己'));
+    assert.ok(ph.chip().cls.has('at-table'));
+    assert.equal(ph.home().hidden, true);
+    // api.send at the table does nothing but say how
+    ph.live().api.send({ type: 'x' });
+    assert.equal(ph.acts.length, 0);
+    assert.ok(fakeDocument.getElementById('toast').textContent.includes('部手機喺枱中間'));
+    // 㩒你個名 → the private gate → that seat (hand-picked)
+    tap(ph.chip());
+    assert.ok(ph.menu().textContent.includes('邊個要睇自己？'));
+    tap(btnWith(ph.menu(), '大熊'));
+    await ph.render();
+    assert.equal(ph.gateKind(), 'switch');
+    assert.ok(ph.gateText().includes('交俾 大熊') && ph.gateText().includes('其他人唔好望'));
+    assert.equal(ph.st.activeSeat, null, 'nothing changes until 大熊 taps');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p3');
+    assert.equal(ph.live().api.me, 'p3');
+    assert.ok(ph.chip().textContent.includes('而家睇：大熊'));
+    assert.equal(ph.home().hidden, false, '📱 擺返中間 beside the chip');
+    // back to the middle: the public table card, whole-table taps locked until it is tapped (U5)
+    tap(ph.home());
+    await ph.render();
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(ph.gateKind(), 'table');
+    assert.ok(ph.gateEl().cls.has('is-public'));
+    assert.equal(ph.ctx().tableLocked, true);
+    assert.equal(ph.live().api.tableSend({ type: 'seen' }), false, 'locked behind the card');
+    assert.equal(ph.acts.length, 0);
+    await ph.tapGate();
+    assert.equal(ph.gateEl(), null);
+    assert.equal(ph.ctx().tableLocked, false);
+    ph.live().api.tableSend({ type: 'seen' });
+    assert.deepEqual(ph.acts.at(-1), { pid: 'p1', action: { type: 'seen', seats: ['p1', 'p2', 'p3', 'p4'], table: true } }, '#5: one tap for the whole table');
+    ph.destroy();
+  }));
+});
+
+test('§7.1 #2 #17 #33: private steps gate every time (also the seat on screen); walks go clockwise from the holder with progress; the focus leaving sends the phone to the middle (U4)', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    // a hand-picked seat first (大熊, p3), then the vote calls everybody
+    tap(ph.chip()); tap(btnWith(ph.menu(), '大熊')); await ph.render(); await ph.tapGate();
+    await ph.up({ focus: { pids: ['p1', 'p2', 'p3', 'p4'], together: true, label: '第 1 輪投票' } });
+    assert.equal(ph.gateKind(), 'private');
+    assert.ok(ph.gateText().includes('交俾 大熊'), `#2 + #17: the holder first, gated although on screen: ${ph.gateText()}`);
+    assert.ok(ph.gateText().includes('其他人唔好望 · 第 1 輪投票 · 搞掂 0/4'), ph.gateText());
+    assert.equal(ph.st.activeSeat, null, 'behind the gate lies the table view');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p3');
+    await ph.up({ focus: { pids: ['p1', 'p2', 'p4'], together: true, label: '第 1 輪投票' } });
+    assert.ok(ph.gateText().includes('交俾 阿珍'), `clockwise: 大熊 → 阿珍: ${ph.gateText()}`);
+    assert.ok(ph.gateText().includes('搞掂 1/4'));
+    await ph.tapGate();
+    await ph.up({ focus: { pids: ['p1', 'p2'], together: true, label: '第 1 輪投票' } });
+    assert.ok(ph.gateText().includes('交俾 阿明'), 'then round to seat 1');
+    await ph.tapGate();
+    await ph.up({ focus: { pids: ['p2'], label: '第 1 輪投票' } });
+    assert.ok(ph.gateText().includes('交俾 小美') && ph.gateText().includes('搞掂 3/4'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    // the same step for the same seat again: no new gate; a NEW step for her: gated again (#2)
+    await ph.up({ focus: { pids: ['p2'], label: '第 1 輪投票' } });
+    assert.equal(ph.gateEl(), null);
+    await ph.up({ focus: { pids: ['p2'], step: 'quest' } });
+    assert.equal(ph.gateKind(), 'private', 'voted → quest for the same seat: a new private step');
+    await ph.tapGate();
+    // the focus leaves this phone by day → to the middle behind the table card
+    await ph.up({ focus: null });
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(ph.gateKind(), 'table');
+    assert.ok(ph.gateText().includes('部手機擺返中間'));
+    assert.ok(!ph.gateText().includes('其他人唔好望'));
+    ph.destroy();
+  }));
+});
+
+test('§7.1 #4: a public one-person step gets the light card (no 「其他人唔好望」, the screen stays visible); open → private gates again', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    await ph.up({ focus: { pids: ['p2'], open: true, label: '畫一筆', step: 'stroke:1' } });
+    assert.equal(ph.gateKind(), 'public');
+    assert.ok(ph.gateEl().cls.has('is-public'));
+    assert.ok(ph.gateText().includes('輪到 小美 · 畫一筆'), ph.gateText());
+    assert.ok(ph.gateText().includes('大家一齊睇'));
+    assert.ok(!ph.gateText().includes('其他人唔好望') && !ph.gateText().includes('🔒'));
+    assert.equal(ph.viewNow().title, '枱中間', 'the public table view behind it');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    await ph.up({ focus: { pids: ['p3'], open: true, label: '畫一筆', step: 'stroke:2' } });
+    assert.ok(ph.gateText().includes('輪到 大熊'));
+    await ph.tapGate();
+    await ph.up({ focus: { pids: ['p3'], step: 'vote' } });
+    assert.equal(ph.gateKind(), 'private', 'from a public step into a private one: gated');
+    ph.destroy();
+  }));
+});
+
+test('§7.1 #9: a hand-picked seat keeps the phone while the step is the same — no bounce; the step moving on takes it back', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { st: { focus: { pids: ['p1'] } } });
+    assert.ok(ph.gateText().includes('交俾 阿明'));
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p1');
+    // 阿明 (the 諗樣) lets 小美 check her role
+    tap(ph.chip());
+    tap(btnWith(ph.menu(), '小美'));
+    await ph.render();
+    assert.equal(ph.gateKind(), 'switch');
+    await ph.up({ cue: { id: 'tick' } });                      // any state change meanwhile
+    assert.equal(ph.gateKind(), 'switch', 'the hand-picked gate is not replaced by 阿明\'s');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    await ph.up({ cue: { id: 'tick2' } });
+    assert.equal(ph.st.activeSeat, 'p2', 'no bounce back to 阿明');
+    assert.equal(ph.gateEl(), null);
+    // 小美 hands it back by hand: no extra gate for 阿明 after that
+    tap(ph.chip()); tap(btnWith(ph.menu(), '阿明')); await ph.render(); await ph.tapGate();
+    await ph.up({ cue: { id: 'tick3' } });
+    assert.equal(ph.st.activeSeat, 'p1');
+    assert.equal(ph.gateEl(), null);
+    // the step moves on to somebody else: the gate goes to them
+    await ph.up({ focus: { pids: ['p4'] } });
+    assert.ok(ph.gateText().includes('交俾 阿珍'));
+    ph.destroy();
+  }));
+});
+
+test('§7.1 U2 + #1: the night — one gate per eyes-closed step, co-wakers on ONE combined screen, chip disabled; dawn opens the same 天光 card whoever acted', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const nightViews = (seats) => Object.fromEntries(seats.map((pid) => [pid, { phase: 'night', night: true, title: '夜晚', me: pid }]));
+    const run = async (wolves) => {
+      const ph = await sharedPhone(dom, clock, { st: { views: nightViews(['p1', 'p2', 'p3', 'p4']), table: { phase: 'night', night: true, title: '夜晚' } } });
+      assert.ok(ph.chip().disabled, 'at night the chip cannot be tapped');
+      assert.ok(ph.chip().textContent.includes('🌙') && !ph.chip().textContent.includes('阿明'));
+      await ph.up({ focus: { pids: wolves, anonymous: '狼人請醒' } });
+      assert.equal(ph.gateKind(), 'anon');
+      assert.ok(ph.gateText().includes('狼人請醒') && ph.gateText().includes('其他人閉埋眼'));
+      assert.ok(!['阿明', '小美', '大熊', '阿珍'].some((n) => ph.gateText().includes(n)), 'never a name');
+      assert.ok(ph.chip().textContent.includes('🤫 而家係秘密步驟'));
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, wolves[0], 'the first called seat is mounted');
+      assert.equal(ph.gateEl(), null, 'ONE gate for both wolves: no chained walk');
+      assert.deepEqual(ph.ctx().coWakers, wolves);
+      assert.deepEqual(Object.keys(ph.ctx().views), wolves, 'their own views, this phone\'s seats only');
+      // an action as the other wolf
+      ph.live().api.sendAs(wolves[1], { type: 'kill', target: 'p4' });
+      assert.deepEqual(ph.acts.at(-1), { pid: wolves[1], action: { type: 'kill', target: 'p4' } });
+      const sleeper = ['p1', 'p2', 'p3', 'p4'].find((pid) => !wolves.includes(pid));
+      assert.equal(ph.live().api.sendAs(sleeper, { type: 'kill' }), false, 'never as a seat that is not awake');
+      // the engine drops the mounted wolf (done): the other stays awake on the same screen, no new gate
+      await ph.up({ focus: { pids: [wolves[1]], anonymous: '狼人請醒' } });
+      assert.equal(ph.st.activeSeat, wolves[1]);
+      assert.equal(ph.gateEl(), null);
+      // the next step calls nobody here: a decoy gate, the phone back in the middle under the dim
+      await ph.up({ focus: { pids: [], anonymous: '預言家請醒' } });
+      assert.equal(ph.st.activeSeat, null);
+      assert.equal(ph.gateKind(), 'anon', 'the decoy looks the same');
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, null, 'tapping a decoy changes nothing');
+      // dawn
+      await ph.up({ focus: null, views: Object.fromEntries(['p1', 'p2', 'p3', 'p4'].map((pid) => [pid, { phase: 'day', title: '天光', me: pid }])), table: { phase: 'day', title: '天光' } });
+      const dawn = { holder: ph.st.activeSeat, gate: ph.gateKind(), text: ph.gateText(), chip: ph.chip().textContent };
+      ph.destroy();
+      return dawn;
+    };
+    const a = await run(['p1', 'p3']);
+    const b = await run(['p2', 'p4']);
+    assert.deepEqual(a, b, 'the dawn holder, card and chip are the same for every role assignment');
+    assert.equal(a.holder, null);
+    assert.equal(a.gate, 'table');
+    assert.ok(a.text.includes('天光喇'));
+    assert.ok(a.chip.includes('📱 枱中間'));
+  }));
+});
+
+test('§7.1: after an eyes-closed step by day (avalon\'s Assassin) every shared phone shows the same table card — the called seat\'s phone and a decoy phone alike', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const run = async (called) => {
+      const ph = await sharedPhone(dom, clock, { seats: ['p1', 'p2'], st: { room: { singleDevice: false } } });
+      await ph.up({ focus: { pids: called, anonymous: '刺客請拎起部手機' } });
+      assert.equal(ph.gateKind(), 'anon');
+      await ph.tapGate();
+      await ph.up({ focus: null });
+      const out = { holder: ph.st.activeSeat, gate: ph.gateKind(), text: ph.gateText(), chip: ph.chip().textContent };
+      ph.destroy();
+      return out;
+    };
+    const real = await run(['p2']);
+    const decoy = await run([]);
+    assert.deepEqual(real, decoy, 'nothing on this phone says whether the Assassin sat here');
+    assert.equal(real.holder, null);
+    assert.equal(real.gate, 'table');
+  }));
+});
+
+test('§7.1 #18: the host\'s 「X 唔喺度？」 on a named gate — skip them in this walk, 💤 (two taps), 代佢做 (two taps); never on an eyes-closed gate', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { st: { focus: { pids: ['p1', 'p2', 'p3'], together: true } } });
+    assert.ok(ph.gateText().includes('交俾 阿明'));
+    const esc = () => findAll(ph.gateEl(), (n) => n.cls.has('c-passgate-escape'))[0];
+    assert.ok(esc(), 'the host device gets the escape');
+    const acts = () => findAll(esc(), (n) => n.cls.has('c-passgate-escape-acts'))[0];
+    assert.equal(acts().hidden, true, 'quiet until asked');
+    tap(btnWith(esc(), '阿明 唔喺度？'));
+    assert.equal(acts().hidden, false);
+    tap(btnWith(esc(), '⏭ 跳過佢（交俾 小美）'));
+    await ph.render();
+    assert.ok(ph.gateText().includes('交俾 小美'), '阿明 goes to the end of this walk');
+    await ph.tapGate();
+    await ph.up({ focus: { pids: ['p1', 'p3'], together: true } });
+    assert.ok(ph.gateText().includes('交俾 大熊'), `still after the others: ${ph.gateText()}`);
+    await ph.tapGate();
+    await ph.up({ focus: { pids: ['p1'], together: true } });
+    assert.ok(ph.gateText().includes('交俾 阿明'), 'and finally back to 阿明');
+    tap(btnWith(esc(), '阿明 唔喺度？'));
+    assert.equal(btnWith(esc(), '⏭ 跳過佢'), undefined, 'nobody left to skip to');
+    tap(btnWith(esc(), '💤 當佢缺席'));
+    assert.deepEqual(ph.calls.filter((c) => c.startsWith('absent')), [], 'two taps');
+    clock.advance(600);
+    tap(btnWith(esc(), '再㩒一次：當 阿明 缺席？'));
+    assert.ok(ph.calls.includes('absent:p1'));
+    clock.advance(4000);
+    tap(btnWith(esc(), '🤖 代佢做'));
+    clock.advance(600);
+    tap(btnWith(esc(), '再㩒一次：代 阿明 做？'));
+    assert.ok(ph.calls.includes('auto:p1'));
+    // an eyes-closed gate never carries it
+    await ph.up({ focus: { pids: ['p2'], anonymous: '預言家請醒' } });
+    assert.equal(ph.gateKind(), 'anon');
+    assert.equal(findAll(ph.gateEl(), (n) => n.cls.has('c-passgate-escape')).length, 0);
+    ph.destroy();
+  }));
+});
+
+test('§7.1 U3 askWho: anyone taps, picks their own name → gate → their screen with ctx.asked; 取消 resolves null', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { st: { room: { absent: ['p4'] } } });
+    let got = 'pending';
+    ph.live().api.askWho({ key: 'stop', title: '邊個要停鐘？' }).then((v) => { got = v; });
+    assert.ok(ph.menu().textContent.includes('邊個要停鐘？'));
+    assert.ok(btnWith(ph.menu(), '大熊'));
+    assert.equal(btnWith(ph.menu(), '阿珍'), undefined, 'an absent seat is not offered');
+    tap(btnWith(ph.menu(), '大熊'));
+    await ph.render();
+    assert.equal(ph.gateKind(), 'switch');
+    assert.equal(got, 'pending');
+    await ph.tapGate();
+    assert.equal(got, 'p3');
+    assert.equal(ph.st.activeSeat, 'p3');
+    assert.deepEqual(ph.ctx().asked, { key: 'stop', pid: 'p3' });
+    // the game puts it back: ctx.asked is gone with the hand-over
+    ph.live().api.toTable({ card: false });
+    await ph.render();
+    assert.equal(ph.st.activeSeat, null);
+    assert.equal(ph.gateEl(), null, 'card: false → no table card');
+    assert.equal(ph.ctx().asked, null);
+    let again = 'pending';
+    ph.live().api.askWho({ key: 'word', title: '邊個睇返個詞？' }).then((v) => { again = v; });
+    tap(btnWith(ph.menu(), '取消'));
+    await settle();
+    assert.equal(again, null);
+    // a second askWho while the first sheet is still open: the first gets null, the second is the live one
+    let first = 'pending';
+    let second = 'pending';
+    ph.live().api.askWho({ key: 'a', title: '第一個？' }).then((v) => { first = v; });
+    ph.live().api.askWho({ key: 'b', title: '第二個？' }).then((v) => { second = v; });
+    await settle();
+    assert.equal(first, null);
+    assert.equal(second, 'pending', 'the new request is not answered by closing the old sheet');
+    assert.ok(ph.menu().textContent.includes('第二個？'));
+    tap(btnWith(ph.menu(), '小美'));
+    await ph.render();
+    await ph.tapGate();
+    assert.equal(second, 'p2');
+    assert.deepEqual(ph.ctx().asked, { key: 'b', pid: 'p2' });
+    ph.destroy();
+  }));
+});
+
+test('§7.1 U10: a `hold: true` step holds the clock while its gate is unanswered on a whole-table phone — and only there', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    await ph.up({ focus: { pids: ['p2'], hold: true } });
+    assert.deepEqual(ph.calls, ['hold:true']);
+    await ph.tapGate();
+    assert.deepEqual(ph.calls, ['hold:true', 'hold:false'], 'released the moment the gate is tapped');
+    await ph.up({ focus: { pids: ['p3'] } });
+    assert.deepEqual(ph.calls, ['hold:true', 'hold:false'], 'a step without hold never holds');
+    ph.destroy();
+    // two phones (not a whole-table phone): never
+    const multi = await sharedPhone(dom, clock, { st: { room: { singleDevice: false } } });
+    await multi.up({ focus: { pids: ['p2'], hold: true } });
+    assert.equal(multi.gateKind(), 'private');
+    assert.deepEqual(multi.calls, []);
+    multi.destroy();
+  }));
+});
+
+test('§7.1 #20 #35 U1 U8: no 輪到你 on a shared phone; ⋯ and the bar offer no 靜音 for an eyes-closed night; the night bed follows meta.nightAmbient', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { meta: { narration: 'required', nightAmbient: true }, st: { cue: { id: 'c', text: '天黑' }, focus: { pids: ['p2'] } } });
+    await ph.tapGate();
+    assert.equal(findAll(ph.screen.el, (n) => n.cls.has('turn-badge')).length, 0, 'the gate said whose turn it is');
+    // the vote / seat pickers a game gets on a shared phone never print 「（你）」
+    const { VotePanel, PlayerPicker } = ph.live().api.components;
+    const people = ph.st.room.players;
+    const vp = VotePanel({ players: people, candidates: ['p1', 'p2'], me: 'p2', progress: { done: 0, total: 4 }, onVote() {} });
+    vp.update({ players: people, candidates: ['p1', 'p2'], me: 'p2', progress: { done: 1, total: 4 }, onVote() {} });
+    const pp = PlayerPicker({ players: people, me: 'p2', count: 1 });
+    assert.ok(vp.el.textContent.includes('小美') && !vp.el.textContent.includes('（你）'), vp.el.textContent);
+    assert.ok(!pp.el.textContent.includes('（你）'));
+    vp.destroy(); pp.destroy();
+    tap(findAll(ph.screen.el, (n) => n.attrs['aria-label'] === '選項')[0]);
+    assert.ok(btnWith(ph.menu(), '🔊 語音') && btnWith(ph.menu(), '📜 讀稿'));
+    assert.equal(btnWith(ph.menu(), '🔇 靜音'), undefined, 'U1');
+    const bar = findAll(ph.screen.el, (n) => n.cls.has('c-narratorbar'))[0];
+    assert.equal(findAll(bar, (n) => n.attrs['data-mode'] === 'silent')[0].hidden, true);
+    assert.equal(findAll(bar, (n) => n.cls.has('c-narratorbar-next'))[0].hidden, true, '#35: ⏭ only in ⋯ on a whole-table phone');
+    assert.deepEqual(ph.ambient, [], 'no bed by day');
+    await ph.up({ focus: { pids: [], anonymous: '狼人請醒' }, table: { phase: 'night', night: true } });
+    assert.deepEqual(ph.ambient, [true], 'all night on a shared phone');
+    await ph.up({ focus: { pids: [], anonymous: '預言家請醒' } });
+    assert.deepEqual(ph.ambient, [true], 'the same at every step');
+    await ph.up({ room: { narration: { mode: 'silent' } } });
+    assert.deepEqual(ph.ambient, [true, false], 'never in 靜音');
+    ph.destroy();
+  }));
+});
+
+test('§7.1: a single-seat phone is untouched — no gates, no table mode, no table taps', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { seats: ['p2'], st: { activeSeat: 'p2', mode: 'host', isHost: false, room: { singleDevice: false } } });
+    await ph.up({ focus: { pids: ['p2'], open: true } });
+    assert.equal(ph.gateEl(), null);
+    assert.equal(ph.st.activeSeat, 'p2');
+    assert.equal(ph.live().api.shared, false);
+    assert.equal(ph.live().api.tableSend({ type: 'x' }), false);
+    assert.equal(ph.live().api.handTo('p2'), false);
+    assert.equal(findAll(ph.screen.el, (n) => n.cls.has('turn-badge')).length, 1, '輪到你 as before');
+    const pp = ph.live().api.components.PlayerPicker({ players: ph.st.room.players, me: 'p2', count: 1 });
+    assert.ok(pp.el.textContent.includes('小美（你）'), 'a phone of your own keeps 「（你）」');
+    pp.destroy();
+    await ph.up({ focus: null });
+    assert.equal(ph.st.activeSeat, 'p2', 'no table mode');
+    assert.equal(ph.gateEl(), null);
+    ph.destroy();
+  }));
+});
+
+test('§7.1 #3 api.handTo: a game hands the phone on (private, or public with open); refused at night, for a seat elsewhere, and on a phone of your own', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock);
+    tap(ph.chip()); tap(btnWith(ph.menu(), '阿明')); await ph.render(); await ph.tapGate();
+    assert.equal(ph.live().api.handTo('p2', { why: '搖骰' }), true);
+    await ph.render();
+    assert.equal(ph.gateKind(), 'switch');
+    assert.ok(ph.gateText().includes('交俾 小美') && ph.gateText().includes('其他人唔好望 · 搖骰'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p2');
+    await ph.up({ cue: { id: 'x' } });
+    assert.equal(ph.st.activeSeat, 'p2', 'it holds (#9)');
+    assert.equal(ph.live().api.handTo('p3', { open: true }), true);
+    await ph.render();
+    assert.equal(ph.gateKind(), 'public');
+    assert.ok(ph.gateText().includes('輪到 大熊'));
+    await ph.tapGate();
+    assert.equal(ph.live().api.handTo('p9'), false, 'not a seat of this phone');
+    await ph.up({ table: { phase: 'night', night: true } });
+    assert.equal(ph.live()?.api.handTo('p1') ?? false, false, 'never at night');
+    ph.destroy();
+  }));
+});
+
+test('§7.1 #9: a NAMED step at night still never puts a name on the card', async () => {
+  await withDom(async ({ dom }, clock) => withRaf(async () => {
+    const ph = await sharedPhone(dom, clock, { st: { table: { phase: 'night', night: true } } });
+    await ph.up({ focus: { pids: ['p3'] } });
+    assert.equal(ph.gateKind(), 'private');
+    assert.ok(!ph.gateText().includes('大熊'), ph.gateText());
+    assert.ok(ph.gateText().includes('其他人閉埋眼'));
+    assert.equal(findAll(ph.gateEl(), (n) => n.cls.has('c-passgate-escape')).length, 0, 'no 「大熊 唔喺度？」 either');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, 'p3');
+    ph.destroy();
+  }));
+});
+
+test('§7.1 U1 lobby: one phone + an eyes-closed night hides 🔇 靜音 and says 讀稿 needs a non-player; phones of their own keep it', async () => {
+  await withDom(async ({ dom }) => withRaf(async () => {
+    const { mountLobby } = await import('../js/ui/screens/lobby.js?v=1');
+    const players = [{ id: 'p1', name: '阿明', seat: 0, color: '#111', connected: true, deviceId: 'd' }, { id: 'p2', name: '小美', seat: 1, color: '#222', connected: true, deviceId: 'd' }];
+    const meta = { id: 'night', name: '夜', emoji: '🌙', players: [2, 8], minutes: [5, 10], narration: 'required', singleDevice: 'full', blurb: '' };
+    const game = { meta, rules: { quick: [], roles: [], sections: [] }, config: { fields: () => [], summary: () => [] } };
+    const room = {
+      phase: 'lobby', gameId: 'night', players, config: {}, configSummary: [], configValid: { ok: true, message: '', warnings: [] },
+      scoreboard: {}, history: [], narration: { mode: 'voice' }, singleDevice: true, stalled: [], idle: [], absent: [], claims: [],
+    };
+    const st = { mode: 'local', isHost: true, code: null, mySeats: ['p1', 'p2'], activeSeat: null, room };
+    const app = {
+      state: st, prefs: { get: () => null, set() {} }, bag: { stats: () => null },
+      lobby: new Proxy({}, { get: () => () => ({ ok: true }) }), narration: { setMode() {} },
+    };
+    const narrator = {
+      cancel() {}, prime() {}, test() {}, set() {}, voices: () => [], hasCantonese: () => true, supported: true,
+      settings: { voiceURI: null, rate: 1 }, onVoices: () => () => {},
+    };
+    const sh = {
+      app, narrator, catalog: [{ id: 'night', meta, ready: true }],
+      gameMeta: () => meta, cached: () => game, loadGame: async () => game, gamesById: () => ({ night: meta }),
+      confirm: (text, node, opts) => dom.confirmTap(text, { node, ...opts }), leave: () => false, rerender() {},
+      openPreflight() {}, roomLink: () => '', saveNarration() {}, savedGroup: () => null,
+      settingsButton: () => new FEl('button'), soundButton: () => new FEl('button'),
+      timer: { button: () => new FEl('button'), strip: () => new FEl('div') },
+    };
+    const lobby = mountLobby(sh);
+    fakeDocument.body.append(lobby.el);
+    lobby.update(st);
+    const seg = () => findAll(lobby.el, (n) => n.attrs['aria-label'] === '旁白方式')[0];
+    const modeBtn = (m) => findAll(seg(), (n) => n.attrs['data-mode'] === m)[0];
+    assert.equal(modeBtn('silent').hidden, true, 'no 靜音 when nobody could hear their call');
+    assert.equal(modeBtn('read').hidden, false);
+    assert.ok(lobby.el.textContent.includes('要搵個唔玩嘅人讀'), 'one line says why and what 讀稿 needs');
+    // phones of their own: 靜音 is back (D1) and the note goes
+    lobby.update({ ...st, room: { ...room, singleDevice: false } });
+    assert.equal(modeBtn('silent').hidden, false);
+    assert.ok(!lobby.el.textContent.includes('要搵個唔玩嘅人讀'));
+    lobby.destroy();
+  }));
 });

@@ -80,7 +80,7 @@ function emptyRoom() {
     configValid: { ok: false, message: '未揀遊戲', warnings: [] },
     scoreboard: {}, history: [], narration: { mode: 'voice' }, paused: false,
     stalled: [], idle: [], lastResult: null, loading: null,
-    timer: null, claims: [], versionMismatch: [], singleDevice: false, absent: [],
+    timer: null, claims: [], versionMismatch: [], singleDevice: false, absent: [], clockHeld: false,
   };
 }
 
@@ -363,8 +363,14 @@ export function createApp(opts = {}) {
   }
 
   // ---------- applying messages (host's own device and clients alike) ----------
+  /**
+   * The seat this phone shows. A single-seat phone always shows its seat; a shared phone (2+ seats, §7.1) may lie
+   * in the middle (`activeSeat === null`, the public table view) — it starts there, and a seat it lost goes back
+   * there rather than to somebody else's screen.
+   */
   function ensureActive() {
-    if (!state.mySeats.includes(state.activeSeat)) state.activeSeat = state.mySeats[0] ?? null;
+    if (state.mySeats.length <= 1) { state.activeSeat = state.mySeats[0] ?? null; return; }
+    if (state.activeSeat !== null && !state.mySeats.includes(state.activeSeat)) state.activeSeat = null;
   }
 
   function applyViews(v, { fresh = false } = {}) {
@@ -1060,7 +1066,13 @@ export function createApp(opts = {}) {
   // ============================================================
 
   const lobby = {
-    selectGame: async (id) => (isHostish() ? room.selectGame(id) : NOT_HOST),
+    /** Loads the game; U1 (§7.1): an eyes-closed night on one phone that holds everybody gets 語音, not 靜音. */
+    async selectGame(id) {
+      if (!isHostish()) return NOT_HOST;
+      const r = await room.selectGame(id);
+      if (r?.ok && isHostish()) room.onePhoneNarration();
+      return r;
+    },
     setConfig: (cfg) => (isHostish() ? room.setConfig(cfg) : NOT_HOST),
     moveSeat: (pid, index) => (isHostish() ? room.moveSeat(pid, index) : NOT_HOST),
     kick: (pid) => (isHostish() ? room.kick(pid) : NOT_HOST),
@@ -1083,7 +1095,9 @@ export function createApp(opts = {}) {
     /** Returns { ok, message, warnings? } — warnings name seats that are offline (the game starts anyway). */
     start() {
       narrator?.prime?.();       // inside the 開始遊戲 tap — the first speak() depends on it
-      return isHostish() ? room.start() : NOT_HOST;
+      if (!isHostish()) return NOT_HOST;
+      room.onePhoneNarration();  // U1: the seating may have become one phone since the game was picked
+      return room.start();
     },
     /** #6 host: give a disconnected seat to the phone that asked for it (state.room.claims). */
     approveClaim: (pid) => (isHostish() ? room.approveClaim(pid) : NOT_HOST),
@@ -1137,14 +1151,21 @@ export function createApp(opts = {}) {
     return isHostish() ? room.ink(state.deviceId, pid, batch) : false;
   }
 
+  /** Show one of this phone's seats, or `null` = the phone goes to the middle (shared phones only, §7.1). */
   function setActiveSeat(pid) {
-    if (!state.mySeats.includes(pid) || state.activeSeat === pid) return;
+    if (pid === null ? state.mySeats.length < 2 : !state.mySeats.includes(pid)) return;
+    if (state.activeSeat === pid) return;
     state.activeSeat = pid;
     touch();
   }
 
   const results = {
-    again() { narrator?.prime?.(); return isHostish() ? room.again() : NOT_HOST; },
+    again() {
+      narrator?.prime?.();
+      if (!isHostish()) return NOT_HOST;
+      room.onePhoneNarration();  // U1 (§7.1)
+      return room.again();
+    },
     toLobby() { return isHostish() ? room.toLobby() : NOT_HOST; },
   };
 
@@ -1178,6 +1199,11 @@ export function createApp(opts = {}) {
     markAbsent(pid) { return isHostish() ? room.markAbsent(pid) : false; },
     markPresent(pid) { return isHostish() ? room.markPresent(pid) : false; },
     /**
+     * U10 (§7.1): hold (true) / release (false) the game clock while a one-phone gate is unanswered. True iff it
+     * changed; false outside a whole-table room, when not playing, or on a guest. state.room.clockHeld follows.
+     */
+    holdClock(on) { return isHostish() ? room.holdClock(!!on) : false; },
+    /**
      * T1 — the table timer, in every phase, on every phone (state.room.timer). Host only; all return booleans.
      * start(ms 1 s–3 h, label?) replaces any running timer; add(ms) after it rang starts a new countdown.
      * 暫停 (hostCtl.pause) also holds it, and 繼續 releases it.
@@ -1194,7 +1220,8 @@ export function createApp(opts = {}) {
   const narration = {
     setMode(mode) {
       narrator?.prime?.();
-      if (!isHostish() || !room.setNarrationMode(mode)) return false;
+      // U1 (§7.1): no 靜音 for an eyes-closed night when one phone holds everybody (nobody would hear their call)
+      if (!isHostish() || room.silentBarred(mode) || !room.setNarrationMode(mode)) return false;
       store.set('bgb:narration', { mode });
       if (mode === 'voice') {
         const cue = room.currentCue();

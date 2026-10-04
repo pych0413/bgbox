@@ -172,6 +172,15 @@
 .av-tile.spent { opacity: .45; cursor: default; }
 .av-done { text-align: center; font-weight: 700; padding: .5rem 0; line-height: 1.6; }
 
+/* U9, one shared phone: the same minimum hold for every role (role card 8 s, quest card 4 s), drawn as a filling bar so it
+   reads as a rule, not as lag. The bar fills once, from the moment this seat's screen opened (its hand-over card). */
+.av-hold { display: flex; flex-direction: column; align-items: center; gap: .3125rem; }
+.av-hold[hidden] { display: none; }
+.av-hold-bar { width: 100%; height: .375rem; border-radius: 99px; background: var(--bg-2); border: 1px solid var(--line); overflow: hidden; }
+.av-hold-fill { display: block; height: 100%; background: var(--accent); transform-origin: left center; animation: av-hold-fill var(--ms, 8000ms) linear both; }
+.av-hold-text { font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+@keyframes av-hold-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
 /* ---------- the pile ---------- */
 
 .av-pile { display: flex; flex-wrap: wrap; gap: .625rem; justify-content: center; padding: .5rem 0; min-height: 5rem; }
@@ -216,4 +225,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .av-wait-emoji, .av-pcard, .av-late, .av-voted-screen .av-votegrid { animation: none; }
+  .av-hold-fill { animation: none; transform: scaleX(.5); }   /* the 「仲有 N 秒」 line still counts down */
 }

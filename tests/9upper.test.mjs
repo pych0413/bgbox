@@ -212,7 +212,9 @@ test('9upper: config.validate rejects bad player counts and bad values, warns on
   assert.deepEqual(config.validate({ ...base, antiStreak: true }, 6).warnings, []);
   for (const speakOrder of ['judge', 'system', 'free']) {
     assert.deepEqual(config.validate({ ...base, speakOrder }, 5).warnings, [], speakOrder);
-    assert.deepEqual(config.validate({ ...base, speakOrder, speakSecs: 0 }, 5, { singleDevice: true }).warnings, [], speakOrder);
+    const v1 = config.validate({ ...base, passPhone: true, speakOrder, speakSecs: 0 }, 5, { singleDevice: true });
+    assert.ok(v1.ok, speakOrder);
+    assert.deepEqual(v1.warnings, [], speakOrder);
   }
   assert.deepEqual(config.validate({ ...base, speakOrder: 'system', speakSecs: 45 }, 5).warnings, [], 'a clock works with 系統派');
   const freeClock = config.validate({ ...base, speakOrder: 'free', speakSecs: 45 }, 5);
@@ -835,7 +837,13 @@ test('9upper: 發言次序 field — always visible, three options, one help lin
     }
   }
   // the env argument of defaults / validate changes nothing about it
-  assert.ok(config.validate({ ...config.defaults(5), speakOrder: 'system' }, 5, { singleDevice: true }).ok);
+  const one = config.defaults(5, undefined, { singleDevice: true });
+  assert.ok(config.validate({ ...one, speakOrder: 'system' }, 5, { singleDevice: true }).ok);
+  // one phone (passPhone): the help says the 諗樣 ticks the speakers off — nobody else can reach 我講完 (#11)
+  const passHelp = (speakOrder) => config.fields({ ...one, speakOrder }, 5).find((x) => x.key === 'speakOrder').help;
+  assert.ok(passHelp('system').includes('諗樣㩒') && !passHelp('system').includes('我講完'), passHelp('system'));
+  assert.ok(passHelp('free').includes('諗樣㩒') && !passHelp('free').includes('我講完'), passHelp('free'));
+  for (const m of ['judge', 'system', 'free']) assert.ok(passHelp(m).length <= 40, passHelp(m));
 });
 
 test('9upper: 系統派 — a fresh random order every round that says nothing about who the 老實人 is', () => {
@@ -1029,7 +1037,7 @@ test('9upper: 自己決定 — legalActions, autoAct, @next and the cue', () => 
     { type: 'done', target: ex[0] }, { type: 'done', target: ex[1] }, { type: 'done', target: ex[2] }, { type: 'decide' }]);
   assert.deepEqual(engine.autoAct(sim.state, ex[1], sim.ctx()), { type: 'away' }, '代佢做 skips them, it does not tick them off');
   assert.deepEqual(engine.autoAct(sim.state, judge, sim.ctx()), { type: 'done', target: ex[0] });
-  assert.deepEqual(sim.focus(), { pids: [judge] });
+  assert.deepEqual(sim.focus(), { pids: [judge], open: true, label: '解釋' });
   const c = sim.cue();
   assert.equal(c.id, 'r1:explain');
   assert.ok(c.text.includes('自己傾') && c.text.includes('我講完') && c.text.includes('唔可以問人係咩身份'));
@@ -1424,18 +1432,144 @@ test('9upper: focus per phase', () => {
   const sim = mk(5, 2, { levelMode: 'judge' });
   const judge = J(sim);
   const ex = sim.state.round.explainers;
-  assert.deepEqual(sim.focus(), { pids: [judge] });                    // level
+  // the 諗樣's steps are public (the 諗樣 never sees a secret): a shared phone shows the public card (§7.1 #4)
+  const pub = (label) => ({ pids: [judge], open: true, label });
+  assert.deepEqual(sim.focus(), pub('揀難度'));                        // level
   sim.act(judge, { type: 'level', level: 2 });
-  assert.deepEqual(sim.focus(), { pids: [judge] });                    // term
+  assert.deepEqual(sim.focus(), pub('睇題目'));                        // term
   sim.act(judge, { type: 'start' });
-  assert.deepEqual(sim.focus().pids, ex);                              // read (together): every 玩家
+  assert.deepEqual(sim.focus(), { pids: ex });                         // read (together): every 玩家, private
   sim.advance();
-  assert.deepEqual(sim.focus(), { pids: [judge] });                    // explain
+  assert.deepEqual(sim.focus(), pub('解釋'));                          // explain
   sim.act(judge, { type: 'decide' });
-  assert.deepEqual(sim.focus(), { pids: [judge] });                    // judge
+  assert.deepEqual(sim.focus(), pub('揀老實人'));                      // judge
   sim.act(judge, { type: 'pick', target: ex[0] });
-  assert.deepEqual(sim.focus(), { pids: [judge] });                    // reveal
+  assert.deepEqual(sim.focus(), pub('揭曉'));                          // reveal (phones of their own)
   assert.equal(sim.focus().anonymous, undefined);
+});
+
+// ---------- one phone in the middle (DESIGN §7.1; one-phone playtest #1 #4 #5 #11 #12 #19) ----------
+
+/** A one-phone table: the defaults the Room gives a whole-table phone (passPhone on). */
+const mkOne = (n, seed = 1, over = {}) => {
+  const cfg = { ...config.defaults(n, undefined, { singleDevice: true }), ...over };
+  if (PRESET_KEYS.some((k) => k in over)) cfg.preset = 'custom';
+  return new Sim(game, { n, seed, banks, config: cfg });
+};
+
+test('9upper: one phone — #12 「一部手機輪流睇」 cannot be off in a one-phone room (validate says why); phones of their own may', () => {
+  const one = config.defaults(5, undefined, { singleDevice: true });
+  assert.equal(one.passPhone, true);
+  assert.ok(config.validate(one, 5, { singleDevice: true }).ok);
+  const off = config.validate({ ...one, passPhone: false }, 5, { singleDevice: true });
+  assert.equal(off.ok, false, 'only the first 玩家 would ever read');
+  assert.ok(off.message.includes('一部手機輪流睇'), off.message);
+  assert.equal(config.validate({}, 5, { singleDevice: true }).ok, false, 'a setup without the key is off too');
+  assert.ok(config.validate({ ...one, passPhone: false }, 5, { singleDevice: false }).ok, 'phones of their own: off is fine');
+  assert.ok(config.validate({ ...one, passPhone: false }, 5).ok, 'no env (older callers): unchanged');
+  const f = config.fields(one, 5).find((x) => x.key === 'passPhone');
+  assert.ok(f.help.includes('得一部手機就要開'), f.help);
+});
+
+test('9upper: one phone — focus: the reader\'s gate says how far round it is; the 諗樣\'s steps are public; the reveal calls nobody', () => {
+  const sim = mkOne(5, 3, { speakSecs: 30 });
+  const judge = J(sim);
+  assert.deepEqual(sim.focus(), { pids: [judge], open: true, label: '睇題目' });
+  sim.act(judge, { type: 'start' });
+  const readers = sim.state.round.readers;
+  readers.forEach((reader, i) => {
+    assert.deepEqual(sim.focus(), { pids: [reader], label: `睇卡 ${i + 1}/${readers.length}` }, 'private, one reader at a time');
+    sim.act(reader, { type: 'peek' });
+    sim.advance();
+  });
+  assert.equal(phase(sim), 'explain');
+  assert.deepEqual(sim.focus(), { pids: [judge], open: true, label: '解釋', hold: true }, 'U10: the speaking clock waits for the 諗樣\'s card');
+  sim.act(judge, { type: 'decide' });
+  sim.act(judge, { type: 'pick', target: sim.state.round.explainers[0] });
+  assert.equal(phase(sim), 'reveal');
+  assert.equal(sim.focus(), null, 'the phone goes to the middle: the table reads the reveal together');
+  // no speaking clock (or 自己決定): nothing to hold
+  const free = mkOne(4, 2, { speakOrder: 'free', speakSecs: 30 });
+  toExplain(free);
+  assert.equal(free.focus().hold, undefined);
+  const noClock = mkOne(4, 2);
+  toExplain(noClock);
+  assert.equal(noClock.focus().hold, undefined);
+});
+
+test('9upper: one phone — #5 the reveal\'s 下一輪 is one tap from the table (seats + table: true); a lone seat cannot speak for the 諗樣', () => {
+  const sim = mkOne(4, 5);
+  toJudge(sim);
+  const judge = J(sim);
+  const ex = sim.state.round.explainers;
+  sim.act(judge, { type: 'pick', target: ex[0] });
+  const all = sim.players.map((p) => p.id);
+  const other = ex[1];
+  assert.equal(sim.act(other, { type: 'next' }), false, 'a 玩家 alone is not the 諗樣');
+  assert.equal(sim.act(other, { type: 'next', seats: all }), false, 'seats without table: true is no table tap');
+  assert.equal(sim.act(other, { type: 'next', seats: ex, table: true }), false, 'the table tap must include the 諗樣');
+  assert.equal(sim.act(other, { type: 'next', seats: all, table: true }), true, 'the whole table tapped once');
+  assert.equal(sim.state.round.n, 2);
+  assert.notEqual(J(sim), judge);
+  // phones of their own: unchanged — only the 諗樣 (or anybody while the 諗樣 is 💤)
+  const own = mk(4, 5);
+  toJudge(own);
+  own.act(J(own), { type: 'pick', target: own.state.round.explainers[0] });
+  assert.equal(own.act(own.state.round.explainers[1], { type: 'next' }), false);
+  assert.equal(own.act(J(own), { type: 'next' }), true);
+});
+
+test('9upper: one phone — #11 the 諗樣\'s 「✅ 講完 · 下一位」 marks ✅ 已講 (no second lap); ⏭ is a separate skip; nobody is 冇反應', () => {
+  for (const speakOrder of ['judge', 'system']) {
+    const sim = mkOne(5, 4, { speakOrder });
+    toExplain(sim);
+    const judge = J(sim);
+    const r = () => sim.state.round;
+    const first = r().speaker;
+    assert.equal(engine.blocking(sim.state, first), false, `${speakOrder}: the speaker never holds the phone, so is never 冇反應`);
+    assert.equal(engine.blocking(sim.state, judge), false);
+    assert.ok(sim.legal(judge).some((a) => a.type === 'done' && !a.skip) && sim.legal(judge).some((a) => a.type === 'done' && a.skip));
+    assert.equal(sim.act(judge, { type: 'done', turn: r().turnNo }), true);
+    assert.ok(r().spoken.includes(first) && !r().skipped.includes(first), `${speakOrder}: ✅ 已講, not ⏭`);
+    const second = r().speaker;
+    assert.equal(sim.act(judge, { type: 'done', turn: r().turnNo, skip: true }), true);
+    assert.ok(r().skipped.includes(second), '⏭ 佢唔喺度，跳過 is a skip: back once at the end');
+    let guard = 0;
+    while (phase(sim) === 'explain' && guard++ < 20) sim.act(judge, { type: 'done', turn: r().turnNo });
+    assert.equal(phase(sim), 'judge', 'one lap (+ the one skipped player once), then 揀人 — never a second lap of everybody');
+    assert.deepEqual(sim.state.round.back, [second], 'only the skipped player came back');
+    assert.equal(sim.view(judge).readMode, 'pass');
+  }
+  // 代佢做 for the 諗樣 never claims the speaker finished
+  const s2 = mkOne(4, 7);
+  toExplain(s2);
+  assert.deepEqual(engine.autoAct(s2.state, J(s2), s2.ctx()), { type: 'done', skip: true });
+  // phones of their own: the 諗樣's 下一位 still skips, and the speaker on the floor is still the one waited on
+  const own = mk(5, 4);
+  toExplain(own);
+  const sp = own.state.round.speaker;
+  assert.equal(engine.blocking(own.state, sp), true);
+  own.act(J(own), { type: 'done' });
+  assert.ok(own.state.round.skipped.includes(sp));
+  assert.deepEqual(engine.autoAct(own.state, J(own), own.ctx()), { type: 'done' });
+});
+
+test('9upper: one phone — #19 the explaining cues never say 「收起電話」; the phone goes back to the 諗樣, who ticks the speakers off', () => {
+  for (const speakOrder of ['judge', 'system', 'free']) {
+    const one = mkOne(4, 2, { speakOrder });
+    toExplain(one);
+    const t = one.cue().text;
+    assert.ok(!t.includes('收起電話') && t.includes('部手機交返俾') && t.includes(nameOf(one, J(one))), `${speakOrder}: ${t}`);
+    assert.ok(!t.includes('我講完'), `${speakOrder}: a 玩家 cannot reach 我講完 on one phone: ${t}`);
+    const own = mk(4, 2, { speakOrder });
+    toExplain(own);
+    assert.ok(own.cue().text.includes('收起電話'), 'phones of their own: unchanged');
+  }
+  const one = mkOne(4, 2, { speakOrder: 'system' });
+  toExplain(one);
+  assert.ok(one.view(J(one)).hint.includes('✅ 講完'), one.view(J(one)).hint);
+  const rule = rules.sections.find((x) => x.title === '用一部手機玩').body;
+  assert.ok(rule.includes('✅ 講完') && rule.includes('⏭ 跳過') && rule.includes('枱中間'), rule);
 });
 
 test('9upper: autoAct unsticks every phase, so a dead phone cannot stop the table', () => {
@@ -1675,7 +1809,7 @@ test('9upper: D4 — 💤 is refused when fewer than 3 seats would be left; an a
   sim.act(judge, { type: 'pick', target: ex[0] });
   assert.equal(phase(sim), 'reveal');
   sim.host(PRESENT(ex[0]));
-  assert.deepEqual(sim.focus(), { pids: [judge] });
+  assert.deepEqual(sim.focus(), { pids: [judge], open: true, label: '揭曉' });
   assert.equal(sim.host(ABSENT(judge)), true, 'the reveal is scored: no void, just marked');
   assert.equal(phase(sim), 'reveal');
   assert.equal(sim.focus(), null, 'focus never names a seat that is away (a shared phone would ask for them)');
@@ -2510,6 +2644,111 @@ test('9upper: UI — 我識呢條, 💤, a fresh deal after 呢輪作廢, and �
   }
 });
 
+test('9upper: UI on one phone (§7.1) — 「✅ 講完 · 下一位」 + ⏭, no 「（你）」, and the reveal\'s 下一輪 is one table tap behind the card', async () => {
+  const dom = installDom();
+  const mounted = [];
+  try {
+    const { mount } = await import('../js/games/9upper/ui.js');
+    /** A seat (or the table, pid null) on a phone. `phone` = { shared, mySeats } — a whole-table phone by default. */
+    const onPhone = (sim, pid, phone = {}) => {
+      const root = new dom.FakeNode('div');
+      const sent = [];
+      const table = [];
+      const toasts = [];
+      const sfxs = [];
+      const fc = fakeComponents(dom.FakeNode);
+      const mySeats = phone.mySeats ?? sim.players.map((p) => p.id);
+      const shared = phone.shared ?? true;
+      const ui = mount(root, {
+        me: pid, players: sim.players, isHost: true, send: (a) => sent.push(a), sfx: (n) => sfxs.push(n),
+        toast: (t) => toasts.push(t), now: () => sim.now, components: fc.components, meta, config: sim.config,
+        shared, wholeTable: shared, atTable: shared && pid === null, mySeats,
+        tableSend: (a) => { table.push(a); return Promise.resolve(true); },
+      });
+      mounted.push(ui);
+      return { root, sent, table, toasts, sfxs, show(ctx = {}) { ui.update(sim.view(pid), { shared, ...ctx }); return root.visibleText(); } };
+    };
+    const mkOne = (n, seed, over = {}) => new Sim(game, { n, seed, banks,
+      config: { ...config.defaults(n, undefined, { singleDevice: true }), ...over } });
+
+    // #20: a shared phone never says 「你」 to the table — any seat's screen, any phase
+    for (const speakOrder of ['judge', 'system', 'free']) {
+      const sim = mkOne(5, 3, { speakOrder, callouts: 2, rePeek: true });
+      const seats = [...sim.players.map((p) => p.id), null].map((pid) => ({ pid, ui: onPhone(sim, pid) }));
+      const paint = () => {
+        for (const s of seats) {
+          const t = s.ui.show();
+          assert.ok(!t.includes('（你）'), `${speakOrder} ${s.pid ?? 'table'} in ${sim.state.phase}: ${t}`);
+          assert.ok(!t.includes('輪到你講'), 'the 系統派 banner names the speaker');
+        }
+      };
+      paint();
+      sim.runRandom({ onStep: paint });
+      for (const s of seats) assert.ok(!s.ui.sfxs.includes('turn'), 'no 「your turn」 chime on a phone everybody shares');
+    }
+
+    // #11: the 諗樣 holds the phone and ticks the speakers off; the skip is its own small button
+    const sim = mkOne(4, 2, { speakOrder: 'system' });
+    toExplain(sim);
+    const judge = onPhone(sim, J(sim));
+    const text = judge.show();
+    assert.ok(text.includes('⏭ 跳過') && !text.includes('「下一位」'), 'the note points at ⏭ for a friend who is away');
+    button(judge.root, '✅ 講完 · 下一位').click();
+    assert.deepEqual(judge.sent.pop(), { type: 'done', turn: 0 });
+    assert.equal(sim.act(J(sim), { type: 'done', turn: 0 }), true);
+    const judge2 = onPhone(sim, J(sim));   // (the first screen's send guard holds for 3.5 s)
+    judge2.show();
+    button(judge2.root, '⏭ 佢唔喺度，跳過').click();
+    assert.deepEqual(judge2.sent.pop(), { type: 'done', turn: 1, skip: true });
+    // phones of their own (passPhone off): the 諗樣's 下一位 is the old skip, and there is no second button
+    const own = mk(4, 2, { speakOrder: 'system' });
+    toExplain(own);
+    const ownJudge = onPhone(own, J(own), { shared: false, mySeats: [J(own)] });
+    ownJudge.show();
+    assert.ok(button(ownJudge.root, '下一位') && !button(ownJudge.root, '✅ 講完') && !button(ownJudge.root, '⏭ 佢唔喺度'));
+
+    // #1/#5: the reveal lies in the middle — one table tap, locked while the 「擺返中間」 card is up (U5)
+    const rv = mkOne(4, 6);
+    toJudge(rv);
+    rv.act(J(rv), { type: 'pick', target: rv.state.round.explainers[0] });
+    const tableUi = onPhone(rv, null);
+    let t = tableUi.show({ tableLocked: true });
+    const tap = () => button(tableUi.root, '大家睇完 ✓');
+    assert.ok(tap() && tap().textContent.includes('下一輪') && tap().textContent.includes('一下就得'), t);
+    assert.equal(tap().disabled, true, 'locked behind the table card');
+    tap().click();
+    assert.deepEqual(tableUi.table, [], 'nothing sent while locked');
+    t = tableUi.show({ tableLocked: false });
+    assert.equal(tap().disabled, false);
+    assert.ok(!t.includes(`等 ${nameOf(rv, J(rv))}`), 'no 「等 X 開下一輪」 when the table itself can go on');
+    tap().click();
+    assert.deepEqual(tableUi.table, [{ type: 'next' }]);
+    assert.deepEqual(tableUi.sent, [], 'never api.send from the table');
+    assert.equal(rv.act(rv.state.round.explainers[1], { type: 'next', seats: rv.players.map((p) => p.id), table: true }), true,
+      'what tableSend becomes is accepted');
+    // the 諗樣 is on another phone: the table tap would not count for them, so it is not offered
+    const rv2 = mkOne(4, 6);
+    toJudge(rv2);
+    rv2.act(J(rv2), { type: 'pick', target: rv2.state.round.explainers[0] });
+    const others = rv2.players.map((p) => p.id).filter((p) => p !== J(rv2));
+    const elsewhere = onPhone(rv2, null, { mySeats: others });
+    t = elsewhere.show();
+    assert.ok(!button(elsewhere.root, '大家睇完 ✓') && t.includes(`等 ${nameOf(rv2, J(rv2))}`));
+    // a spectator phone (not shared): unchanged, no table tap
+    const spect = onPhone(rv2, null, { shared: false, mySeats: [] });
+    spect.show();
+    assert.ok(!button(spect.root, '大家睇完 ✓'));
+    // the term step at the table: no 「我識呢條」 button there, so the note does not point at one
+    const tm = mkOne(4, 1);
+    const term = onPhone(tm, null);
+    t = term.show();
+    assert.ok(!t.includes('㩒「我識呢條」') && t.includes('出聲'), t);
+  } finally {
+    for (const ui of mounted) ui.destroy();
+    dom.restore();
+  }
+});
+
 test('9upper: srcLabel turns bank URLs into readable labels; decoys are stable per round and seat', async () => {
   assert.deepEqual(S.srcLabel('https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97'),
     { text: '維基百科：深水埗', href: 'https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97' });
@@ -2530,4 +2769,256 @@ test('9upper: srcLabel turns bank URLs into readable labels; decoys are stable p
   assert.ok(S.bluffDecoy(term, '1|p2').includes('深水埗'));
   const lens = new Set(Array.from({ length: 12 }, (_, i) => Array.from(S.bluffDecoy(term, `${i}|p2`)).length));
   assert.ok(lens.size >= 3, 'decoy lengths vary like real explanations do');
+});
+
+// ---------- one phone through the REAL play screen (js/ui/screens/play.js) and this game's real UI ----------
+// A whole-table phone driven by a Sim: state.views / table / focus come from the engine (focus filtered the way the room
+// filters it), app.act feeds the Sim (the room's `seats` / `table` clean-up changes nothing for one device holding every
+// seat). This checks that the engine's focus, the shell's gates and this UI fit together (DESIGN §7.1).
+
+class ShNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === shDoc.body; }
+}
+class ShText extends ShNode {
+  constructor(t) { super(); this.data = String(t); }
+  get textContent() { return this.data; }
+  set textContent(v) { this.data = String(v); }
+}
+class ShEl extends ShNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.cls = new Set();
+    this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.open = false;
+    if (tag === 'template') this.content = { firstElementChild: new ShEl('svg') };   // dom.fromHTML (the dice cup's art)
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get childNodes() { return this.children; }
+  get firstElementChild() { return this.children.find((c) => c instanceof ShEl) ?? null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof ShEl) ?? null; }
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new ShText(v)])); }
+  /** Enough for the shell's menus, which compare outerHTML before they rebuild. */
+  get outerHTML() {
+    return `<${this.tag} class="${this.className}">${this.children.map((c) => (c instanceof ShEl ? c.outerHTML : c.textContent)).join('')}</${this.tag}>`;
+  }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+  removeEventListener() {}
+  setPointerCapture() {}
+  focus() {}
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof ShNode ? k : new ShText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  insertBefore(k, ref) {
+    if (!ref) return this.appendChild(k);
+    k.parentNode?.removeChild(k);
+    const i = this.children.indexOf(ref);
+    k.parentNode = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, k);
+    return k;
+  }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+}
+const shFind = (root, pred) => { const out = []; const w = (n) => { if (n instanceof ShEl && pred(n)) out.push(n); for (const c of n.children ?? []) w(c); }; w(root); return out; };
+const shDoc = {
+  createElement: (t) => new ShEl(t),
+  createTextNode: (t) => new ShText(t),
+  getElementById: (id) => shFind(shDoc.body, (n) => n.attrs.id === id)[0] ?? null,
+  addEventListener() {}, removeEventListener() {},
+  hidden: false,
+  body: new ShEl('body'), head: new ShEl('head'),
+};
+const shShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** What a person could read: hidden subtrees left out. */
+const shText = (n) => (n instanceof ShText ? n.data : !n || n.hidden ? '' : n.children.map(shText).join(''));
+const shTap = (n) => {
+  assert.ok(n, 'nothing to tap');
+  assert.ok(!n.disabled && shShown(n), `tapped a disabled / hidden control (${n.className} "${n.textContent}")`);
+  for (const f of n.listeners.click ?? []) f({ preventDefault() {}, currentTarget: n, target: n });
+};
+/** Hold a cover down and let go (Cover listens for pointerdown / pointerup). */
+const shPeek = (cover) => {
+  assert.ok(cover, 'no cover to hold');
+  for (const f of cover.listeners.pointerdown ?? []) f({ preventDefault() {}, pointerId: 1 });
+  for (const f of cover.listeners.pointerup ?? []) f({ preventDefault() {}, pointerId: 1 });
+};
+const shSettle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+async function withShell(fn) {
+  const saved = { document: globalThis.document, Node: globalThis.Node, window: globalThis.window, raf: globalThis.requestAnimationFrame };
+  globalThis.document = shDoc;
+  globalThis.Node = ShNode;
+  globalThis.window = { addEventListener() {}, AudioContext: undefined, scrollTo() {} };
+  globalThis.requestAnimationFrame = (f) => f();
+  shDoc.body.replaceChildren();
+  const dom = await import('../js/ui/dom.js?v=1');
+  try {
+    return await fn(dom);
+  } finally {
+    dom.disarmConfirm?.();
+    const { PassGate } = await import('../js/ui/components/PassGate.js?v=1');
+    PassGate.hide();
+    for (const [k, v] of Object.entries({ document: saved.document, Node: saved.Node, window: saved.window, requestAnimationFrame: saved.raf })) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+}
+
+/** The whole table on one phone, through the real play screen. `mount` = this game's real ui.mount. */
+async function onePhoneShell(dom, sim, mount) {
+  const { mountPlay } = await import('../js/ui/screens/play.js?v=1');
+  const { filterFocus } = await import('../js/core/room.js?v=1');
+  const seats = sim.players.map((p) => p.id);
+  const players = sim.players.map((p) => ({ ...p, connected: true, deviceId: 'dev', isHost: p.id === 'p1', spectator: false }));
+  const st = {
+    mode: 'local', isHost: true, mySeats: seats.slice(), activeSeat: null, conn: 'online',
+    views: {}, table: null, focus: null, cue: null, waiting: false, hostActions: [], canInk: [],
+    room: {
+      phase: 'playing', gameId: game.meta.id, players, paused: false, narration: { mode: 'voice' }, stalled: [], idle: [], absent: [],
+      singleDevice: true, clockHeld: false, config: sim.config,
+    },
+  };
+  const sync = () => {
+    st.views = Object.fromEntries(seats.map((p) => [p, sim.view(p)]));
+    st.table = sim.view(null);
+    st.focus = filterFocus(sim.focus(), seats);
+  };
+  const acts = [];
+  const holds = [];
+  let screen = null;
+  const render = async () => { sync(); screen.update(st); await shSettle(); screen.update(st); await shSettle(); };
+  const app = {
+    state: st,
+    hostCtl: {
+      next: () => true, voidRound: () => false, pause() {}, resume() {}, autoAct: () => true, markAbsent: () => true, markPresent: () => true,
+      holdClock: (on) => { holds.push(on); return true; },
+    },
+    narration: { setMode() {} },
+    act: (pid, action) => { acts.push({ pid, action }); const ok = sim.act(pid, action); return Promise.resolve(ok); },
+    ink() {}, clock: { now: () => sim.now },
+    setActiveSeat(pid) { if (pid === null ? st.mySeats.length < 2 : !st.mySeats.includes(pid)) return; st.activeSeat = pid; },
+  };
+  const gameMod = { ...game, ui: { mount } };
+  const sh = {
+    app, narrator: { cancel() {}, prime() {}, speak() {} }, cameFrom: null,
+    timer: { button: () => new ShEl('button'), strip: () => new ShEl('div'), available: () => false, open() {}, openBig() {} },
+    soundButton: () => new ShEl('button'),
+    sound: { isOn: () => true, toggle() {}, night() {}, ambient() {} },
+    gameMeta: () => game.meta, cached: () => gameMod, loadGame: async () => gameMod,
+    confirm: (text, node = null, opts = {}) => dom.confirmTap(text, { node, ...opts }),
+    leave: () => false,
+  };
+  screen = mountPlay(sh);
+  shDoc.body.append(screen.el);
+  await render();
+  const gateEl = () => shFind(shDoc.body, (n) => n.cls.has('c-passgate'))[0] ?? null;
+  const gameEl = () => shFind(screen.el, (n) => n.cls.has('play-game'))[0];
+  return {
+    st, acts, holds, render,
+    gate: () => gateEl()?.attrs['data-gate'] ?? null,
+    gateText: () => gateEl()?.textContent ?? '',
+    tapGate: async () => { shTap(shFind(gateEl(), (n) => n.tag === 'button' && n.cls.has('btn-primary'))[0]); await shSettle(); await render(); },
+    game: gameEl,
+    text: () => shText(gameEl()),
+    find: (pred) => shFind(gameEl(), pred),
+    tapIn: async (pred) => { shTap(shFind(gameEl(), (n) => n.tag === 'button' && shShown(n) && pred(n))[0]); await shSettle(); await render(); },
+    chip: () => shFind(screen.el, (n) => n.cls.has('seat-chip'))[0],
+    home: () => shFind(screen.el, (n) => n.cls.has('seat-home'))[0],
+    menu: () => shFind(shDoc.body, (n) => n.cls.has('menu-sheet')).at(-1) ?? null,
+    destroy: () => screen.destroy(),
+  };
+}
+
+test('9upper, one phone through the real play screen: public cards for the 諗樣, a private gate per reader (睇卡 k/n), ✅ 講完, 換人 holds, and one table tap after the reveal in the middle', async () => {
+  await withShell(async (dom) => {
+    const { mount } = await import('../js/games/9upper/ui.js?v=1');
+    const sim = new Sim(game, { n: 4, seed: 3, banks, config: config.defaults(4, undefined, { singleDevice: true }) });
+    const ph = await onePhoneShell(dom, sim, mount);
+    const name = (pid) => sim.players.find((p) => p.id === pid).name;
+    const judge = J(sim);
+    // term: the 諗樣's public card — the table watches, nobody is told to look away
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes(`輪到 ${name(judge)}`) && ph.gateText().includes('睇題目') && !ph.gateText().includes('其他人唔好望'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, judge);
+    await ph.tapIn((n) => n.textContent.includes('開始睇卡'));
+    // read: one private gate per reader, saying how far round the table it is
+    const readers = sim.state.round.readers.slice();
+    for (const [i, r] of readers.entries()) {
+      assert.equal(ph.gate(), 'private', `reader ${i + 1}`);
+      assert.ok(ph.gateText().includes(`交俾 ${name(r)}`) && ph.gateText().includes(`睇卡 ${i + 1}/${readers.length}`), ph.gateText());
+      await ph.tapGate();
+      assert.equal(ph.st.activeSeat, r);
+      await ph.tapIn((n) => n.textContent.startsWith('開始睇卡'));
+      sim.advance();   // the window closes by the clock
+      await ph.render();
+    }
+    // explain: back to the 諗樣, again a public card
+    assert.equal(sim.state.phase, 'explain');
+    assert.equal(ph.gate(), 'public');
+    assert.ok(ph.gateText().includes('解釋'), ph.gateText());
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, judge);
+    const first = sim.state.round.speaker;
+    await ph.tapIn((n) => n.textContent === '✅ 講完 · 下一位');
+    assert.ok(sim.state.round.spoken.includes(first) && !sim.state.round.skipped.includes(first), '#11: ✅ 已講, not ⏭');
+    // #9: 換人 to a 玩家 — they keep the phone (their role card), no auto gate bounces it back to the 諗樣
+    const player = sim.state.round.explainers.find((p) => p !== sim.state.round.speaker);
+    shTap(ph.chip());
+    shTap(shFind(ph.menu(), (n) => n.tag === 'button' && n.textContent.includes(name(player)))[0]);
+    await ph.render();
+    assert.equal(ph.gate(), 'switch');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, player);
+    assert.equal(ph.gate(), null, 'not bounced back');
+    assert.ok(ph.text().includes('㩒住睇返我係咩'), 'the role reminder is reachable');
+    // back to the middle, and the 諗樣 is called again with the public card
+    shTap(ph.home());
+    await ph.render();
+    assert.equal(ph.gate(), 'table');
+    await ph.tapGate();
+    assert.equal(ph.gate(), 'public');
+    await ph.tapGate();
+    assert.equal(ph.st.activeSeat, judge);
+    await ph.tapIn((n) => n.textContent.includes('我決定咗'));
+    const target = sim.state.round.explainers[0];
+    await ph.tapIn((n) => n.cls.has('c-playerpicker-chip') && n.textContent.includes(name(target)));
+    await ph.tapIn((n) => n.textContent === '就係佢！');
+    // the reveal lies in the middle behind the table card; one tap for the whole table, never before the card
+    assert.equal(sim.state.phase, 'reveal');
+    assert.equal(ph.gate(), 'table');
+    assert.equal(ph.st.activeSeat, null);
+    const tableBtn = () => ph.find((n) => n.cls.has('g9-tablenext'))[0];
+    assert.ok(tableBtn() && tableBtn().disabled, 'locked while the 擺返中間 card is up (U5)');
+    assert.ok(ph.text().includes('老實人係'), 'the reveal is the table screen');
+    assert.ok(!ph.text().includes('（你）'));
+    await ph.tapGate();
+    assert.equal(tableBtn().disabled, false);
+    await ph.tapIn((n) => n.cls.has('g9-tablenext'));
+    assert.deepEqual(ph.acts.at(-1).action, { type: 'next', seats: sim.players.map((p) => p.id), table: true });
+    assert.equal(sim.state.round.n, 2, 'the next round');
+    assert.equal(ph.gate(), 'public', 'the next 諗樣 gets their card');
+    assert.ok(ph.gateText().includes(name(J(sim))));
+    ph.destroy();
+  });
 });
