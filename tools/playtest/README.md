@@ -136,3 +136,21 @@ You are one person at a table with one phone. These keep the playtest honest, so
 - `selftest` starts its own session with two seats on a local page, exercises dialogs, reload, metric drift, an outside
   `scale` override and page zoom, stops, and checks no Chrome, daemon, session file or profile is left behind. Run it
   after any change to `pt.mjs`.
+
+## One shared phone (`--shared`)
+
+`node tools/playtest/pt.mjs start <session> --seats p1,p2,p3 --shared` opens ONE phone window for the whole
+table, and `setup` makes it a 一部手機玩 room (`app.local`) holding every seat in table order. Every player
+still uses their own seat id, and a referee decides what each person may see or touch:
+
+- The phone belongs to the app's current seat (「而家睇：X」). Only that person can `see` the screen or
+  `tap` / `hold` / `type` / `draw` / `scroll`. Everyone else gets 「📱 X 拎緊部手機」.
+- A pass gate (「交俾 Y · 其他人唔好望」) is a public card: everybody sees the card (and nothing behind it),
+  only Y can tap it. Tapping it gives Y the phone.
+- At night and in eyes-closed steps nobody looks except the seat the step calls (the gate shows the role
+  prompt); everyone else gets 「🌙 你閉緊眼」 plus what the narrator says.
+- `show <session> <seat>` (holder only) lays the phone face up in the middle: everyone can `see` / `shot` it
+  read-only until it changes hands, a gate appears or night falls. `show <session> <seat> off` takes it back.
+- To hand the phone to someone outside an automatic gate, the holder taps 「而家睇：X 換人 ⇄」 and picks them;
+  they then tap their gate.
+- `wait` waits on what *you* may know (a gate naming you, the phone reaching you, a public change).

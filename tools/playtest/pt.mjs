@@ -130,10 +130,13 @@ function pageSee() {
   }
 
   document.querySelectorAll('[data-pt]').forEach((e) => e.removeAttribute('data-pt'));
+  // A full-screen modal (pass gate, alert dialog) hides everything behind it: read only what it shows.
+  const modal = [...document.querySelectorAll('[aria-modal="true"], .c-passgate')].reverse().find((el) => styleVisible(el) && boxVisible(el));
+  const scope = modal ?? document.body;
   const SEL = 'button, [role=button], a[href], input, textarea, select, summary, canvas';
   const items = [];
   let n = 0;
-  for (const el of document.querySelectorAll(SEL)) {
+  for (const el of scope.querySelectorAll(SEL)) {
     if (!styleVisible(el) || !boxVisible(el)) continue;
     if (el.closest('details:not([open])') && !el.closest('summary')) continue;
     if (el.matches('summary') && el.closest('button')) continue;
@@ -164,7 +167,7 @@ function pageSee() {
 
   // visible text in reading order, one line per block
   const lines = [];
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
   let last = null, buf = '';
   const flush = () => { const t = buf.replace(/\s+/g, ' ').trim(); if (t) lines.push(t); buf = ''; };
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
@@ -193,7 +196,7 @@ function pageSee() {
 // Daemon: Chrome + CDP sessions + HTTP command server
 // ------------------------------------------------------------
 
-async function daemon(session, seats, base, names) {
+async function daemon(session, seats, base, names, shared = false) {
   fs.mkdirSync(SESS_DIR, { recursive: true });
   const dport = await freePort();
   const hport = await freePort();
@@ -277,14 +280,19 @@ async function daemon(session, seats, base, names) {
     }
   });
 
+  const seatNames = Object.fromEntries(seats.map((seat, i) => [seat, names[i] ?? seat]));
+  const nameOf = (seat) => seatNames[seat] ?? seat;
+  // --shared: ONE phone passed around the table. Every seat drives the same window, and the referee below
+  // decides what each person may see or touch (holder, pass gates, eyes closed at night).
   for (const [i, seat] of seats.entries()) {
+    if (shared && i > 0) { phones[seat] = phones[seats[0]]; continue; }
     const { targetId } = await send('Target.createTarget', { url: 'about:blank', newWindow: true, width: W, height: H });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-    const p = phones[seat] = { targetId, sessionId, name: names[i] ?? seat, shots: 0, dialog: null, watchers: new Set(), notices: [], pendingRelease: null, navs: 0, vp: null };
+    const p = phones[seat] = { targetId, sessionId, name: shared ? 'phone' : (names[i] ?? seat), shots: 0, dialog: null, watchers: new Set(), notices: [], pendingRelease: null, navs: 0, vp: null };
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
     await applyEmulation(p);
-    const url = `${base}${base.includes('?') ? '&' : '?'}as=${encodeURIComponent(`${session}-${seat}`)}`;
+    const url = `${base}${base.includes('?') ? '&' : '?'}as=${encodeURIComponent(`${session}-${shared ? 'phone' : seat}`)}`;
     await send('Page.navigate', { url }, sessionId);
   }
 
@@ -311,7 +319,7 @@ async function daemon(session, seats, base, names) {
   };
   const fmt = (seat, s) => {
     const p = phones[seat];
-    const out = [`== ${seat} ${p.name} | ${s.title} | scroll ${s.scroll} ==`];
+    const out = [`== ${seat} ${nameOf(seat)}${shared ? ' | 📱 shared phone' : ''} | ${s.title} | scroll ${s.scroll} ==`];
     for (const n of p.notices.splice(0)) out.push(`[${n.type}] "${n.message}" — ${n.how}`);
     if (s.dialog) {
       const d = s.dialog;
@@ -409,8 +417,69 @@ async function daemon(session, seats, base, names) {
     return `[dialog] ${d.type} ${JSON.stringify(d.message)} — ${accept ? 'accepted' : 'dismissed'}${d.type === 'prompt' && accept ? ` with ${JSON.stringify(text || d.defaultPrompt)}` : ''}\n${fmt(seat, await see(seat))}`;
   };
 
+  // ---------- referee for --shared (one phone, many people) ----------
+  // The phone always belongs to the app's current seat (app.state.activeSeat): only that person may look and touch.
+  // A pass gate (「交俾 X · 其他人唔好望」) is a public card on the table: everyone sees it, only X may tap it.
+  // At night / in an eyes-closed step nobody looks except the seat the step calls. `show` lays the phone face up
+  // in the middle (read-only for everyone) until the phone changes hands, a gate appears or night falls.
+  let shownFor = null;   // the current seat whose screen is face up for everybody
+  const REF_STATE = `(() => { const a = window.__app; const s = a && a.state;
+    if (!s || s.mode !== 'local') return { mode: s ? s.mode : null };
+    const g = [...document.querySelectorAll('.c-passgate')].find((el) => !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0);
+    const view = s.views && s.activeSeat ? s.views[s.activeSeat] : null;
+    return { mode: 'local', phase: s.room.phase, gate: g ? (g.getAttribute('aria-label') || g.innerText.split(String.fromCharCode(10))[0]) : null,
+      current: s.activeSeat || null, focus: s.focus || null, mySeats: s.mySeats || [], night: !!(view && view.night),
+      players: (s.room.players || []).map((p) => ({ id: p.id, name: p.name })) }; })()`;
+  const referee = async (seat) => {
+    const r = await evaluate(seat, REF_STATE);
+    if (!r || r.mode !== 'local') return { level: 'full', r };
+    const pidOf = (name) => r.players.find((p) => p.name === name)?.id ?? null;
+    const nameOfPid = (pid) => r.players.find((p) => p.id === pid)?.name ?? '?';
+    const me = pidOf(nameOf(seat));
+    const order = r.players.map((p) => p.id);
+    const called = order.filter((id) => r.focus?.pids?.includes(id) && r.mySeats.includes(id));
+    const anon = !!r.focus?.anonymous;
+    const dark = r.phase === 'playing' && (anon || r.night);
+    if (r.gate) {
+      shownFor = null;
+      const m = /交俾\s*(.+)$/.exec(r.gate);
+      const target = anon ? (called[0] ?? null) : (m ? pidOf(m[1].trim()) : null);
+      if (me && me === target) return { level: 'full', r };
+      if (dark) return { level: 'none', r, why: `🌙 你閉緊眼（旁白：「${r.gate}」）— 叫到你先好拎部手機` };
+      return { level: 'gate', r, why: `[交接卡] 「${r.gate}」— 張卡人人睇到，只有${target ? ` ${nameOfPid(target)} ` : '被叫嗰個'}可以㩒` };
+    }
+    if (dark) {
+      shownFor = null;
+      if (me && me === r.current && called.includes(me)) return { level: 'full', r };
+      return { level: 'none', r, why: '🌙 你閉緊眼 — 部手機喺枱中間，叫到你先好拎' };
+    }
+    if (me && me === r.current) return { level: 'full', r };
+    if (r.phase === 'results') return { level: 'read', r, why: '（完咗：部手機擺喺中間，大家一齊睇）' };
+    if (shownFor && shownFor === r.current) return { level: 'read', r, why: `（${nameOfPid(r.current)} 將部手機擺咗出嚟俾大家睇）` };
+    shownFor = null;
+    return { level: 'none', r, why: `📱 ${r.current ? nameOfPid(r.current) : '有人'} 拎緊部手機 — 等佢交俾你（佢㩒「換人 ⇄」揀你），或者叫佢 show 俾大家睇` };
+  };
+  const refusal = (seat, g) => `== ${seat} ${nameOf(seat)} | 📱 shared phone ==\n${g.why}`;
+  const readOnly = (seat, s, g) => `${g.why}\n${fmt(seat, { ...s, items: ['(read-only: the phone is not in your hands)'] })}`;
+  const TOUCH_OPS = new Set(['tap', 'hold', 'type', 'key', 'draw', 'scroll', 'dialog', 'reload']);
+
   const ops = {
-    async see({ seat }) { return fmt(seat, await see(seat)); },
+    async see({ seat }) {
+      if (shared) {
+        const g = await referee(seat);
+        if (g.level === 'none' || g.level === 'gate') return refusal(seat, g);
+        if (g.level === 'read') return readOnly(seat, await see(seat), g);
+      }
+      return fmt(seat, await see(seat));
+    },
+    async show({ seat, args }) {
+      if (!shared) return '(show is for --shared tables: every seat already has its own phone)';
+      const g = await referee(seat);
+      if (g.level !== 'full') return refusal(seat, g);
+      const off = String(args[0] ?? '').toLowerCase() === 'off';
+      shownFor = off ? null : g.r.current;
+      return off ? `(${nameOf(seat)} 收返部手機)` : `(${nameOf(seat)} 將部手機擺喺枱中間，大家睇到但係唔可以㩒)`;
+    },
     async tap({ seat, args }) {
       const p = phoneOf(seat);
       if (p.dialog) {   // only the dialog's own buttons can be pressed while it is up
@@ -507,6 +576,22 @@ async function daemon(session, seats, base, names) {
     },
     async wait({ seat, args }) {
       const limit = Math.min(120, Math.max(1, Number(args[0]) || 25)) * 1000;
+      if (shared) {
+        const view = async () => {
+          const g = await referee(seat);
+          if (g.level === 'none' || g.level === 'gate') return { key: g.why, out: () => refusal(seat, g) };
+          const s = await see(seat);
+          return { key: `${g.level}|${s.hash}`, out: () => (g.level === 'read' ? readOnly(seat, s, g) : fmt(seat, s)) };
+        };
+        const first = await view();
+        const t0 = Date.now();
+        while (Date.now() - t0 < limit) {
+          await sleep(500);
+          const v = await view();
+          if (v.key !== first.key) { await sleep(400); return (await view()).out(); }
+        }
+        return `(nothing changed in ${limit / 1000} s)\n${(await view()).out()}`;
+      }
       const first = await see(seat);
       if (first.dialog) return `(nothing will change until the dialog is answered)\n${fmt(seat, first)}`;
       const t0 = Date.now();
@@ -518,6 +603,7 @@ async function daemon(session, seats, base, names) {
       return `(nothing changed in ${limit / 1000} s)\n${fmt(seat, await see(seat))}`;
     },
     async shot({ seat }) {
+      if (shared) { const g = await referee(seat); if (g.level === 'none' || g.level === 'gate') return refusal(seat, g); }
       fs.mkdirSync(path.join(SHOT_DIR, session), { recursive: true });
       const p = phoneOf(seat);
       if (p.dialog) throw new DialogOpen(seat, p.dialog);   // the frozen page cannot be painted behind a native dialog
@@ -529,8 +615,8 @@ async function daemon(session, seats, base, names) {
     async say({ seat, args }) {
       const text = args.join(' ').trim().slice(0, 500);
       if (!text) throw new Error('say what?');
-      fs.appendFileSync(chatFile(session), JSON.stringify({ t: new Date().toISOString(), seat, name: phones[seat]?.name ?? seat, text }) + '\n');
-      return `(${phones[seat]?.name ?? seat} said it out loud)`;
+      fs.appendFileSync(chatFile(session), JSON.stringify({ t: new Date().toISOString(), seat, name: nameOf(seat), text }) + '\n');
+      return `(${nameOf(seat)} said it out loud)`;
     },
     async hear({ args }) {
       const n = Math.min(200, Number(args[0]) || 30);
@@ -547,12 +633,23 @@ async function daemon(session, seats, base, names) {
       const seatsList = Object.keys(phones);
       const host = seatsList[0];
       const boot = `for (let i = 0; i < 80 && !window.__app; i++) await new Promise(r => setTimeout(r, 250)); if (!window.__app) throw new Error('app did not boot');`;
+      if (shared) {   // 一部手機玩: one local room holding every seat, in table order
+        const res = await evaluate(host, `(async () => { ${boot} const a = window.__app; const sleep = (t) => new Promise(r => setTimeout(r, t));
+          if (a.state.mode) { a.leave(); await sleep(300); }
+          a.local({ names: ${JSON.stringify(seatsList.map(nameOf))} }); await sleep(800);
+          ${o.game ? `await a.lobby.selectGame(${JSON.stringify(o.game)}); await sleep(800);` : ''}
+          ${o.config ? `a.lobby.setConfig({ ...a.state.room.config, ...${JSON.stringify(o.config)} }); await sleep(400);` : ''}
+          ${o.narration ? `a.narration.setMode(${JSON.stringify(o.narration)}); await sleep(200);` : ''}
+          return { mode: a.state.mode, players: a.state.room.players.map(p => p.name), holder: a.state.room.players.find(p => p.id === a.state.activeSeat)?.name ?? null,
+            game: a.state.room.gameId, config: a.state.room.config, valid: a.state.room.configValid, summary: a.state.room.configSummary, narration: a.state.room.narration }; })()`);
+        return JSON.stringify(res, null, 1);
+      }
       const code = await evaluate(host, `(async () => { ${boot} const a = window.__app; if (a.state.mode) { a.leave(); await new Promise(r => setTimeout(r, 300)); }
-        await a.host({ names: [${JSON.stringify(phones[host].name)}] }); for (let i = 0; i < 80 && !a.state.code; i++) await new Promise(r => setTimeout(r, 250)); return a.state.code; })()`);
+        await a.host({ names: [${JSON.stringify(nameOf(host))}] }); for (let i = 0; i < 80 && !a.state.code; i++) await new Promise(r => setTimeout(r, 250)); return a.state.code; })()`);
       if (!code) throw new Error('host got no room code');
       for (const seat of seatsList.slice(1)) {
         await evaluate(seat, `(async () => { ${boot} const a = window.__app; if (a.state.mode) { a.leave(); await new Promise(r => setTimeout(r, 300)); }
-          await a.join(${JSON.stringify(code)}, { names: [${JSON.stringify(phones[seat].name)}] }); return a.state.conn; })()`);
+          await a.join(${JSON.stringify(code)}, { names: [${JSON.stringify(nameOf(seat))}] }); return a.state.conn; })()`);
       }
       const res = await evaluate(host, `(async () => { const a = window.__app; const sleep = (t) => new Promise(r => setTimeout(r, t));
         for (let i = 0; i < 40 && a.state.room.players.filter(p => p.connected).length < ${seatsList.length}; i++) await sleep(250);
@@ -593,6 +690,10 @@ async function daemon(session, seats, base, names) {
         const { op, seat, args } = JSON.parse(body || '{}');
         if (!ops[op]) throw new Error(`unknown op ${op}`);
         let out;
+        if (shared && TOUCH_OPS.has(op)) {
+          const g = await referee(seat);
+          if (g.level !== 'full') { res.end(JSON.stringify({ ok: true, out: `(你唔可以掂部手機)\n${refusal(seat, g)}` })); return; }
+        }
         try { out = await ops[op]({ seat, args: args ?? [] }); } catch (e) {
           if (!(e instanceof DialogOpen) || !SCREEN_OPS.has(op)) throw e;
           // a dialog in the way is part of what this phone shows, not a failure
@@ -606,7 +707,7 @@ async function daemon(session, seats, base, names) {
   });
   server.listen(hport, '127.0.0.1');
   chrome.on('exit', finish);
-  fs.writeFileSync(sessFile(session), JSON.stringify({ hport, dport, pid: process.pid, chromePid: chrome.pid, profile, seats: Object.fromEntries(Object.entries(phones).map(([k, v]) => [k, v.name])), base, started: new Date().toISOString() }, null, 1));
+  fs.writeFileSync(sessFile(session), JSON.stringify({ hport, dport, pid: process.pid, chromePid: chrome.pid, profile, seats: seatNames, shared, base, started: new Date().toISOString() }, null, 1));
 }
 
 // ------------------------------------------------------------
@@ -626,12 +727,12 @@ async function call(session, op, seat, args) {
   console.log(j.out);
 }
 
-async function startSession(session, seats, names, base) {
+async function startSession(session, seats, names, base, sharedTable = false) {
   if (fs.existsSync(sessFile(session))) throw new Error(`session ${session} is already running (stop it first)`);
   if (!CHROME) throw new Error('no Chrome/Edge found (set PT_CHROME)');
   // a new table starts with an empty `hear`: an earlier match under the same name keeps its talk, under a UTC-stamped name
   if (fs.existsSync(chatFile(session))) fs.renameSync(chatFile(session), path.join(SESS_DIR, `${session}.chat.${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`));
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '__daemon', session, '--seats', seats.join(','), '--base', base, '--names', names.join(',')], { detached: true, stdio: 'ignore' });
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '__daemon', session, '--seats', seats.join(','), '--base', base, '--names', names.join(','), '--shared', sharedTable ? '1' : '0'], { detached: true, stdio: 'ignore' });
   child.unref();
   for (let i = 0; i < 120 && !fs.existsSync(sessFile(session)); i++) await sleep(250);
   if (!fs.existsSync(sessFile(session))) throw new Error('daemon did not come up');
@@ -769,15 +870,16 @@ async function main() {
 
   if (op === '__daemon') {
     const f = flags(rest);
-    await daemon(session, f.seats.split(','), f.base, f.names.split(','));
+    await daemon(session, f.seats.split(','), f.base, f.names.split(','), f.shared === '1');
     return;
   }
   if (op === 'start') {
-    const f = flags(rest);
+    const sharedTable = rest.includes('--shared');
+    const f = flags(rest.filter((x) => x !== '--shared'));
     const seats = String(f.seats ?? 'p1,p2,p3').split(',').map((s) => s.trim()).filter(Boolean);
     const names = f.names ? String(f.names).split(',') : DEFAULT_NAMES.slice(0, seats.length);
-    await startSession(session, seats, names, f.base ?? DEFAULT_BASE);
-    console.log(`session ${session} up: ${seats.map((s, i) => `${s}=${names[i]}`).join(', ')}`);
+    await startSession(session, seats, names, f.base ?? DEFAULT_BASE, sharedTable);
+    console.log(`session ${session} up${sharedTable ? ' (ONE shared phone)' : ''}: ${seats.map((s, i) => `${s}=${names[i]}`).join(', ')}`);
     return;
   }
   if (op === 'setup') {

@@ -1,0 +1,90 @@
+# 芝士大盜 (`cheese-thief`): one-phone (一部手機玩) playtest review
+
+Session `sp-cheese-thief`, 2026-10-04 05:36–05:54 UTC, local build at `16da24d` (v2). The table used one shared 390×844 headless phone window (`pt.mjs --shared`) with the referee for holder, pass gates and eyes closed. Five AI players: p1 阿聰 (host), p2 阿明, p3 小美, p4 大熊, p5 阿強. Settings: 5 players, official rules (`pick5` off), `hourSec` **15** (the shared-phone default), `discussSec` 300, recap on, narration **靜音** (set by the harness's `--narration silent`, not by the app).
+
+Sources: `docs/research/cheese-thief.md` (its "## Verification" section wins) and `docs/games/cheese-thief.md` (§3.2 night and anti-tell, §4 single-device). Code: `js/games/cheese-thief/{game,ui,script}.js`, `js/ui/screens/{play,results,lobby}.js`, `js/ui/logic.js` (`nightChrome`), `js/ui/night.js`, `css/base.css`, `js/core/{room,client}.js`, `js/ui/components/{RoleCard,Scoreboard,Cover}.js`, `js/ui/dom.js`. Evidence: `room.lastResult`, `room.history`, the live `app.state` (phase `results`, activeSeat `p5`, mode `local`), the table chat (`hear`), and screenshots p1-003 (hour-6 awake screen), p1-004 and p3-005 (results). `node tests/run.mjs cheese-thief` gives 97 passed, 0 failed.
+
+## Verdict
+
+**It finished and the rules engine was right.** All six hours ran. The theft was automatic at hour 6 and nobody saw it, so 5p had no follower (official witness rule). The vote was 阿明 2, 小美 1, 大熊 1, 阿強 1, 阿聰 0. The thief was not in the top set, so 大盜隊贏 and the thief scored +2. The night recap, the debrief and the points all match the rules. Hour gates never named anyone, and the empty hour 4 looked the same as an occupied hour to every sleeper, so night anti-tell on the shared phone held up.
+
+**The one-phone flow is not ready yet. Findings: 1 blocker, 3 major.**
+
+- **Blocker.** At dawn the shared phone simply stays on whoever took the last night gate. It lights up with 「而家睇：阿聰」 and that seat's die, role-card and 📓 covers, with no gate in front. That names the last night holder to the whole table: in this game the thief, and in 6–8p always the thief or a follower. It also leaves their secrets one hold away for anyone who grabs the phone.
+- **Major.**
+  - On one phone the lone-sleepyhead peek is easily lost. 3 of the 4 entitled peeks were lost.
+  - 靜音 cannot work on one phone, and the lobby does not warn about it.
+  - The day phase has no one-phone flow.
+
+## Did it finish?
+
+Yes. `phase = results`, `lastResult.summary = 「大盜隊贏 — 阿聰 逃過一劫」`, and `history` has one entry.
+
+| fact | value |
+|---|---|
+| roles / dice | 阿聰 🧀 6 · 阿明 🐭 5 · 小美 🐭 3 · 大熊 🐭 1 · 阿強 🐭 2 |
+| night (recap) | h1 大熊 · h2 阿強, **peeked 阿聰 (6)** · h3 小美 (no peek) · h4 nobody · h5 阿明 (no peek) · h6 阿聰 stole, unseen |
+| peeks | 4 lone sleepyheads were entitled to one; **1 happened** (阿強). 大熊, 小美 and 阿明 lost theirs because the 15 s window closed |
+| day | dawn ≈ 05:43:51; the phone was on 阿聰 (last night holder); timer ran out ≈ 05:49; 想投票 never got past 1/5 |
+| vote | opened on 小美's screen (she held the phone, no public card), then gates 阿聰 → 阿明 → 大熊 → 阿強; results ≈ 05:53–05:54 |
+| match length | ≈ 17 min (setup 05:36:58 → results ≈ 05:54) |
+
+## Confirmed findings
+
+| # | sev | category | title | detail | root cause | fix | owner |
+|---|---|---|---|---|---|---|---|
+| 1 | **blocker** | tell | Dawn: the phone opens on the last night holder, names them publicly and leaves their covers live | Night ends with no focus, so the shared phone stays on the seat that last took a night gate. The day screen lights up with 「而家睇：阿聰」 and his 🎲, role-card and 📓 covers, with no gate. The table had to ask 「阿聰，交俾我呀」 / 「show 俾大家睇啦」. The chip publicly names the last night holder: the thief in this game (hour 6). In **6–8p the last gated steps are `rec-pick` and `rec-meet`, so the named seat is always the thief or a follower**. In 5p it is whoever woke at the latest occupied hour. | `play.js:343-344`: on null focus, `evaluateFocusGate` only clears `gatedFor` and closes the gate, and never resets `activeSeat`. `play.js:628-635` then paints 「而家睇：${name}」. `client.js:1141-1142`: activeSeat persists across phases. `game.js:399-420`: focus is null at close, rec-close, dawn and day. | On a shared phone, when the game leaves an anonymous or night step for a step with no focus, **put the phone in the middle**. Show a public card with no target (「☀️ 天光喇 — 部手機擺返中間」), then render the table view (`st.table`: timer, 想投票) until a player picks their own seat with 換人. Chip: 「📱 枱中間 — 㩒你個名睇自己」. This needs a 'table' or null activeSeat state, because `currentSeat` currently falls back to `mySeats[0]`. **Check werewolf / onuw on one phone too** (same shell path). | shell: `js/ui/screens/play.js`, `js/core/client.js` |
+| 2 | major | flow | One phone: the lone-sleepyhead peek is easily lost inside the 15 s hour | 3 of 4 entitled peeks were lost. 小美 had already picked 大熊 when the window closed, and the 📓 says 「三點鐘你醒咗。淨係得你醒。芝士仲喺枱上。」 with no peek. The hour gate opens when the window opens, so the following all come out of `hourSec`: pick up the phone, tap the gate, read about 6 lines, tap a name, tap 👆, hold the result cover. A picked but unconfirmed name is dropped silently. The countdown bar **starts full** whenever a seat's UI mounts mid-window, so the holder cannot tell how much time has gone. When the window closes the screen just goes black, with no 「時間到」. AI latency made this worse, but a new or hesitant human hits it too: on one phone the pick-up and the gate are extra steps that own-phone play does not have. | `game.js:266-275` windowMs and enterWindow set the deadline when the window opens, and `play.js:332-340` opens the gate at that same moment. `ui.js:454` needs a second tap to send the peek, and `ui.js:518` clears `selected` when the stage changes. `ui.js:547`: `bartotal = dl - now` on first sight; the night UI is remounted per seat (`play.js:681-684`). `game.js:114` SHARED_HOUR_SEC = 15. | (1) On a shared phone, **make the peek a single tap** (tapping a name sends `peek`). The two-tap gesture only exists to look like a decoy at a glance, and §4 already says nobody taps decoys on a shared phone. (2) Start the bar from the fixed window length: add `windowMs` to `view.step` (it is the same every hour, so no leak). Give the bar `role=progressbar` and `aria-valuetext` 「仲有 N 秒」. (3) Cut the awake card to three lines on a shared phone. (4) Show 「⏰ 時間到 — 部手機擺返中間，閉眼」 on the opaque dim for the seat whose window just ended. (5) Consider a 20 s shared default; it is still fixed for every hour, so anti-tell holds. | game: `ui.js`, `game.js`; shell: `night.js` / `logic.js` |
+| 3 | major | flow | 靜音 on one phone does not work, and the lobby does not warn | Nobody speaks the hours, and the gate tells sleepers 「其他人閉埋眼，唔好望」. With eyes closed you cannot know when your hour comes; with eyes open everyone sees who picks up the phone at which hour. The awake screen contradicts the gate: 「靜音模式：唔使閉眼…望住自己部機，到你個鐘佢會亮。」 (p1-003.png). The waker's own screen also sits under the 70 % 'soft' dim, which slows reading inside 15 s. The lobby shows only the generic note 「呢隻遊戲靠旁白推進…」. (This run's 靜音 came from the harness; the app defaults to 語音, `client.js:620-627`. A real table can still pick 靜音.) | `lobby.js:444`: generic note only, no check for a one-phone room. `logic.js:166`: in silent mode the in-focus seat on a shared phone is still dimmed 'soft'. `ui.js:530-533`: own-phone silent help line. | In a `local` room (more than one seat on the device) for a game with `narration: 'required'`, hide 🔇 靜音 or warn on the lobby and the start screen: 「一部手機玩唔好用靜音：大家閉埋眼就聽唔到報時 — 用🔊語音，或者搵個唔玩嘅人📜讀稿」. If 靜音 is kept, do not dim the in-focus seat on a shared phone, and reword the help line. | shell: `lobby.js`, `logic.js`; game: `ui.js` |
+| 4 | major | flow | Day phase has no one-phone flow | Day focus is null, so nothing walks the phone round the table. 「我哋夠鐘投票」 counts only when each seat taps it on its own screen. Only 小美 did (1/5), so the vote waited for the 5:00 timer; with `discussSec` 0 the table would have to pass the phone 5 times or the host would have to use ⏭. The timer is visible only to the holder (小美 first saw 1:07). The vote opened on 小美's screen with no public card, because she was first in focus, and in 靜音 nobody else knew: chat at 05:51:37 has 「大家準備好投票咗冇?」, two minutes into the vote. Reading the 📓 needed spoken requests for the phone (05:45:01, 05:45:07, 05:51:11). | `game.js:533`, `:809-811`: the day ends on `allPresent(dayReady)` or the timer. `game.js:399-420`: no day focus. `play.js:344`: no gate when the holder is the first seat in focus. `ui.js` buildDay: timer and count only on the seat screen. | On a shared phone, **夠鐘投票 is one table decision**: any holder's tap starts the vote. Either the shell sends `day-ready` for every seat on the device, or the engine accepts `{type:'day-ready', all:true}` when the room says one device holds every seat. With finding 1's middle-of-table screen, the public screen shows the big timer, 想投票, and 「想睇自己嘅牌／📓？㩒你個名」 (a gated 換人 that returns to the middle). Show a public start card when a phase begins with the holder in focus (「🗳️ 投票開始 — 交俾 X」). | game: `game.js`, `ui.js`; shell: `play.js` |
+| 5 | minor | text | Own-phone wording throughout a shared-phone game | Night 靜音 help: 「望住自己部機，到你個鐘佢會亮」. Roll tip: 「到時你部機會自動亮起」 and 「偷睇骰喺你自己部機做…唔使掂人哋部機 — 夜晚其他人部機係黑嘅」. Ready lead: 「部手機放喺面前，唔好鎖機」, shown just as the phone is passed on. Sleepyhead role card and rules.quick: 「可以喺自己部機偷睇一粒骰」 (p2 also found the card text long to read while holding it). Rules night section: 「喺自己部手機㩒佢個名」. 「手機做啲乜」: 「睇住自己部機」 and 「每一步都…㩒一下大掣」. Begin narration: 「手機放喺面前唔好鎖」. There is no 「一部手機玩」 rules section. | `ui.js:91-96`, `:168-170`, `:530-533`; `game.js:47`, `:59`, `:77`, `:101`, `:105`; `script.js:43`; `play.js:103-108` ctxFor has no shared flag. | Add `shared` to the play ctx (`mySeats.length > 1`) and use one-phone variants (「其他人閉埋眼，你拎起部手機睇」, 「睇完擺返部手機喺枱中間」). Make the role and rules text device-neutral (「喺手機揀一個人偷睇」). Add a rules section 「一部手機玩」: phone in the middle, pick it up only when your hour is called, put it back, use 換人 by day. | game: `ui.js`, `game.js`, `script.js`; shell: `play.js` |
+| 6 | minor | text | Results and over screens call the last voter 「你」 on a shared phone | The scoreboard reads 「阿強（你）」 to everyone reading the phone in the middle. The game's over screen banner (「🎉 你贏咗！」 / 「😿 你輸咗」) and its debrief 「（你）」 also follow the last voter. | `results.js:286` `me: st.activeSeat ?? st.mySeats?.[0]`; `Scoreboard.js:50`; `ui.js:753`, `:765` (api.me = active seat). | On a shared phone pass `me: null` (neutral 「🧀 完咗」 plus the summary). | shell: `results.js`; game: `ui.js` |
+| 7 | minor | handover | 換人 ⇄ stays live in secret night steps; a stray tap strands the waker | Found by reading the code; not hit in this run. The waker sees 「🤫 而家係秘密步驟 換人 ⇄」 (p1-003). Switching to any seat moves the phone to a seat outside focus: the opaque dim covers everything, including the chip, and swallows taps. The waker is never re-gated because `gatedFor` already matches, so they lose the rest of the hour. | `play.js:628-635` (chip enabled when anon); `play.js:334-335`; `logic.js:168` + `base.css:1251` (opaque dim, pointer-events auto). | Disable the seat chip during `focus.anonymous` on a shared phone, or clear `gatedFor` on a 'switch' during an anonymous step. | shell: `play.js` |
+| 8 | minor | flow | Shared-hour walk follows seat order inside one fixed window | Found by reading the code; not exercised (nobody shared an hour). 2–3 seats awake at once share one 15 s window and are walked in **seat order**. A 5p thief who owes a pick among 2+ witnesses can come last, and the pick is then made at random at window end. Witnesses who went before the thief see 「大盜揀咗 X」 only in 📓. | `play.js:311-315` focusSeatsHere re-sorts by seat order; `game.js:414`; owed pick settled by `ctx.rng` at window end. | Walk in `focus.pids` order and have the engine put `s.pending.by` first. Re-check the shared hour length for a 3-seat walk. | shell: `play.js`; game: `game.js` |
+| 9 | polish | ux | On a shared phone, a waker with nothing to pick still gets the decoy grid and decoy line | The thief sees four tappable names and 「每一步都㩒，咁就冇人聽得出邊個醒」. That is right on own phones (anti-tell) but misleading on one phone (p1 asked what the names were for). | `ui.js:350` ACK_DECOY, `ui.js:520-522` | With `ctx.shared` and nothing to pick: dim the names, small line 「睇完就㩒，部手機擺返中間」. | game: `ui.js` |
+| 10 | polish | ux | 🔓 鎖定角色牌 is unexplained and resets for every seat on one phone | The lock keeps the card closed. On a shared phone it lives in the mount-local `local` object, so a seat switch drops it, and any holder can unlock it. | `ui.js:863`; UI mounted per seat (`play.js:681-684`) | Add a one-line help (「鎖住張牌，唔會㩒錯打開」). Hide it or keep it per seat on a shared phone. | game: `ui.js`; shell: `RoleCard.js` |
+| 11 | polish | ux | Vote gates show no progress | The table sees only 「交俾 X · 其他人唔好望」 for 1–2 min per voter. | `play.js:350` fixed subtitle | On a shared phone, 「其他人唔好望 · 已投 2/5」 (already public in `view.progress`). | shell: `play.js` |
+
+## What worked on one phone
+
+- Pass gates during roll and vote always named the right next seat in table order. A gate is a public card with nothing behind it.
+- Hour gates name the hour, never a person (「擲到六點嘅請拎起部手機」). The empty hour 4 showed the same decoy gate, so from a sleeper's seat hours 1–6 looked identical.
+- Awake screens were correct: 「淨係得你醒」, the cheese state, the automatic theft for the thief, and a peek offered only to lone sleepyheads with four other names.
+- The vote excluded self, used secretChoice, auto-walked the phone and revealed all votes at once.
+- The results screen (votes, why, 今局冇共犯, the full 🌙 夜晚重溫, every role and die, the scoreboard) was excellent for the debrief.
+
+## Rejected findings
+
+| reported by | claim | why rejected |
+|---|---|---|
+| p2 | Discussion deadlocks, no auto vote; 20+ min; ~37 min game | The 5:00 timer ended the day (≈ 05:44 → 05:49), and the match took ≈ 17 min. The real problem is kept as finding 4. |
+| p2 | Peek result invisible / the peek was recorded | p2 (阿明, h5) never peeked: the recap reads 「五點鐘：阿明 醒咗」. The peek p2 quotes is 阿強's. Cause: finding 2. |
+| p4 | Night-dim overlay blocks the peek buttons | By design: the seat in focus gets 'soft' dim (taps pass through); a seat outside focus on a shared phone gets 'opaque', which swallows taps on purpose (`logic.js:166-168`, `base.css:1251`). p4's taps came after the window closed. Merged into finding 2. |
+| p4 | No "done" button; the hour ends without action | Doc §3.2 anti-tell: 「Windows never end early because someone finished」. The countdown problem is part of finding 2. |
+| p4 | Peek duration could leak | Fixed window length; actions never move the deadline (`game.js:266-275`). |
+| p5 | 「你唔可以掂部手機」 while the peek succeeded | The peek was sent inside the window; the later `hold` came after it closed, and the referee was right. AI latency. |
+| p3 | 🔁 re-check line shown in a 5p game with no follower | Doc §3.3: the line is the same everywhere and 「never says whether anything changed」. Hiding it would reveal that the thief woke alone. |
+| p3 | Previous voter's choice visible | secretChoice (D6); the gate replaces the ballot. |
+| p1 | 靜音 is the default in a one-phone room | Harness `--narration silent`; the app default is voice (`client.js:620-627`). The design gap is kept as finding 3. |
+| p1 | The thief's name buttons suggest a peek | Own-phone anti-tell by design (doc §3.2). The one-phone wording is kept as finding 9. |
+| p3/p4 | No countdown on the awake screen | `.ct-bar` exists (`ui.js:395`); the console is text-only. The real defect (it restarts full) is in finding 2. |
+| all | Die value not readable | The app sets `aria-label 「N 點」` while the cover is open (`dom.js:115-121`, `:135-151`, `Cover.js:71-76`). This is a pt.mjs gap. |
+
+## AI artifacts (kept out of the findings, or noted inside them)
+
+- Two LLM tool round trips take about 10–20 s, which is close to the whole 15 s hour. That made the peek loss worse (finding 2 is kept because a slow human hits it too).
+- p2's "≈ 37 min" and p5's "60 s waits per hour" are LLM time perception; the real night was ≈ 6 min including setup hand-offs.
+- 小美 held the phone ≈ 3 min by day, and several players asked for it at once. That is AI pacing, but it shows why the day needs the one-phone flow in finding 4.
+- The workaround of running `hold` in the background and taking a parallel `shot` to read the die was only needed because of a console gap (see tooling).
+
+## Tooling notes (`tools/playtest/pt.mjs`)
+
+1. **Die and image labels.** In `pageSee`'s text walk, print `[role=img][aria-label]` elements inline (for example `🎲 6 點`). The app already labels an open die, so `hold` would then show the value without a parallel `shot`.
+2. **Progress bars.** Print `[role=progressbar]` and `.ct-bar` (fill `scaleX`) as `[bar] ≈40% left`, so a player can plan inside a window. Better still, the app gives the bar `role=progressbar` (finding 2).
+3. **`wait` for eyes-closed seats (shared).** The key is `g.why`, which embeds the narrator's gate text, so `wait` returns on every hour's decoy gate and narration line (p1 needed about 12 calls to reach hour 6). For level `none`, key on (phase, a gate naming me, I am the holder) and print the hour number.
+4. **`shot` returned a 2×2 tiled frame** (p3-005.png, results). p1-004.png of the same screen a minute earlier was fine. Five seats drive one CDP target at once in `--shared` mode: serialize commands per phone (a mutex in the daemon), and check the PNG size after capture, retaking if it does not match 390×844 @2x.
+5. **Referee message after a window closes.** 「(你唔可以掂部手機) 🌙 你閉緊眼 — 部手機喺枱中間」 is correct, but it could add 「（你個鐘已經完咗）」 when the refused seat was the one called a moment ago. Then players do not report it as an app error.
+
+## Stopped
+
+`node tools/playtest/pt.mjs stop sp-cheese-thief` → `stopping`.
