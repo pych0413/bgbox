@@ -447,7 +447,7 @@ export const rules = {
     },
     {
       title: '骰盅',
-      body: '1 至 5 粒骰，可以揀 d4、d6、d8、d10、d12 或 d20。㩒「搖我嘅骰」或者搖部手機就擲骰，結果得你自己見到。\n㩒「鎖定骰盅」會凍結你嘅點數：你仲睇得，但係搖極都唔會變，咁就冇人可以偷偷重搖。只有主持可以解鎖。\n如果房主熄咗「玩家可以自己搖骰」，就淨係主持可以全體搖。',
+      body: '1 至 5 粒骰，可以揀 d4、d6、d8、d10、d12 或 d20。㩒「搖我嘅骰」或者搖部手機就擲骰，結果得你自己見到。\n㩒「鎖定點數」會凍結你嘅點數：你仲睇得，但係搖極都唔會變，咁就冇人可以偷偷重搖。只有主持可以解鎖。鎖之前搖過幾多次，名單上會見到（🎲 已搖 ×3）。\n如果房主熄咗「玩家可以自己搖骰」，就淨係主持可以全體搖。',
     },
     {
       title: '主持嘅掣',
@@ -479,6 +479,7 @@ function say(state, text) {
 function rollSeat(state, seat, rng) {
   seat.dice = Array.from({ length: state.dice.count }, () => rollDie(rng, state.dice.sides));
   seat.rollSeq += 1;   // counts rolls, not values: a repeat number still reads as a new roll
+  seat.rolls = (seat.rolls ?? 0) + 1;   // this round's rolls — public (🎲 已搖 ×3), so a roll-till-it-fits shows
   seat.diceLocked = false;
 }
 
@@ -568,7 +569,7 @@ const HANDLERS = {
     host: true,
     allowed: (s) => playingSeats(s).length > 0,
     run: (s, seat, a, ctx) => {
-      for (const p of playingSeats(s)) rollSeat(s, p, ctx.rng);
+      for (const p of playingSeats(s)) { rollSeat(s, p, ctx.rng); p.rolls = 1; }   // a fresh start for everybody
       s.revealDice = false;
       say(s, '全體搖骰 🎲');
     },
@@ -619,7 +620,7 @@ const HANDLERS = {
     run: (s, seat, a, ctx) => {
       s.round += 1;
       deal(s, ctx.rng);
-      for (const p of Object.values(s.seats)) { p.dice = null; p.diceLocked = false; }
+      for (const p of Object.values(s.seats)) { p.dice = null; p.diceLocked = false; p.rolls = 0; }
       s.revealDice = false;
       say(s, `第 ${s.round} 回合：派咗牌`);
     },
@@ -654,6 +655,8 @@ function publicSeat(state, seat) {
     playing: seat.playing,
     seenRole: seat.seenRole,
     rolled: seat.dice != null,
+    // how many times this round (the public log already says each roll; this makes it visible at a glance)
+    rolls: seat.rolls ?? (seat.dice != null ? 1 : 0),
     roleLocked: seat.roleLocked,
     diceLocked: seat.diceLocked,
   };
@@ -761,7 +764,7 @@ export const engine = {
       const was = Object.hasOwn(last, p.id) && typeof last[p.id] === 'string' ? state.roles.find((r) => r.name === last[p.id]) : null;
       state.seats[p.id] = {
         id: p.id, name: p.name, playing: c.hostPlays || p.id !== host,
-        roleId: was ? was.id : null, dice: null, rollSeq: 0,
+        roleId: was ? was.id : null, dice: null, rollSeq: 0, rolls: 0,
         roleLocked: false, diceLocked: false, seenRole: false,
       };
     }
@@ -865,6 +868,7 @@ export const engine = {
       const role = state.roles.find((r) => r.id === state.seats[id].roleId);
       if (role) carry.roles[id] = role.name;
     }
-    return { winners: [], summary: `通用派牌：玩咗 ${state.round} 回合`, lines, carry };
+    // noScore: the app keeps no score here — the shell says 「邊個贏由你哋講」 instead of a winners list
+    return { winners: [], noScore: true, summary: `通用派牌：玩咗 ${state.round} 回合`, lines, carry };
   },
 };

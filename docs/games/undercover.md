@@ -137,7 +137,7 @@ the shell shows it only when the player taps 💡.
 
 | Screen | Shows |
 |---|---|
-| Every player phone | 「你嘅詞語」 + the hold-to-peek word card (RoleCard, 🃏 + the word in the same place and size for everybody; the white card's card says 「白板」) + button 「記住喇 ✓」. Under it 「已有 3 / 6 人記住咗 · 等緊：阿明、阿強」 |
+| Every player phone | 「你嘅詞語」, 「睇清楚你個詞，記住就㩒「記住喇」。」 + the hold-to-peek word card (RoleCard, 🃏 + the word in the same place and size for everybody; the white card's card says 「白板」; the card's own hint 「㩒住先睇到，放手即刻冚返」 is the only peek instruction) + 「🔓 鎖定詞語卡」 + button 「記住喇 ✓」. Under it 「已有 3 / 6 人記住咗 · 等緊：阿明、阿強」 |
 | After 記住喇 | the card **locks itself** (sound `lock`, same for every role); text 「✓ 你已經記住咗」; 「想再睇一次？㩒 🔓 解鎖，睇完記得再鎖返。」 |
 | Table / spectator | 「大家逐個睇緊自己嘅詞語，你係旁觀者。」 + the same progress line |
 | Header (all) | 「今局：平民 5 · 臥底 1 · 白板 1」 (counts are announced) and the seat strip |
@@ -157,7 +157,7 @@ differs; no vibration; the same sounds for every role; the tap timing of 記住�
 
 | Screen | Shows |
 |---|---|
-| All phones | the speaker, big: 「阿強 講緊…」 (own phone, own turn: 「輪到你講！」 with a pulse); 「第 1 輪 · 第 1 / 6 個」; the order list with ✓ for those who have spoken; a Timer if `speakSec`; the one rule the app states as a rule: 「一人一句。唔可以講出個詞，或者入面任何一個字。」 (PK: 「平票嘅人再講多一句：點解你唔係臥底？」) |
+| All phones | the speaker, big: 「阿強 講緊…」 (own phone, own turn: 「輪到你講！」 with a pulse); 「第 1 輪 · 第 1 / 6 個」; the order list with ✓ for those who have spoken and 💤 for a turn skipped while away (`speak.spoke` leaves those out); a Timer if `speakSec`; the one rule the app states as a rule: 「一人一句。唔可以講出個詞，或者入面任何一個字。」 (PK: 「平票嘅人再講多一句：點解你唔係臥底？」) |
 | Speaker's phone | button 「講完喇 ▸」 |
 | Others | no button. Eliminated: 「你已經出局，聽住大家講。」 |
 | Header (all) | seat strip: current speaker highlighted, spoken dimmed, eliminated struck through with their role emoji (if revealed) |
@@ -180,24 +180,38 @@ Transitions: 講完喇 (any seat may send it — see §5.2 — but the step id `
 last → `discuss` (round) or the PK vote (pk). Timer: each turn gets a fresh `speakSec`; time out skips the turn.
 `@next` after the cue is done skips the speaker.
 
+**Absent seats (D4, decision 2026-10-04).** A seat the host marked absent (💤 on the seat strip and in the order
+list) has its clue turn skipped — when its turn comes, or at once if it is speaking when marked. It stays alive.
+
 ### 3.4 discuss
 
-All phones: 「自由討論」「大家都講完喇。邊個最似臥底？傾夠就開始投票。」 + Timer if `discussSec` + button
-「開始投票 🗳️」 (any seat). Narration: 「大家都講完喇。自由討論一下，邊個最似臥底？限時 90 秒。」
-Hint: 「自由傾：邊個最可疑？傾夠就㩒「開始投票」。」 (eliminated: 「你出咗局，聽就得，唔好爆料。」)
-Opening the vote early is harmless: ballots are secret and nothing resolves until everyone has voted.
+All phones: 「自由討論」「大家都講完喇。邊個最似臥底？傾夠就開始投票。」 + Timer if `discussSec`, and on every phone the
+same count 「想開始投票 2 / 3 · 阿明、小美」.
+
+**Who ends the discussion (decision D2, 2026-10-04; playtest finding #1).** The vote opens when a **majority of the
+alive seats at the table** (more than half of the alive, present seats) has tapped 「開始投票 🗳️」. Alive seats have
+the button; after the tap it reads 「✓ 你想開始投票」. **Eliminated seats have no button** and the engine refuses
+their `start-vote` (an eliminated undercover cannot cut the talk short to protect a teammate); they see
+「你已經出局，由未出局嘅人決定幾時投票。」. Absent seats neither tap nor count. The host can force it (⏭: the first
+press finishes the narration line, the second opens the vote), and `discussSec` still ends it.
+Narration: 「大家都講完喇。自由討論一下，邊個最似臥底？限時 90 秒。」
+Hint: 「自由傾：邊個最可疑？傾夠就㩒「開始投票」。」; after tapping 「你想開始投票，等過半數人都㩒。」 (eliminated:
+「你出咗局，聽就得，唔好爆料。」)
 
 ### 3.5 vote
 
 | Screen | Shows |
 |---|---|
-| Voter | 「投票」 / PK: 「PK 投票」; the VotePanel (pick, then 確定 — two taps); myVote can be changed (改票) until the last ballot lands; 「已投 3 / 6 · 仲未投：…」; Timer if `voteSec` |
+| Voter | 「投票」 / PK: 「PK 投票」; the VotePanel (pick, then 確定 — two taps) with `secretChoice` (decision D6): the button reads 「確定投票」 and your own phone then says 「已投 ✓」, never whom; myVote can be changed (改票) until the last ballot lands; 「已投 3 / 6 · 仲未投：…」; Timer if `voteSec` |
 | Tied seat under `pkVoters: others` | 「你喺 PK 入面，今次唔使投，等其他人決定。」 |
 | Eliminated | 「你已經出局，唔使投票，睇住大家投。」 |
 | Table | 「大家投緊票。」 + progress |
 
 Rules: one ballot per voter; no self-vote; no dead target; abstain only if `abstain`. **Ballots stay private**
 (views carry only `done` seats). The vote resolves the moment the last voter has voted, or on the timer.
+Absent seats (D4) do not vote: they are left out of `voters` when the vote opens, and a voter marked absent while
+its ballot is still missing is dropped (which may close the vote); a ballot already cast stays. An absent seat is
+still a candidate — the table may vote it out. Marked back (`@present`) in time, it votes in the open ballot.
 Narration: 「投票時間。揀一個你覺得係臥底嘅人，全部人投晒就會公佈。」
 Hints: 「揀一個你覺得係臥底嘅人，再㩒確定。」 (PK: 「喺平票嗰幾個入面揀一個你覺得係臥底嘅，再㩒確定。」); after voting
 「投咗喇，等其他人。未公佈之前仲可以改。」; tied non-voter 「你喺 PK 入面，今次由其他人投。」; eliminated 「你出咗局，唔使投。」
@@ -210,16 +224,20 @@ Everyone sees: the tally bars with **who voted for whom** (VotePanel reveal), th
 - 「平票！阿華、阿明 同票」 + 「佢哋要再講多一句，然後全部人只喺佢哋之間再投一次。」 (`others`: 「…然後其他人只喺佢哋之間再投一次。」)
 - 「{why}，今輪冇人出局」 + 「剩低嘅人繼續下一輪。」, why = 「冇人投票」 / 「冇人過半數」 / 「全部人同票」 / 「平票」 (tie = skip) / 「PK 再平票」
 
-Sound `reveal` (the same whoever is out). Button 「繼續 ▸」 for every seat (disabled 1.5 s after the result
-appears so a stray tap cannot skip it); the result also moves on by itself after 20 s. Eliminated player's own
-phone adds 「你出局喇。可以繼續睇住，但唔使再講嘢或者投票。」
+Sound `reveal` (the same whoever is out). **睇完 (decision D3, 2026-10-04; playtest finding #2):** every present
+seat, eliminated ones included, has 「睇完 ✓」 (disabled 1.5 s after the result appears so a stray tap cannot skip
+it); after the tap it reads 「✓ 睇完 · 等緊其他人」. Every phone shows the same 「睇完 3 / 5 · 等緊：阿明、小美」. The game
+moves on when **every present seat** has tapped; the host's ⏭ forces it (first press finishes the narration line).
+**There is no auto-advance any more** (the old 20 s timer is gone), so the vote record stays as long as the table
+argues over it. Eliminated player's own phone adds 「你出局喇。可以繼續睇住，但唔使再講嘢或者投票。」
 
 Narration: 「投票結果：阿明 出局。佢係平民。」 (without 「佢係…」 when roles are hidden);
 「平票！阿華、阿明 同票。佢哋要再講多一句，然後大家再投一次，只可以投佢哋其中一個。」 (`others`: 「…然後其他人再投一次…」);
 「冇人過半數，今輪冇人出局，繼續下一輪。」 etc.
 
-Hints: out 「睇下邊個出局、邊個投咗邊個，然後㩒「繼續」。」; the eliminated seat 「你出局喇，之後唔使講嘢同投票，可以繼續睇。㩒「繼續」。」;
-PK 「平票：佢哋再講一句，之後再投一次。㩒「繼續」。」; nobody out 「今輪冇人出局，㩒「繼續」開下一輪。」
+Hints: out 「睇下邊個出局、邊個投咗邊個，睇完㩒「睇完」。」; the eliminated seat 「你出局喇，之後唔使講嘢同投票。睇完㩒「睇完」。」;
+PK 「平票：佢哋再講一句，之後再投一次。睇完㩒「睇完」。」; nobody out 「今輪冇人出局。睇完㩒「睇完」，齊人就開下一輪。」;
+after tapping 「睇完喇，等其他人睇完就繼續。」
 
 **White card guess.** If the player voted out is a white card and `blankGuess` is on (the guess runs **before** the win
 check, even when this elimination would hand the civilians the win):
@@ -238,7 +256,10 @@ check, even when this elimination would hand the civilians the win):
 - Narration: 「投票結果：阿強 出局。白板 阿強，你有一次機會，用手機打出你估嘅平民詞語。」 then
   「白板 阿強 估「芥辣」，唔啱。」 / 「…，估中喇！」
 
-After 繼續: win check already decided (`elim.next`): `over`, or PK, or the next round.
+An absent white card (D4) forfeits its guess: voted out while away, or marked away while it is guessing, it counts
+as 「冇作答」 (a wrong guess).
+
+After 睇完 (everybody) or the host's ⏭: win check already decided (`elim.next`): `over`, or PK, or the next round.
 
 ### 3.7 Ties and empty rounds (research "Voting & resolution", verified)
 
@@ -298,7 +319,9 @@ One phone passed around (or the table's phone with several seats). Everything ru
 - **deal**: `focus` = the unconfirmed seats → 「交俾 阿明 / 其他人唔好望」 → peek → 記住喇 (locks) → the gate moves to the next seat.
 - **speak / discuss**: public. The phone sits in the middle; the screen says whose turn it is and the button reads
   「阿強 講完喇 ▸」 — anybody presses it. "Your turn" highlights are not shown (the seat on screen is just whoever
-  held the phone last).
+  held the phone last). 「開始投票」 sends `seats: [the other seats on this phone]`, so one tap counts for every alive seat
+  the phone holds (a phone holding the whole table opens the vote with one tap, as before).
+- **elim**: 「睇完」 also sends the phone's other seats — the result is read once for all of them.
 - **vote**: `focus` = seats yet to vote → sequential private ballots, each behind a gate. After the last ballot the
   result is public on the same screen.
 - **white card guess**: `focus` = that seat → hand the phone to the white card to type.
@@ -318,6 +341,10 @@ One phone passed around (or the table's phone with several seats). Everything ru
 | `words` | **PRIVATE** seat → word, `null` for the white card |
 | `pair` | **PRIVATE until `over`**: `{civ, und, accept[], cat, level}` |
 | `ready`, `round`, `starter`, `firstSeat`, `roundOrder`, `order`, `turn`, `speakKind` | speaking |
+| `absent` | public: seat → true, marked absent by the host (D4); never waited on |
+| `want` | public: seat → true, tapped 開始投票 in this discussion (D2) |
+| `skipped` | public: the seats whose clue turn this speaking pass skipped because they were away (D4) |
+| `seen` | public: seat → true, tapped 睇完 on this result (D3) |
 | `ballots`, `candidates`, `voters`, `voteKind` | **PRIVATE while the vote is open** (only `done` seats are exposed) |
 | `pkCands`, `elim`, `outs`, `history`, `noElimStreak` | results; `outs[].role` is disclosed per `revealRole`; `elim.reason` / `history[].reason` = why nobody went out |
 | `win` | `{ side: civilians \| infiltrators \| blank, why, c, i, guesser? }`; why = allOut / parity / last3 / last2 / civ2 / civ1 / wipe / guess |
@@ -329,30 +356,36 @@ One phone passed around (or the table's phone with several seats). Everything ru
 |---|---|---|---|
 | `{type:'ready'}` | any seat | `deal`, not yet ready | mark ready; all ready → round 1 |
 | `{type:'done', at?}` | any seat | `speak`; `at` (the view's `speak.id`) equals the current step when given | next speaker / `discuss` / PK vote |
-| `{type:'start-vote'}` | any seat | `discuss` | open the vote |
+| `{type:'start-vote', seats?}` | an alive, present seat | `discuss`, not yet tapped | count it (and `seats`: the other alive seats of a passed-round phone); a majority of the alive, present seats → open the vote |
 | `{type:'vote', target}` | a voter | `vote`; target ∈ candidates, ≠ self; `null` only with `abstain` | set (overwrite) the ballot; last ballot resolves |
 | `{type:'guess', word}` | the eliminated white card | `elim` with a pending guess; `word` is a string | judge; settle |
-| `{type:'continue'}` | any seat | `elim`, no pending guess | next step |
+| `{type:'continue', seats?}` | a present seat | `elim`, no pending guess, not yet tapped | 睇完: count it (and `seats`); every present seat → next step |
 | host `@cue-done {id}` | host | id = the current cue | remember the cue as done |
 | host `@next` | host | always | first press completes the current cue; a second press skips the step (speaker / discussion / vote / guess / result / deal) |
 | host `@auto {pid}` | host | | `autoAct` for that seat |
+| host `@absent {pid}` | host | a seat, not already absent, game not over; refused if it would leave fewer than 2 alive seats at the table | D4: mark absent — the deal stops waiting on it, its speaking turn is skipped, it leaves the vote (unless it already voted) and the 開始投票 majority, a pending white-card guess is forfeited, the result stops waiting for its 睇完 |
+| host `@present {pid}` | host | an absent seat | back: waited on again from its next action; in an open vote it becomes a voter again |
 
-Anything else (wrong phase, unknown seat, malformed payload, `__proto__` types…) returns the state unchanged;
-nothing throws. "Any seat" for the public controls is deliberate: a shared phone acts as whichever seat is on
-screen. The UI decides who is shown the button; `done` carries `at` against double taps.
+Anything else (wrong phase, unknown seat, an absent seat, malformed payload, `__proto__` types…) returns the state
+unchanged; nothing throws. "Any seat" for 講完喇 is deliberate: a shared phone acts as whichever seat is on screen.
+The UI decides who is shown the button; `done` carries `at` against double taps.
 
 ### 5.3 advance / deadlines
 
-`state.deadline` is set by: each speaker turn (`speakSec`), discussion (`discussSec`), vote (`voteSec`), a pending
-guess (90 s), the result screen (20 s). `advance` = the same as the host skipping that step. Views carry
-`deadline` + `timerLabel` (『發言』『討論』『投票』『估詞』); the 20 s result timer has no label, so no clock is shown.
+`state.deadline` is set by: each speaker turn (`speakSec`), discussion (`discussSec`), vote (`voteSec`) and a pending
+guess (90 s). The result screen has **no** deadline (D3: it waits for 睇完). `advance` = the same as the host skipping
+that step. Views carry `deadline` + `timerLabel` (『發言』『討論』『投票』『估詞』).
 
 ### 5.4 focus / autoAct / legalActions / cue
 
-- `focus`: `deal` → unconfirmed seats; `vote` → voters yet to vote; `elim` with a pending guess → the white card;
-  otherwise `null` (speaking and discussion are public — gating a shared phone for them would be silly). No `anonymous`.
-- `autoAct`: ready / done / start-vote / vote (abstain if allowed, else a random legal target) / empty guess /
-  continue. `null` when the seat has nothing to do.
+- `focus`: `deal` → unconfirmed present seats; `vote` → voters yet to vote; `elim` with a pending guess → the white
+  card; otherwise `null` (speaking and discussion are public — gating a shared phone for them would be silly). No
+  `anonymous`. Never an absent seat.
+- `blocking` (stall detection): the unconfirmed seat, the speaker, a missing ballot, the guessing white card, and a
+  present seat that has not tapped 睇完 — **never the discussion**, where the table talks at its own pace and a
+  majority decides. Never an absent seat.
+- `autoAct`: ready / done / start-vote (an alive seat that has not tapped) / vote (abstain if allowed, else a random
+  legal target) / empty guess / continue (a seat that has not tapped 睇完). `null` when the seat has nothing to do, or is absent.
 - `legalActions`: exactly the actions that change the state. The guess lists a wrong example and the right word
   (fuzzer only; never sent to a phone).
 - `cue` ids are unique per step: `deal`, `speak:{round}:{round|pk}:{turn}`, `discuss:{round}`,
@@ -363,13 +396,15 @@ guess (90 s), the result screen (20 s). `advance` = the same as the host skippin
 
 Public part, identical for every seat (**tested: `view(A)` minus `me` and `hint` deep-equals the table view**): `phase`,
 `title`, `subtitle`, `round`, `counts`, `flags` (`revealRole`, `abstain`, `blankGuess`, `guessWinner`, `tie`, `pkVoters`,
-`majority`, `win`), `seats`, `outs`, `history` (with ballots and `reason`), `deadline`/`timerLabel`, and
-`deal` / `speak` / `vote` / `elim` / `over` for the phase. `me` (own seat only): `id`, `alive`, `word` (`null` for
+`majority`, `win`), `seats`, `absent` (D4: the seats marked absent, shown as 💤), `outs`, `history` (with ballots and
+`reason`), `deadline`/`timerLabel`, and `deal` (`total` = present seats) / `speak` / `discuss` (`{ want, need, total }`, D2)
+/ `vote` / `elim` (with `seen: { who, total }`, D3) / `over` for the phase. `me` (own seat only): `id`, `alive`, `word` (`null` for
 the white card), `ready`, and — only for the white card — `blank: true`; in a vote `canVote`, `targets`, `myVote`;
 `mustGuess` for the white card with a pending guess. Views never alias engine state.
 
 `hint` (per seat, also on the table view): one line, ≤ 48 characters, built **only from public facts** about the seat
-(phase, alive, ready, whose turn, voter or not, voted or not, the announced white card) — never from a role or a word.
+(phase, alive, ready, whose turn, voter or not, voted or not, the announced white card, tapped 開始投票 / 睇完, absent)
+— never from a role or a word.
 Tested: two seats with the same public facts always get the same hint, whatever their roles.
 
 ### 5.6 Result and explanation (BACKLOG #10)
@@ -383,7 +418,7 @@ card. `summary`: 「平民贏！平民詞「泳池」，臥底詞「沙灘」」
    「平民淨係剩 2 個，臥底方仲有人喺度，臥底方贏。」 / 「平民淨係剩 1 個，臥底方贏。」 / 「平民全部出局，臥底方贏。」 /
    「白板 阿強 出局之後估中平民嘅詞語「泳池」，臥底方即刻贏。」 (or 「…，白板自己贏。」)
 2. 「詞語：平民「泳池」，臥底「沙灘」（地方）」
-3. 「平民：…」, 「臥底：…（佢哋一開始都唔知自己係臥底）」, 「白板：…」
+3. 「平民：…」, 「臥底：…（佢一開始都唔知自己係臥底）」 (two or more: 「佢哋」), 「白板：…」
 4. the mis-votes that decided it: 「平民投走咗 2 個自己人：阿明、阿強。」 or 「平民一個自己人都冇投錯！」
 5. with `revealRole` off: 「今局出局嗰陣冇公開身份，下面係真身份。」
 6. one line per vote: 「第 1 輪：阿龍 出局（臥底，5 票）」, 「第 2 輪：阿華、阿明 同票，要 PK」, 「第 2 輪 PK：阿明 出局（平民，4 票）」,
@@ -396,8 +431,10 @@ card 3 (a lone white card with no undercover is paid like an undercover; a solo 
 
 `result().carry = { special: [pids of every undercover and white card] }`. `setup({ ..., carry })` reads it only when
 `cfg.antiStreak` is on: those seats go to the back of the shuffled queue, so they are civilians whenever at least
-`U + B` other seats exist (otherwise as many as possible are skipped). Garbage `carry` is ignored. **The room does not
-pass `carry` yet** (§8.1); until it does the toggle has no effect.
+`U + B` other seats exist (otherwise as many as possible are skipped). Garbage `carry` is ignored. The room keeps the
+last `result().carry` per game id in host memory (`js/core/room.js` `carries`) and the Session hands it to the next
+`setup` of the same game, so the toggle works across games of one evening. It is part of the host's saved room
+(`snapshot().carries`), so a host refresh / resume of the same room keeps it; a new room starts with none.
 
 ## 6. Edge cases → tests (`tests/undercover.test.mjs`)
 
@@ -443,6 +480,10 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
 | fuzz: 9 head-counts × 140 seeds × 14 config variants; dealt counts = config; PK voters never empty; no vote at T = 2; rare branches reached | random legal play ends … |
 | every listed legal action changes the state (all 14 variants) | every action the engine lists is accepted … |
 | determinism, JSON state, `act` returns its input | the same seed …; engine state is plain JSON …; act returns … |
+| D2: dead seats cannot end the talk; a majority of the alive seats opens the vote; host / timer force; a shared phone taps for its seats | D2: dead seats cannot open the vote … |
+| D3: the result waits for every present seat's 睇完, no clock; host forces; shared phone | D3: the result stays until … |
+| D4: absent — deal, clue turn skipped (also mid-turn), majority shrinks, no vote (ballot kept if cast), still a candidate, @present re-joins the vote; absent white card forfeits; refusals; fuzz | D4: an absent seat skips …; D4: an absent white card …; D4: fuzz … |
+| UI: 開始投票 n / need, 睇完 n / m after the lock, `secretChoice`, 💤, `seats` on a shared phone | undercover ui D2/D3/D6 … |
 
 ## 7. 貼心 touches
 
@@ -457,7 +498,11 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
 - **Open ballots after the vote** (who voted for whom) — it ends the 「我冇投你」 arguments.
 - **PK is explained in words** on the result screen, so nobody asks 「點解要再投？」
 - **Forced elimination after two level rounds** so a stubborn table cannot loop forever; the screen says why.
-- **Dead players stay in**: they keep their word card, see everything, and can press 繼續.
+- **Dead players stay in**: they keep their word card, see everything, and tap 睇完 like everyone else (but cannot
+  end the discussion).
+- **Nobody is rushed**: the talk ends when most of the living want to vote, and a result stays until everyone has
+  read it (「睇完 3 / 5」); the host can always push on.
+- **A phone that walks off does not stop the game**: the host marks it 💤 — its turn is skipped and nobody waits for it.
 - **A dead phone does not stop the game**: stall prompt → 「代佢做」; host `@next` skips a step; timers are optional.
 - **Words the group has seen are not repeated** across evenings (bag), and the 日本旅行 / 港式地道 categories fit the trip.
 - **The results screen teaches**: both words, who held what, how many own people the civilians threw out, every vote,
@@ -467,10 +512,10 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
 
 ## 8. Framework requests / notes for other tasks
 
-1. **Room: carry between games (anti-streak, BACKLOG #20).** Keep `res.carry` from `engine.result()` per `gameId`
-   (host memory is enough; it must not survive a page reload into another group) and pass it to the next
-   `engine.setup({ ..., carry })` for the same game; `tests/lib.mjs` `Sim` could take a `carry` option too. Without it
-   `antiStreak` does nothing (the test deals with `carry` by hand).
+1. **Room: carry between games (anti-streak, BACKLOG #20) — done.** The room keeps `res.carry` from `engine.result()`
+   per `gameId` in host memory (`js/core/room.js`: `this.carries`, stored when a game ends, passed to the next
+   `Session` for the same game), the Session passes it to `engine.setup({ ..., carry })`, and `tests/lib.mjs` `Sim`
+   takes a `carry` option. So `antiStreak` works from the second game of an evening on.
 2. **💡 sheet (U1).** Read `view.hint` for 「而家要做咩」. In this game nobody knows their own role (only the white card,
    `view.me.blank`), so 「你嘅角色」 should list the three `rules.roles` lines (each has 「點贏：」) rather than one role; never
    pick a role from hidden state.
@@ -478,14 +523,23 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
    with the wrong 揾 for 搵); game meta is 「人人一個詞，臥底嘅詞好似但唔同 — 一句嘢形容，投出臥底！」.
 4. **Lobby: show 已用 / 總數.** `config.fields(cfg, n, { bag })` fills `field.stats` for the `categories` field; the
    lobby should pass its bag (`bag.stats` throws if the bank is not loaded, which `fields` swallows).
-5. **RoleCard lock label** 「🔒 已鎖 — 㩒一下解鎖」 / 「🔓 鎖定角色牌」 say "角色牌" (role card); a word card would like
-   `lockLabels` or neutral wording (「鎖定張卡」). Cosmetic.
+5. **RoleCard lock label.** RoleCard words its lock for a role card (「🔓 鎖定角色牌」, the refusal toast 「角色牌鎖咗，要自己
+   解鎖」, the label 「㩒住睇角色牌」); nobody here holds a role, only a word. Done game-side for now (playtest polish): the UI
+   passes no `onLockToggle`, so RoleCard's own lock button stays hidden, and renders its own 「🔓 鎖定詞語卡」 /
+   「🔒 已鎖 — 㩒一下解鎖」 under the card with RoleCard's classes; a press on the locked cover is refused in a capture
+   listener on the card (「詞語卡鎖咗，要自己解鎖」) before the cover can say 角色牌; the cover's aria-label is set to
+   「㩒住睇詞語」 after every paint (and passed as `ariaLabel`). RoleCard has since grown `lockLabels` ({ lock, locked,
+   message }) and `ariaLabel` (#39, another task); once that lands, this can shrink to passing `onLockToggle` + those props
+   (the test then has to catch the refusal toast from the Cover, not `api.toast`). Tested with the real RoleCard on a fake DOM.
 6. **Bank aliases.** `undercover-words.js` entries could carry `alias: { a: [...], b: [...] }` (other spellings / Mandarin
    forms) which the engine accepts as a correct white-card guess. There is no 簡 ↔ 繁 folding.
 7. **`api.players[].deviceId`** is used to detect a shared phone; the UI treats a missing id as "own phone".
 8. The game assumes the shell keeps mounting one game UI per seat (as `screens/play.js` does) and re-mounts it when the seat changes.
 9. Host `@next` is "complete the cue first": the shell's 「下一步」 needs two presses while the current cue is still being
    narrated. If the shell wants a single press it should call `cueDone(id)` itself before `next()`.
+10. **Absent seats (D4).** The engine takes `{ type: '@absent', pid }` / `{ type: '@present', pid }` as HOST and publishes
+   `view.absent: [pid]` (the same in every view) — the shell may show 💤 on its own seat chips from it. `engine.blocking`
+   is false for absent seats; `legalActions` / `autoAct` are empty for them.
 
 ## 9. Open issues / deliberate deviations
 
@@ -500,6 +554,9 @@ pass `carry` yet** (§8.1); until it does the toggle has no effect.
 - **Hiding the white card's existence** ("hardcore") and **counts-only vote reveal** are not offered.
 - `secondTie: ELIMINATE_ALL_TIED / HOST_DECIDES` from the research pseudo-code are not offered (no source in the variants list).
 - No foul button / clue log: clue legality is social (research: out of scope for v1).
+- **Ending the discussion (D2).** The research says the discussion runs "until the host ends it" (or a timer). The app
+  lets a majority of the alive seats end it, and the host can still force it — a table of friends usually has no
+  separate host. A shared phone's tap counts for every alive seat it holds.
 - No multi-round session scoring beyond what the room already does with `points` (one game = one round).
 
 ## 10. QA pass 2026-10-03 UTC — rule check against the verified research

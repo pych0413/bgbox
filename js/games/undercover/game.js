@@ -10,15 +10,22 @@
 //   deal     everybody looks at their own word, taps 記住喇
 //   speak    alive players describe their word one by one (kind 'round'),
 //            or the tied candidates defend themselves (kind 'pk')
-//   discuss  free talk; any seat can open the vote, or the optional timer does
+//   discuss  free talk; the vote opens once a MAJORITY of the alive (present) seats has tapped 開始投票
+//            (D2, 「想開始投票 2 / 3」), or the optional timer runs out, or the host's 下一步
 //   vote     secret ballots (kind 'main', or 'pk' among the tied)
-//   elim     the result: tallies, who is out (+ role), the white-card guess
+//   elim     the result: tallies, who is out (+ role), the white-card guess; it stays until every present
+//            seat has tapped 睇完 (D3, 「睇完 3 / 5」) or the host's 下一步 — no clock moves it on
 //   over     everything is revealed; result() is non-null only here
 //
+// Absent seats (D4, host `{ type: '@absent', pid }`, back with '@present'): public (💤), never waited on —
+// no 記住喇, their clue turn is skipped, they do not vote or count towards the 開始投票 majority, no 睇完.
+// They stay in the game: still alive, still a candidate, still on their side.
+//
 // Decisions where DESIGN.md §15 is silent (also in docs/games/undercover.md):
-//  - Public control actions (`done`, `start-vote`, `continue`) are accepted from
-//    ANY seat, not only the speaker: on a shared phone the device acts as whoever
-//    is active, which is rarely the speaker. The UI decides who is shown the button.
+//  - `done` (講完喇) is accepted from ANY seat, not only the speaker: on a shared phone the device acts as
+//    whoever is active, which is rarely the speaker. The UI decides who is shown the button.
+//    `start-vote` (alive seats) and `continue` (睇完) count per seat; `seats: [pid]` lets a passed-round phone
+//    tap once for every seat it holds.
 //  - `@next` first completes the current narration cue (so a human narrator in
 //    read-aloud mode pressing 下一步 after reading does not skip a step), and only
 //    a second press skips the step (speaker, discussion, vote, guess, result).
@@ -37,8 +44,12 @@
 //  - result.points = { pid: n } for winners only.
 // ============================================================
 
-import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=20261003171423';
-import WORDS from '../../data/undercover-words.js?v=20261003171423';   // only to list the categories; words are drawn through ctx.bag
+import { HOST, ACT, seatOrder, shuffle, pick, nextSeat, tally } from '../../core/engine-kit.js?v=1';
+
+// D4 host actions (the literals, so this engine does not depend on engine-kit having them)
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
+import WORDS from '../../data/undercover-words.js?v=1';   // only to list the categories; words are drawn through ctx.bag
 
 // ---------- constants ----------
 
@@ -46,7 +57,6 @@ const BANK = 'undercover';
 const MIN_N = 4;
 const MAX_N = 12;
 const GUESS_MS = 90_000;        // the eliminated white card has this long to type a guess
-const RESULT_MS = 20_000;       // the result screen moves on by itself after this
 const MAX_NO_ELIM = 2;          // after this many rounds in a row without an elimination, force one
 const MAX_SECS = 600;
 const SIZE_CUTOFF = 7;          // size_based (3DM 565026): fewer than 7 at the start → last 2, otherwise last 3
@@ -117,9 +127,10 @@ export const rules = {
       title: '點玩',
       body: '1. 每人用自己部手機睇詞語，記住就㩒「記住喇」，張卡會自動鎖住。\n'
         + '2. 隨機揀一個人開始（任何人都可以係第一個），跟座位次序，每人講一句形容自己個詞。\n'
-        + '3. 大家都講完，自由討論：邊個最似臥底？\n'
+        + '3. 大家都講完，自由討論：邊個最似臥底？過半數未出局嘅人㩒「開始投票」就投票（出咗局嘅人唔可以㩒）。\n'
         + '4. 一齊投票，最多票嗰個出局，並公開身份。\n'
-        + '5. 未分勝負就再嚟一輪，由上輪第一個講嘅人下一位開始，淨係未出局嘅人講嘢同投票。',
+        + '5. 睇完結果全部人㩒「睇完」；未分勝負就再嚟一輪，由上輪第一個講嘅人下一位開始，淨係未出局嘅人講嘢同投票。\n'
+        + '有人走開咗：房主可以將佢設做「唔喺度」（💤）。輪到佢講就跳過，佢唔使投票，但仍然喺局入面，可以被投出局。',
     },
     {
       title: '形容嘅規矩',
@@ -559,6 +570,14 @@ const nameOf = (s, pid) => s.names[pid] ?? String(pid);
 const names = (s, pids) => pids.map((p) => nameOf(s, p)).join('、');
 const isSeat = (s, pid) => typeof pid === 'string' && s.seats.includes(pid);
 const isAlive = (s, pid) => s.alive.includes(pid);
+const isAbsent = (s, pid) => !!s.absent?.[pid];
+const presentSeats = (s) => s.seats.filter((p) => !isAbsent(s, p));
+/** Alive and at the table: who speaks, votes and decides when the vote opens. */
+const activeSeats = (s) => s.alive.filter((p) => !isAbsent(s, p));
+/** 開始投票 opens the vote at more than half of the alive, present seats (D2). */
+const wantNeed = (s) => Math.floor(activeSeats(s).length / 2) + 1;
+/** Valid extra seats a passed-round phone sends along with its own tap. */
+const alsoSeats = (s, a) => (Array.isArray(a?.seats) ? a.seats.filter((x) => isSeat(s, x)) : []);
 const isBlank = (s, pid) => s.roles[pid] === 'blank';
 const isInfiltrator = (s, pid) => s.roles[pid] === 'undercover' || s.roles[pid] === 'blank';
 const roleLabel = (r) => ROLE_NAME[r] ?? '?';
@@ -624,11 +643,18 @@ function beginSpeaking(s, ctx, kind, order) {
   s.speakKind = kind;
   s.order = order.slice();
   s.turn = 0;
-  setTimer(s, ctx, s.cfg.speakSec, '發言');
+  s.skipped = [];                                   // clue turns passed over because the seat was away (D4)
+  settleTurn(s, ctx);
 }
 
 function endTurn(s, ctx) {
   s.turn++;
+  settleTurn(s, ctx);
+}
+
+/** The turn lands on the next speaker who is at the table (an absent seat's clue turn is skipped, D4). */
+function settleTurn(s, ctx) {
+  while (s.turn < s.order.length && isAbsent(s, s.order[s.turn])) (s.skipped ??= []).push(s.order[s.turn++]);
   if (s.turn < s.order.length) { setTimer(s, ctx, s.cfg.speakSec, '發言'); return; }
   if (s.speakKind === 'round') beginDiscuss(s, ctx);
   else beginVote(s, ctx, 'pk');
@@ -636,23 +662,45 @@ function endTurn(s, ctx) {
 
 function beginDiscuss(s, ctx) {
   s.phase = 'discuss';
+  s.want = {};
   setTimer(s, ctx, s.cfg.discussSec, '討論');
+}
+
+/** `pids` tapped 開始投票: the vote opens at a majority of the alive, present seats. Dead seats have no say. */
+function wantVote(s, ctx, pids) {
+  let any = false;
+  for (const p of pids) {
+    if (!isAlive(s, p) || isAbsent(s, p) || s.want[p]) continue;
+    s.want[p] = true;
+    any = true;
+  }
+  if (any) checkWant(s, ctx);
+  return s;
+}
+
+function checkWant(s, ctx) {
+  const n = activeSeats(s).filter((p) => s.want?.[p]).length;
+  if (n >= wantNeed(s)) beginVote(s, ctx, 'main');
 }
 
 function beginVote(s, ctx, kind) {
   s.phase = 'vote';
   s.voteKind = kind;
   s.ballots = {};
-  if (kind === 'main') {
-    s.candidates = s.alive.slice();
-    s.voters = s.alive.slice();
-  } else {
-    s.candidates = s.pkCands.slice();
-    // ALL_ALIVE (default): everybody votes, the tied only for each other. NON_TIED: only the others vote.
-    // Never empty: a PK needs fewer tied players than alive ones (a full-table tie skips it).
-    s.voters = s.cfg.pkVoters === 'others' ? s.alive.filter((p) => !s.pkCands.includes(p)) : s.alive.slice();
-  }
+  s.candidates = kind === 'main' ? s.alive.slice() : s.pkCands.slice();
+  s.voters = s.alive.filter((p) => mayVote(s, p));
   setTimer(s, ctx, s.cfg.voteSec, '投票');
+  if (s.voters.every((v) => v in s.ballots)) resolveVote(s, ctx);    // nobody at the table can vote (D4)
+}
+
+/**
+ * Who votes in this ballot: alive and present (absent seats do not vote, D4). ALL_ALIVE PK (default): everybody,
+ * the tied only for each other. NON_TIED: only the others. A PK needs fewer tied players than alive ones (a
+ * full-table tie skips it), so it has voters unless the others are all away.
+ */
+function mayVote(s, p) {
+  if (!isAlive(s, p) || isAbsent(s, p)) return false;
+  return s.voteKind === 'main' || s.cfg.pkVoters !== 'others' || !s.pkCands.includes(p);
 }
 
 const targetsFor = (s, pid) => s.candidates.filter((c) => c !== pid);
@@ -701,6 +749,7 @@ function resolveVote(s, ctx) {
   }
 
   s.elim = e;
+  s.seen = {};                                      // a fresh 睇完 count for this result (D3)
   s.history.push({
     seq: e.seq, round: e.round, voteKind: e.voteKind, outcome: e.kind, out: e.out, reason: e.reason,
     cands: e.cands.slice(), forced: e.forced, random: e.random, counts, ballots, guess: null,
@@ -725,6 +774,7 @@ function eliminate(s, ctx, e) {
     e.guess = { pending: true, word: null, correct: null, timeout: false };
     s.deadline = (ctx?.now ?? 0) + GUESS_MS;
     s.timerLabel = '估詞';
+    if (isAbsent(s, e.out)) settleGuess(s, ctx, '', true);    // voted out while away (D4): no answer, a wrong guess
   } else {
     finishElim(s, ctx, e);
   }
@@ -741,8 +791,26 @@ function finishElim(s, ctx, e) {
     w = winnerNow(s);
   }
   if (w) { s.win = w; e.next = 'over'; } else e.next = e.kind === 'pk' ? 'pk' : 'round';
-  s.deadline = (ctx?.now ?? 0) + RESULT_MS;
+  // D3: the result stays until every present seat has tapped 睇完 (or the host's 下一步) — no clock moves it on
+  s.seen = {};
+  s.deadline = null;
   s.timerLabel = null;
+}
+
+/** `pids` tapped 睇完 on the result: once every present seat has, the game moves on. */
+function markSeen(s, ctx, pids) {
+  let any = false;
+  for (const p of pids) {
+    if (!isSeat(s, p) || isAbsent(s, p) || s.seen[p]) continue;
+    s.seen[p] = true;
+    any = true;
+  }
+  if (any) checkSeen(s, ctx);
+  return s;
+}
+
+function checkSeen(s, ctx) {
+  if (presentSeats(s).every((p) => s.seen?.[p])) leaveElim(s, ctx);
 }
 
 function leaveElim(s, ctx) {
@@ -885,6 +953,7 @@ function currentCue(s) {
 function hintFor(s, pid) {
   const seat = isSeat(s, pid);
   const alive = seat && isAlive(s, pid);
+  if (seat && isAbsent(s, pid) && s.phase !== 'over') return '房主當咗你唔喺度；返咗嚟就叫房主加返你。';
   switch (s.phase) {
     case 'deal':
       if (!seat) return '大家逐個睇緊自己個詞。';
@@ -901,6 +970,7 @@ function hintFor(s, pid) {
     }
     case 'discuss':
       if (seat && !alive) return '你出咗局，聽就得，唔好爆料。';
+      if (seat && s.want?.[pid]) return '你想開始投票，等過半數人都㩒。';
       return '自由傾：邊個最可疑？傾夠就㩒「開始投票」。';
     case 'vote':
       if (!seat) return '大家投緊票，投晒先公佈。';
@@ -911,10 +981,11 @@ function hintFor(s, pid) {
     case 'elim': {
       const e = s.elim;
       if (e.guess?.pending) return seat && e.out === pid ? '你係白板！打出你估嘅平民詞語，估中就贏。' : '等白板估平民個詞。';
-      if (seat && e.out === pid) return '你出局喇，之後唔使講嘢同投票，可以繼續睇。㩒「繼續」。';
-      if (e.kind === 'pk') return '平票：佢哋再講一句，之後再投一次。㩒「繼續」。';
-      if (e.kind === 'none') return '今輪冇人出局，㩒「繼續」開下一輪。';
-      return '睇下邊個出局、邊個投咗邊個，然後㩒「繼續」。';
+      if (seat && s.seen?.[pid]) return '睇完喇，等其他人睇完就繼續。';
+      if (seat && e.out === pid) return '你出局喇，之後唔使講嘢同投票。睇完㩒「睇完」。';
+      if (e.kind === 'pk') return '平票：佢哋再講一句，之後再投一次。睇完㩒「睇完」。';
+      if (e.kind === 'none') return '今輪冇人出局。睇完㩒「睇完」，齊人就開下一輪。';
+      return '睇下邊個出局、邊個投咗邊個，睇完㩒「睇完」。';
     }
     case 'over': return '完咗！睇下兩個詞係乜、邊個係臥底。';
     default: return '';
@@ -1005,6 +1076,7 @@ function view(s, pid) {
       win: s.cfg.win,
     },
     seats: s.seats.map((id) => ({ id, alive: isAlive(s, id) })),
+    absent: s.seats.filter((id) => isAbsent(s, id)),        // public (D4): shown as 💤, never waited on
     outs: s.outs.map((o) => ({ pid: o.pid, round: o.round, role: disclose(s, o.role) })),
     history: s.history.map((h) => ({
       seq: h.seq, round: h.round, voteKind: h.voteKind, outcome: h.outcome, out: h.out, reason: h.reason ?? null,
@@ -1020,10 +1092,16 @@ function view(s, pid) {
   if (s.relaxed) v.relaxed = true;
   switch (s.phase) {
     case 'deal':
-      v.deal = { ready: s.seats.filter((p) => s.ready[p]), total: s.seats.length };
+      v.deal = { ready: s.seats.filter((p) => s.ready[p]), total: presentSeats(s).length };
+      break;
+    case 'discuss':
+      // D2: who wants to vote now (public), and how many it takes — more than half the alive seats at the table
+      v.discuss = { want: activeSeats(s).filter((p) => s.want?.[p]), need: wantNeed(s), total: activeSeats(s).length };
       break;
     case 'speak':
-      v.speak = { id: speakId(s), kind: s.speakKind, order: s.order.slice(), turn: s.turn, pid: s.order[s.turn] ?? null, spoke: s.order.slice(0, s.turn) };
+      v.speak = { id: speakId(s), kind: s.speakKind, order: s.order.slice(), turn: s.turn, pid: s.order[s.turn] ?? null,
+        // who has given a clue (a turn skipped while away, D4, is not one)
+        spoke: s.order.slice(0, s.turn).filter((p) => !(s.skipped ?? []).includes(p)) };
       break;
     case 'vote':
       v.vote = {
@@ -1036,6 +1114,8 @@ function view(s, pid) {
       break;
     case 'elim':
       v.elim = elimView(s);
+      // D3: who has tapped 睇完 (present seats only); the step moves on when all have
+      v.elim.seen = { who: presentSeats(s).filter((p) => s.seen?.[p]), total: presentSeats(s).length };
       break;
     case 'over':
       v.over = overView(s);
@@ -1087,7 +1167,7 @@ function result(s) {
     ? `平民「${s.pair.civ}」，臥底「${s.pair.und}」${s.pair.cat ? `（${s.pair.cat}）` : ''}`
     : `平民「${s.pair.civ}」${s.pair.cat ? `（${s.pair.cat}）` : ''}，今局冇臥底`;
   const lines = [reasonText(s), `詞語：${wordsLine}`, `平民：${names(s, civs)}`];
-  if (unds.length) lines.push(`臥底：${names(s, unds)}（佢哋一開始都唔知自己係臥底）`);
+  if (unds.length) lines.push(`臥底：${names(s, unds)}（${unds.length > 1 ? '佢哋' : '佢'}一開始都唔知自己係臥底）`);
   if (blanks.length) lines.push(`白板：${names(s, blanks)}`);
   // Mis-votes are what decides this game: say how many civilians the table threw out.
   const civOut = s.outs.filter((o) => o.role === 'civilian').map((o) => o.pid);
@@ -1122,8 +1202,56 @@ function hostAct(s, a, ctx) {
       const act = autoAct(s, a.pid, ctx);
       return act ? engine.act(s, { pid: a.pid, action: act }, ctx) : s;
     }
+    case ABSENT: return markAbsent(s, a.pid, ctx);
+    case PRESENT: return markPresent(s, a.pid);
     default: return s;
   }
+}
+
+/**
+ * Host `@absent` (D4): stop waiting on the seat for the rest of the game. It stays alive and on its side, can still
+ * be voted out, but no longer speaks, votes, counts towards the 開始投票 majority or has to tap 睇完.
+ * Refused (unchanged state) when it would leave fewer than two alive seats at the table, or once the game is over.
+ */
+function markAbsent(s, pid, ctx) {
+  if (!isSeat(s, pid) || isAbsent(s, pid) || s.phase === 'over') return s;
+  if (isAlive(s, pid) && activeSeats(s).length - 1 < 2) return s;
+  s.absent = { ...(s.absent ?? {}), [pid]: true };
+  switch (s.phase) {
+    case 'deal':
+      if (presentSeats(s).every((p) => s.ready[p])) startRound(s, ctx);
+      break;
+    case 'speak':
+      if (s.order[s.turn] === pid) { (s.skipped ??= []).push(pid); endTurn(s, ctx); }
+      break;
+    case 'discuss':
+      checkWant(s, ctx);
+      break;
+    case 'vote':
+      // a ballot already cast stays; a missing one is no longer waited on
+      if (!(pid in s.ballots)) s.voters = s.voters.filter((v) => v !== pid);
+      if (s.voters.every((v) => v in s.ballots)) resolveVote(s, ctx);
+      break;
+    case 'elim':
+      if (s.elim.guess?.pending && s.elim.out === pid) settleGuess(s, ctx, '', true);
+      else if (!s.elim.guess?.pending) checkSeen(s, ctx);
+      break;
+    default:
+  }
+  return s;
+}
+
+/** Host `@present`: the seat is back — it speaks, votes and is waited on again from the next thing it can do. */
+function markPresent(s, pid) {
+  if (!isSeat(s, pid) || !isAbsent(s, pid) || s.phase === 'over') return s;
+  const next = { ...s.absent };
+  delete next[pid];
+  s.absent = next;
+  // back in time for an open ballot: it votes in this one too
+  if (s.phase === 'vote' && mayVote(s, pid) && !s.voters.includes(pid)) {
+    s.voters = s.seats.filter((p) => s.voters.includes(p) || p === pid);
+  }
+  return s;
 }
 
 /** Host skipped the current step: the same thing the clock running out would do. */
@@ -1146,11 +1274,11 @@ function skipStep(s, ctx) {
 }
 
 function autoAct(s, pid, ctx) {
-  if (!isSeat(s, pid)) return null;
+  if (!isSeat(s, pid) || isAbsent(s, pid)) return null;
   switch (s.phase) {
     case 'deal': return s.ready[pid] ? null : { type: 'ready' };
     case 'speak': return s.order[s.turn] === pid ? { type: 'done', at: speakId(s) } : null;
-    case 'discuss': return { type: 'start-vote' };
+    case 'discuss': return isAlive(s, pid) && !s.want?.[pid] ? { type: 'start-vote' } : null;
     case 'vote': {
       if (!s.voters.includes(pid) || pid in s.ballots) return null;
       if (s.cfg.abstain) return { type: 'vote', target: null };
@@ -1159,7 +1287,7 @@ function autoAct(s, pid, ctx) {
     }
     case 'elim':
       if (s.elim.guess?.pending) return s.elim.out === pid ? { type: 'guess', word: '' } : null;
-      return { type: 'continue' };
+      return s.seen?.[pid] ? null : { type: 'continue' };
     default: return null;
   }
 }
@@ -1224,6 +1352,9 @@ export const engine = {
       relaxed,
       counts0,
       alive: seats.slice(),
+      absent: {},                               // pid → true: the host marked the seat absent (public, D4)
+      want: {},                                 // discuss: pid → true, tapped 開始投票 (public, D2)
+      seen: {},                                 // elim: pid → true, tapped 睇完 (public, D3)
       ready: {},
       round: 1,
       starter,                                  // first speaker of round 1
@@ -1253,13 +1384,13 @@ export const engine = {
     const a = input?.action;
     if (!a || typeof a !== 'object' || typeof a.type !== 'string') return s;
     if (pid === HOST) return hostAct(s, a, ctx);
-    if (!isSeat(s, pid)) return s;
+    if (!isSeat(s, pid) || isAbsent(s, pid)) return s;     // an absent seat acts again once the host marks it back
 
     switch (a.type) {
       case 'ready': {
         if (s.phase !== 'deal' || s.ready[pid]) return s;
         s.ready[pid] = true;
-        if (s.seats.every((p) => s.ready[p])) startRound(s, ctx);
+        if (presentSeats(s).every((p) => s.ready[p])) startRound(s, ctx);
         return s;
       }
       case 'done': {
@@ -1269,9 +1400,10 @@ export const engine = {
         return s;
       }
       case 'start-vote': {
-        if (s.phase !== 'discuss') return s;
-        beginVote(s, ctx, 'main');
-        return s;
+        // D2: a seat says it wants to vote; dead seats have no say. `seats`: the other seats of a passed-round phone
+        s.want ??= {};
+        if (s.phase !== 'discuss' || !isAlive(s, pid) || s.want[pid]) return s;
+        return wantVote(s, ctx, [pid, ...alsoSeats(s, a)]);
       }
       case 'vote': {
         if (s.phase !== 'vote' || !s.voters.includes(pid)) return s;
@@ -1293,9 +1425,10 @@ export const engine = {
         return s;
       }
       case 'continue': {
-        if (s.phase !== 'elim' || s.elim.guess?.pending) return s;
-        leaveElim(s, ctx);
-        return s;
+        // D3: 睇完 — counts this seat (and a passed-round phone's other seats); all present seats → move on
+        s.seen ??= {};
+        if (s.phase !== 'elim' || s.elim.guess?.pending || s.seen[pid]) return s;
+        return markSeen(s, ctx, [pid, ...alsoSeats(s, a)]);
       }
       default: return s;
     }
@@ -1315,7 +1448,7 @@ export const engine = {
   focus(s) {
     switch (s.phase) {
       case 'deal': {
-        const pids = s.seats.filter((p) => !s.ready[p]);
+        const pids = presentSeats(s).filter((p) => !s.ready[p]);
         return pids.length ? { pids } : null;
       }
       case 'vote': {
@@ -1327,10 +1460,25 @@ export const engine = {
     }
   },
 
+  /**
+   * Is the table really waiting on this seat? The deal, the speaker, a missing ballot, the white card's guess and
+   * a 睇完 still to come — never the discussion, where the table talks at its own pace and a majority decides.
+   */
+  blocking(s, pid) {
+    if (!isSeat(s, pid) || isAbsent(s, pid)) return false;
+    switch (s.phase) {
+      case 'deal': return !s.ready[pid];
+      case 'speak': return s.order[s.turn] === pid;
+      case 'vote': return s.voters.includes(pid) && !(pid in s.ballots);
+      case 'elim': return s.elim.guess?.pending ? s.elim.out === pid : !s.seen?.[pid];
+      default: return false;
+    }
+  },
+
   autoAct,
 
   legalActions(s, pid) {
-    if (!isSeat(s, pid)) return [];
+    if (!isSeat(s, pid) || isAbsent(s, pid)) return [];
     const out = [];
     switch (s.phase) {
       case 'deal':
@@ -1340,7 +1488,7 @@ export const engine = {
         if (s.order[s.turn] === pid) out.push({ type: 'done', at: speakId(s) });
         break;
       case 'discuss':
-        out.push({ type: 'start-vote' });
+        if (isAlive(s, pid) && !s.want?.[pid]) out.push({ type: 'start-vote' });
         break;
       case 'vote':
         if (s.voters.includes(pid)) {
@@ -1352,7 +1500,7 @@ export const engine = {
         if (s.elim.guess?.pending) {
           // Free text: one wrong and one right example. Only the fuzzer ever sees these.
           if (s.elim.out === pid) out.push({ type: 'guess', word: '（答錯示範）' }, { type: 'guess', word: s.pair.civ });
-        } else {
+        } else if (!s.seen?.[pid]) {
           out.push({ type: 'continue' });
         }
         break;

@@ -1094,7 +1094,8 @@ function guess(s, ctx, pid, a) {
   const end = endOf(s);
   if (ctx.now > end) return s;                          // after the clock: its advance is about to end the turn
 
-  const res = analyse(text, t.word, s.cfg.strictness);
+  // the revealed characters are public: a near miss on them alone is not 好接近 (D9, docs/research/draw-guess.md A.5)
+  const res = analyse(text, t.word, s.cfg.strictness, maskView(t).cells);
   if (!res.g) return s;                                 // nothing left after dropping punctuation and symbols
   const seen = (t.seenG[pid] ??= []);
   if (seen.includes(res.g)) return s;                   // identical guess this turn: ignored silently
@@ -1474,18 +1475,20 @@ function result(state) {
     });
   }
 
-  // highlights
+  // highlights — one shared by more than half the table highlights nobody, so it is left out
   const high = [];
+  const standsOut = (ids) => ids.length > 0 && ids.length * 2 <= s.order.length;
   const avg = (id) => (st[id].drew ? st[id].drawerPts / st[id].drew : 0);
   const bestAvg = Math.max(...s.order.map(avg));
   if (!s.teams && bestAvg > 0) {
     const ids = s.order.filter((id) => avg(id) === bestAvg);
-    high.push(`🎨 最勁畫家：${S.joinNames(ids.map(nm))}（平均每次畫得 ${bestAvg.toFixed(1)} 分）`);
+    if (standsOut(ids)) high.push(`🎨 最勁畫家：${S.joinNames(ids.map(nm))}（平均每次畫得 ${bestAvg.toFixed(1)} 分）`);
   }
   if (fastest) high.push(`⚡ 最快反應：${nm(fastest.pid)}（${(fastest.ms / 1000).toFixed(1)} 秒估中「${fastest.w}」）`);
   const most3 = Math.max(...s.order.map((id) => st[id].lvl3));
-  if (most3 > 0) {
-    high.push(`⭐ 最多困難詞估中：${S.joinNames(s.order.filter((id) => st[id].lvl3 === most3).map(nm))}（${most3} 條）`);
+  const hardest = s.order.filter((id) => st[id].lvl3 === most3);
+  if (most3 > 0 && standsOut(hardest)) {
+    high.push(`⭐ 最多困難詞估中：${S.joinNames(hardest.map(nm))}（${most3} 條）`);
   }
   if (high.length) lines.push(S.HEAD.high, ...high);
   // one line per turn: who drew which word, who got it, the points — what the table could not all see live
@@ -1496,6 +1499,7 @@ function result(state) {
     winners,
     summary,
     lines,
+    linesTitle: '分數點嚟',      // the shell's default 「點解會咁」 suits a hidden-role reveal, not a ranking
     points: Object.fromEntries(s.order.map((id) => [id, winners.includes(id) ? 1 : 0])),
   };
 }

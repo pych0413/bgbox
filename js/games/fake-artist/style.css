@@ -84,7 +84,9 @@
 
 .fk-board { display: flex; flex-direction: column; gap: .5rem; align-items: center; }
 .fk-board-holder { width: 100%; }
-.fk-board.compact .c-canvas { --c-chrome: 38rem; }   /* a small picture, so the ballot fits under it without scrolling */
+/* the vote and guess screens keep the full-size picture (strokes are matched to people there); the ballot goes dense instead */
+.fk .c-votepanel-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.fk .c-votepanel-opt { min-height: 2.75rem; padding: .375rem .625rem; gap: .5rem; font-size: .9375rem; }
 .fk-board-tag { font-size: .875rem; font-weight: 700; text-align: center; color: var(--text); }
 .fk-retry { align-self: center; }
 
@@ -114,7 +116,7 @@
 .fk-verdict.escaped { background: rgba(228, 87, 61, .12); border-color: rgba(228, 87, 61, .45); }
 .fk-verdict.revote { background: rgba(245, 197, 24, .12); border-color: rgba(245, 197, 24, .5); }
 .fk-linger { height: .25rem; border-radius: 99px; background: var(--line); overflow: hidden; }
-.fk-linger i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; animation: fk-linger 4.5s linear forwards; }
+.fk-linger i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; animation: fk-linger 7s linear forwards; /* = TALLY_MS (D12); the UI sets it inline too */ }
 @keyframes fk-linger { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
 /* ---------- the guess ---------- */
@@ -122,6 +124,9 @@
 .fk-judge { padding: .875rem 1rem; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .fk-judge-label { font-size: .75rem; color: var(--text-dim); letter-spacing: .06em; }
 .fk-judge-word { margin-top: .125rem; font-size: 2.25rem; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+/* spoken guess: the answer is held to peek (the caught fake is still thinking); inside the cover the face needs no frame */
+.fk-judge-peek .c-cover { aspect-ratio: 5 / 2; margin-bottom: 0; }
+.fk-judge-peek .fk-judge { padding: 0; background: none; border: 0; }
 .fk-judgebtns { display: grid; grid-template-columns: 1fr 1fr; gap: .625rem; }
 .fk-judgebtns .btn { margin-bottom: 0; }
 .fk-judgebtns .btn.armed { box-shadow: 0 0 0 2px var(--accent); }
@@ -160,6 +165,18 @@
 .fk-turns-lapn { font-size: .75rem; color: var(--text-dim); min-width: 3rem; }
 .fk-turns-chip { display: inline-flex; align-items: center; gap: .3125rem; padding: .1875rem .5rem; font-size: .8125rem; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; }
 .fk-turns-chip.skipped { opacity: .55; }
+
+/* who pointed at whom, kept on the result screen */
+.fk-votes { display: flex; flex-direction: column; gap: .5rem; }
+.fk-votes-round { display: flex; flex-direction: column; gap: .25rem; padding: .625rem .75rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.fk-votes-title { font-size: .75rem; color: var(--text-dim); font-weight: 700; }
+.fk-votes-row { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; font-size: .875rem; line-height: 1.5; }
+.fk-votes-row.top .fk-votes-n { color: var(--cheese-2, var(--accent)); }
+.fk-votes-row.dim { color: var(--text-dim); font-size: .8125rem; }
+.fk-votes-who { display: inline-flex; align-items: center; gap: .3125rem; }
+.fk-votes-n { font-weight: 800; font-variant-numeric: tabular-nums; }
+.fk-votes-by { color: var(--text-dim); font-size: .8125rem; }
+.fk-votes-by .fk-dot { width: .625rem; height: .625rem; }
 
 .fk-reveal-lines { display: flex; flex-direction: column; gap: .375rem; }
 .fk-reveal-line { padding: .5rem .75rem; background: var(--bg-2); border-radius: .75rem; font-size: .9375rem; line-height: 1.55; }

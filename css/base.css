@@ -228,6 +228,12 @@ button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: no
 .btn-ghost { background: var(--bg-2); }
 .btn-danger { background: rgba(228,87,61,.14); border-color: rgba(228,87,61,.5); color: #ff9b86; }
 .btn-locked { background: rgba(245,197,24,.14); border-color: var(--cheese-dk); color: var(--cheese-2); }
+/* #3 arm-then-confirm: a risky button's first tap arms it (「再㩒一次：…」, dom.js confirmTap) */
+.btn.armed, .icon-btn.armed, .c-seateditor-btn.armed {
+  background: rgba(228,87,61,.18); border-color: var(--danger); color: #ffb3a3;
+  box-shadow: 0 0 0 2px rgba(228,87,61,.35); animation: armPulse 1s ease-in-out infinite;
+}
+@keyframes armPulse { 50% { box-shadow: 0 0 0 4px rgba(228,87,61,.18); } }
 .btn-accent {
   background: var(--accent); border-color: transparent; color: #14110c;
 }
@@ -583,7 +589,9 @@ button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: no
 .c-narratorbar.is-compact .c-narratorbar-actions { flex: none; margin: 0; }
 .c-narratorbar.is-compact .c-narratorbar-actions .btn { flex: none; margin: 0; }
 .play.has-narrator.narrator-compact { padding-bottom: 4rem; }
-.c-narratorbar.cooling .c-narratorbar-actions .btn-primary { opacity: .55; transition: opacity .2s; }
+.c-narratorbar.cooling .c-narratorbar-next { opacity: .55; transition: opacity .2s; }
+/* #13: the host's skip is a quiet ghost button; only the 讀稿 narrator's 下一步 is primary */
+.c-narratorbar-next.btn-ghost:not(.armed) { color: var(--text-dim); }
 
 /* PassGate */
 .c-passgate {
@@ -684,6 +692,26 @@ button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: no
 .c-scoreboard-history li { display: flex; flex-wrap: wrap; gap: .125rem .625rem; align-items: baseline; padding: .5rem .75rem; background: var(--bg-2); border-radius: .625rem; font-size: .8125rem; }
 .c-scoreboard-history .g { font-weight: 700; }
 .c-scoreboard-history .s { flex-basis: 100%; }
+
+/* RecentFold — public 「📜 之前嘅投票」 / 「🌅 昨晚」, folded (#10) */
+.c-recent { display: flex; flex-direction: column; gap: .5rem; margin-top: .875rem; }
+.c-recent-fold { border: 1px solid var(--line); border-radius: .875rem; background: var(--surface); }
+.c-recent-fold > summary {
+  display: flex; align-items: center; gap: .5rem; padding: .625rem .875rem; cursor: pointer; list-style: none;
+  font-size: .875rem; font-weight: 700; min-height: 2.75rem;
+}
+.c-recent-fold > summary::-webkit-details-marker { display: none; }
+.c-recent-fold > summary::after { content: "▾"; margin-left: auto; color: var(--text-dim); transition: transform .15s; }
+.c-recent-fold[open] > summary::after { transform: rotate(180deg); }
+.c-recent-fold > summary small { color: var(--text-dim); font-weight: 600; font-size: .75rem; }
+.c-recent-body { padding: 0 .875rem .75rem; display: flex; flex-direction: column; gap: .625rem; }
+.c-recent-entry-title { font-size: .75rem; font-weight: 700; color: var(--text-dim); margin-bottom: .25rem; }
+.c-recent-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; font-size: .8125rem; }
+.c-recent-lines li { padding: .375rem .625rem; background: var(--bg-2); border-radius: .5rem; line-height: 1.45; }
+.c-recent-vote { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
+.c-recent-dot { width: .5625rem; height: .5625rem; border-radius: 50%; background: var(--seat, var(--cheese)); flex: none; }
+.c-recent-arrow { color: var(--text-dim); }
+.c-recent-name.is-abstain { color: var(--text-dim); }
 
 /* ConfigForm */
 .c-configform { display: flex; flex-direction: column; gap: .875rem; }
@@ -847,6 +875,15 @@ input.emoji-btn { width: 2.75rem; }
 .code-card { text-align: center; }
 .big-code { display: grid; grid-template-columns: repeat(4, 1fr); gap: .625rem; margin: .5rem 0 1rem; }
 .big-code .die { width: 100%; height: auto; aspect-ratio: 1; }
+/* #37: the digit under each die, so the code can be read out without counting pips */
+.big-code .code-cell { display: flex; flex-direction: column; align-items: center; gap: .5rem; min-width: 0; }
+.big-code .code-digit { font-size: .9375rem; font-weight: 800; color: var(--text-dim); font-variant-numeric: tabular-nums; line-height: 1; }
+/* #39: 開始 ▶ stays reachable under long settings */
+.lobby-start {
+  position: sticky; bottom: 0; z-index: 20; margin: 0 -1rem; padding: 1rem 1rem calc(.5rem + var(--safe-b));
+  background: linear-gradient(180deg, rgba(20,17,12,0), rgba(20,17,12,.94) 1rem);
+}
+.lobby-start .btn-lg { margin-bottom: .25rem; }
 .code-actions { display: flex; gap: .625rem; justify-content: center; }
 .qr-wrap { margin-top: 1rem; display: flex; justify-content: center; }
 .qr-wrap .qr-canvas { border-radius: .75rem; background: #fff; padding: .625rem; line-height: 0; }
@@ -928,6 +965,9 @@ button.game-card:active { transform: scale(.97); }
 .banner.err { background: rgba(228,87,61,.1); border-color: rgba(228,87,61,.4); }
 .banner .grow { flex: 1; min-width: 8rem; }
 .banner .btn { width: auto; }
+/* a seat the table waits on (D4): the line on top, its four answers wrap underneath */
+.banner.stall .grow { flex-basis: 100%; }
+.banner.stall .btn { flex: 1 1 auto; }
 .play-game { min-height: 12rem; }
 .play-loading { text-align: center; color: var(--text-dim); padding: 3rem 0; }
 
@@ -979,6 +1019,16 @@ button.game-card:active { transform: scale(.97); }
 .conn-list li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-list li.off .nm { opacity: .6; }
 .conn-list .conn-state { font-size: .75rem; color: var(--text-dim); flex: none; }
+.conn-list li.absent .nm { opacity: .6; }
+/* D4 💤 標記缺席… — the seat picker inside the ⋯ menu */
+.absent-pick .btn.is-absent { border-style: dashed; color: var(--text-dim); }
+/* a link the clipboard would not take: shown in the page to copy by hand (never a native prompt, #3) */
+.copy-box { margin-top: .625rem; text-align: left; }
+.copy-box .hint { display: block; margin-bottom: .25rem; }
+.copy-field {
+  width: 100%; padding: .5rem .625rem; border-radius: .625rem; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font-size: .8125rem; user-select: all; -webkit-user-select: all;
+}
 .conn-list li.off .conn-state { color: #ff9b86; }
 .conn-tip { margin: .375rem 0 0; line-height: 1.6; }
 .menu-sheet .sheet-list .seg { margin-top: .25rem; }
@@ -1098,7 +1148,9 @@ body.is-night .timer-flash-text { color: rgba(255,200,120,.7); }
 .results-tools .timer-strip { flex: 1; }
 .results-tools .timer-btn { margin-left: auto; }
 .results-trophy { font-size: 4rem; line-height: 1; margin-top: .5rem; animation: bob 3s ease-in-out infinite; }
-.results h2 { margin: .5rem 0 .25rem; font-size: 1.375rem; }
+.results h2 { margin: .25rem 0 .25rem; font-size: 1.375rem; line-height: 1.4; }
+/* #39: the game's name is a small kicker; the headline is the result */
+.results-kicker { margin-top: .5rem; font-size: .8125rem; font-weight: 700; color: var(--text-dim); letter-spacing: .04em; }
 .winners { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; margin: .75rem 0 .5rem; }
 .winner-chip {
   display: inline-flex; align-items: center; gap: .5rem; padding: .5rem 1rem; border-radius: 99px; font-weight: 800; font-size: 1.0625rem;
@@ -1167,13 +1219,24 @@ body.is-night .timer-flash-text { color: rgba(255,200,120,.7); }
   padding: calc(.375rem + var(--safe-t)) .75rem .375rem;
   background: var(--danger); color: #fff;
   font-size: .75rem; font-weight: 600; text-align: center; z-index: 95;
+  display: flex; align-items: center; justify-content: center; gap: .625rem; flex-wrap: wrap;
 }
 .netbar.warn { background: var(--cheese-dk); color: #1a1508; }
+.netbar .netbar-leave {
+  width: auto; min-height: 1.875rem; padding: .25rem .75rem; font-size: .75rem;
+  background: rgba(0,0,0,.25); border-color: rgba(255,255,255,.35); color: inherit;
+}
+/* #4: the bar pushes the page down instead of covering it — the play header (💡 📖 ⋯ → 🚪 離開) stays
+   reachable. --netbar-h is the bar's measured height (safe area included), set by the shell. */
+body.has-netbar #app { padding-top: calc(var(--netbar-h, 2.25rem) + 1rem); }
+body.has-netbar .play-top { top: var(--netbar-h, 2.25rem); margin-top: -1rem; padding-top: .5rem; }
 
-/* Night: the screen goes near-black but stays tappable, so decoy buttons
+/* Night (js/ui/night.js, logic.nightChrome): the screen dims but stays tappable, so decoy buttons
    keep working and tap noise tells nobody anything (DESIGN §4 anti-tell).
-   BACKLOG #4: near-black, fades only (in slowly, out a little faster), never
-   a white flash, and a hint to turn the brightness down. */
+   BACKLOG #4: fades only (in slowly, out a little faster), never a white flash, and a hint to turn the
+   brightness down. Levels: dark = near-black between your own steps (語音 / 讀稿, eyes closed);
+   soft = D1 靜音: one readable ~70 % dim on EVERY phone all night, the awake one too (no lift, no tell);
+   opaque = a shared phone. */
 .night-dim {
   position: fixed; inset: 0; z-index: 60; pointer-events: none; background: rgba(2,2,4,.95);
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: .375rem;
@@ -1181,8 +1244,11 @@ body.is-night .timer-flash-text { color: rgba(255,200,120,.7); }
   opacity: 0; transition: opacity .6s ease-out;
 }
 .night-dim.on { opacity: 1; transition: opacity 1s ease-in; }
-/* a shared phone: what is underneath is the last holder's private screen — cover it fully, swallow taps */
-.night-dim.opaque { background: #020204; pointer-events: auto; }
+.night-dim.soft { background: rgba(2,2,4,.7); }
+/* a shared phone: what is underneath is the last holder's private screen — cover it fully, swallow taps
+   (only while on: the class stays for the fade-out, the taps must not) */
+.night-dim.opaque { background: #020204; }
+.night-dim.on.opaque { pointer-events: auto; }
 .night-dim .nd-title { font-size: .8125rem; letter-spacing: .3em; color: rgba(255,255,255,.22); }
 .night-dim .nd-hint { font-size: .6875rem; color: rgba(255,255,255,.14); }
 body.is-night { background-color: #000; }
@@ -1193,7 +1259,7 @@ body.is-night .toast { background: #120f0a; border-color: #1f1a12; color: rgba(2
   position: fixed; left: 0; right: 0; top: calc(.5rem + var(--safe-t)); z-index: 96; pointer-events: none;
   display: flex; flex-direction: column; align-items: center; gap: .5rem; padding: 0 .75rem;
 }
-body:has(.netbar:not(.hidden)) .status-layer { top: calc(2.25rem + var(--safe-t)); }
+body.has-netbar .status-layer, body:has(.netbar:not(.hidden)) .status-layer { top: calc(var(--netbar-h, calc(2.25rem + var(--safe-t))) + .5rem); }
 .status-layer > * { pointer-events: auto; width: 100%; max-width: 30rem; }
 .app-banner {
   display: flex; align-items: center; gap: .625rem; padding: .625rem .75rem; border-radius: .875rem; font-size: .8125rem; font-weight: 600;

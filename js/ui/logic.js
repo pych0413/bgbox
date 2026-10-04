@@ -68,6 +68,149 @@ export function rankRows(players, scoreboard) {
   return rows;
 }
 
+/**
+ * How the evening's table reads (#39). `points`: did any game tonight award points? If not, the 分 column is
+ * hidden (a column of zeros says nothing) and the board effectively ranks by wins. `earned(row)`: may this row
+ * wear a medal — only for something actually won (points above 0, or wins on a night without points); a tie
+ * at 0 is not a 🥈.
+ */
+export function scoreboardMode(rows) {
+  const points = (rows ?? []).some((r) => (r?.points ?? 0) !== 0);
+  return { points, earned: (r) => ((points ? r?.points : r?.wins) ?? 0) > 0 };
+}
+
+// ---------- results hero (#39) ----------
+
+/**
+ * The results screen's headline, stating the RESULT (never 「<game> — 贏家」, which on 芝士大盜 read as "the
+ * thief won" right after the thief was caught). The game's emoji + name go in a small kicker line above.
+ *   void            → 🚫 「呢鋪唔計」
+ *   noScore         → the game's emoji, 「邊個贏由你哋講」 (a tool that does not judge: 通用派牌)
+ *   a summary line  → 🏆 / 🤝 and the summary itself (every scoring game writes it as the result)
+ *   else            → 🏆 「贏家」 / 🤝 「冇人贏」
+ * `summaryBelow` says whether the summary still needs its own line under the winners.
+ */
+export function resultHero(res, meta = {}) {
+  const summary = typeof res?.summary === 'string' ? res.summary.trim() : '';
+  const winners = Array.isArray(res?.winners) ? res.winners.length : 0;
+  if (res?.void === true) return { trophy: '🚫', heading: '呢鋪唔計', summaryBelow: !!summary };
+  if (res?.noScore === true || meta?.noScore === true) {
+    return { trophy: meta?.emoji ?? '🎲', heading: '邊個贏由你哋講', summaryBelow: !!summary };
+  }
+  const trophy = winners ? '🏆' : '🤝';
+  if (summary) return { trophy, heading: summary, summaryBelow: false };
+  return { trophy, heading: winners ? '贏家' : '冇人贏', summaryBelow: false };
+}
+
+/** The confetti for a win: the game's own emoji in place of the cheese mascot (#39). */
+export function confettiSet(meta) {
+  const own = typeof meta?.emoji === 'string' && meta.emoji.trim() ? meta.emoji.trim() : '⭐';
+  return ['🎉', '✨', own, '🎊', '⭐'];
+}
+
+// ---------- play screen: 輪到你 and the host's ⏭ (#13, #14) ----------
+
+/**
+ * Does the header show 「輪到你」 for `seat`? Only for a real turn — the engine waits on this seat ALONE.
+ * Never at night (the brightest thing on a lit phone), never in an eyes-closed / secret step (`anonymous`: in
+ * the Avalon assassination only the Assassin's phone would light up), and never in a step that calls several
+ * seats at once (`together`, added by the room; or `simultaneous`, if an engine says so itself): a deal or a
+ * vote is everybody's, a pulsing pill on each phone is noise.
+ */
+export function turnBadge(focus, seat, { night = false } = {}) {
+  if (!seat || night || !focus || typeof focus !== 'object') return false;
+  if (focus.anonymous || focus.together || focus.simultaneous) return false;
+  const pids = Array.isArray(focus.pids) ? focus.pids : [];
+  return pids.length === 1 && pids[0] === seat;
+}
+
+/** The armed label's text for the host's skip: 「再㩒一次：跳過？未做嘅當冇做」. */
+export const SKIP_CONFIRM = '跳過？未做嘅當冇做';
+
+/**
+ * Does the host's ⏭ 跳過呢步 need a second tap (#13)? When skipping would cut somebody off: the engine is
+ * waiting on a seat (`waiting` — the room tells the host device; its own `focus` is filtered to its seats),
+ * an eyes-closed step, or night. Not the 讀稿 narrator's tap on a line not yet acknowledged (`cueId` differs
+ * from `ackedCueId`, the line the host last moved past): that tap only says "I have read it out".
+ */
+export function skipNeedsConfirm({ waiting = false, focus = null, night = false, mode = 'voice', cueId = null, ackedCueId = null } = {}) {
+  const risky = !!waiting || !!focus?.anonymous || (Array.isArray(focus?.pids) && focus.pids.length > 0) || !!night;
+  if (!risky) return false;
+  if (mode === 'read' && cueId && cueId !== ackedCueId) return false;
+  return true;
+}
+
+// ---------- the night dim (D1) ----------
+
+/** What the night overlay says. Identical on every phone of a mode: it can never tell who is awake. */
+export const NIGHT_WORDS = Object.freeze({
+  closed: Object.freeze({ title: '閉 眼', hint: '🌙 可以將螢幕調暗啲' }),     // 語音 / 讀稿: eyes shut between your steps
+  silent: Object.freeze({ title: '夜 晚', hint: '🌙 可以將螢幕調暗啲' }),     // 靜音: eyes stay open, every phone alike
+});
+
+/**
+ * How dark this phone is at night (`view.night`), → `{ on, level, words }`:
+ *  - `level` 'dark' (near-black, still tappable) · 'soft' (D1: one readable ~70 % dim, still tappable) ·
+ *    'opaque' (a shared phone: covers the last holder's screen, swallows taps) · null (off).
+ *  - 語音 / 讀稿 (eyes closed): dark between the seat's own steps, lifted while `focus` calls it (`inFocus`).
+ *  - 靜音 (D1, eyes stay open): the SAME soft dim on every single-seat phone all night — the awake seat gets no
+ *    lift, so a glance across a dark table never shows who woke. A shared phone (`shared`, 2+ seats) keeps
+ *    focus for its pass gate: soft for the seat that is called, opaque otherwise.
+ *  - `words` (title + hint) depend on the mode only, never on the seat.
+ * No seat (a spectator, the table view) or no night → off.
+ */
+export function nightChrome({ seat = null, night = false, inFocus = false, mode = 'voice', shared = false } = {}) {
+  const silent = mode === 'silent';
+  const words = silent ? NIGHT_WORDS.silent : NIGHT_WORDS.closed;
+  if (!seat || !night) return { on: false, level: null, words };
+  if (silent) return { on: true, level: shared && !inFocus ? 'opaque' : 'soft', words };
+  if (inFocus) return { on: false, level: null, words };
+  return { on: true, level: shared ? 'opaque' : 'dark', words };
+}
+
+// ---------- public "recent events" folds (#10) ----------
+
+const MAX_FOLDS = 4;
+const MAX_ENTRIES = 30;
+const MAX_LINES = 40;
+
+/** One line of a fold: a string, `{ text }`, or a ballot `{ from: pid, to: pid | null }` (null = 棄權). */
+function foldLine(l) {
+  if (typeof l === 'string') return l.trim() ? { text: l } : null;
+  if (!l || typeof l !== 'object') return l == null ? null : { text: String(l) };
+  if (typeof l.from === 'string') return { from: l.from, to: typeof l.to === 'string' ? l.to : null };
+  if (typeof l.text === 'string' && l.text.trim()) return { text: l.text };
+  return null;
+}
+const foldLines = (ls) => (Array.isArray(ls) ? ls.map(foldLine).filter(Boolean).slice(0, MAX_LINES) : []);
+
+/**
+ * `view.recent` → folds the play screen can render: [{ key, title, open, entries: [{ title, lines }] }].
+ * Accepts one fold or an array of them; a fold is `{ id?, title, lines? , entries?: [{ title?, lines }], open? }`.
+ * Folds with nothing in them are dropped (no empty 「📜 之前嘅投票」 before the first vote).
+ */
+export function recentFolds(recent) {
+  const list = Array.isArray(recent) ? recent : recent && typeof recent === 'object' ? [recent] : [];
+  const out = [];
+  for (const [i, f] of list.entries()) {
+    if (!f || typeof f !== 'object') continue;
+    const entries = [];
+    const top = foldLines(f.lines);
+    if (top.length) entries.push({ title: null, lines: top });
+    for (const e of Array.isArray(f.entries) ? f.entries.slice(0, MAX_ENTRIES) : []) {
+      if (!e || typeof e !== 'object') continue;
+      const lines = foldLines(e.lines);
+      if (!lines.length) continue;
+      entries.push({ title: typeof e.title === 'string' && e.title.trim() ? e.title.trim() : null, lines });
+    }
+    if (!entries.length) continue;
+    const title = typeof f.title === 'string' && f.title.trim() ? f.title.trim() : '📜 之前發生咗咩';
+    out.push({ key: typeof f.id === 'string' && f.id ? f.id : `${i}:${title}`, title, open: f.open === true, entries });
+    if (out.length >= MAX_FOLDS) break;
+  }
+  return out;
+}
+
 // ---------- time ----------
 
 /** 45 → 「45 秒」, 120 → 「2 分鐘」, 90 → 「1 分 30 秒」. */
@@ -256,10 +399,19 @@ const roleIdOf = (x) => (typeof x === 'string' ? x : x && typeof x === 'object' 
  * carries (custom decks), else null. Only fields the view puts there on
  * purpose are read (`roleId`, `role`, `mine.role`, `my.role`, `me.role`,
  * `my.dealt`), so a game that keeps the role secret even from its holder
- * (undercover) yields null.
+ * (undercover) yields null. `view.hintRoleText` (this table's rule for the
+ * card, e.g. 狼人殺's win condition) replaces the generic rules text.
  */
 export function roleFor(view, rules) {
   if (!view || typeof view !== 'object') return null;
+  const role = ownRole(view, rules);
+  if (!role) return null;
+  // this table's version of the card (e.g. 狼人殺's win rule): the seat's own view may override the rules text
+  const own = hintRoleText(view);
+  return own ? { ...role, text: own } : role;
+}
+
+function ownRole(view, rules) {
   const roles = Array.isArray(rules?.roles) ? rules.roles : [];
   const byId = (id) => roles.find((r) => r && r.id === id) ?? null;
   const mine = view.mine ?? view.my ?? null;
@@ -276,6 +428,22 @@ export function roleFor(view, rules) {
     }
   }
   return null;
+}
+
+/**
+ * `view.hintRoleText` — the seat's own role text for THIS table (a string written 「做乜：… 點贏：…」, or
+ * `{ what, win }`), preferred over the generic `rules.roles` text. '' when the view has none.
+ */
+export function hintRoleText(view) {
+  const t = view?.hintRoleText;
+  if (typeof t === 'string') return t.trim().slice(0, 400);
+  if (t && typeof t === 'object') {
+    const what = typeof t.what === 'string' ? t.what.trim() : '';
+    const win = typeof t.win === 'string' ? t.win.trim() : '';
+    if (!what && !win) return '';
+    return `${what ? `做乜：${what}` : ''}${what && win ? ' ' : ''}${win ? `點贏：${win}` : ''}`.slice(0, 400);
+  }
+  return '';
 }
 
 /**

@@ -10,6 +10,12 @@
 // Per round:  [qm-input] → deal → [first] → draw → vote → tally → [revote → tally] →
 //             [guess → [judge]] → result      (then the next round, or `over`)
 // Host 「呢鋪唔計」 (@void-round, a phone died) discards the round in play and deals a fresh one.
+// The tally (who voted for whom) stays 7 s (D12) and the result keeps it. The result moves on when every present
+// seat of the round has tapped 睇完 (D3, 「睇完 3 / 5」), or on the host's 下一步.
+// Absent seats (D4, host `{ type: '@absent', pid }`, back with '@present'): public (💤), never waited on — no
+// 睇完喇, their drawing turns are skipped, they do not vote and cannot be voted for (they are not the fake), no
+// 睇完. An absent FAKE (before it is caught) or question master voids the round, like 呢鋪唔計; a fake that leaves
+// after being caught simply gives no answer (a wrong guess). Later rounds deal around them (never fake, never QM).
 //
 // The shared drawing never enters state (DESIGN §15.10). In 📱 phone mode the UI sends
 // { type: 'stroke', length } after its Canvas finished a stroke; in 📝 paper mode the
@@ -19,11 +25,15 @@
 import { HOST, ACT, rint, seatOrder, tally, nextSeat } from '../../core/engine-kit.js?v=20261003171423';
 import * as S from './script.js?v=20261003171423';
 
+// D4 host actions (the literals, so this engine does not depend on engine-kit having them)
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
+
 // ---------- constants ----------
 
 export const MIN_STROKE_LEN = 20;     // 0–1000 canvas units: a shorter stroke is an accidental tap (Canvas undoes it)
 const STROKE_SLACK = 10;              // the engine only refuses a stroke shorter than this (the Canvas is the real gate)
-const TALLY_MS = 4500;                // how long the vote result lingers before the next step
+export const TALLY_MS = 7000;         // who voted for whom stays this long before the next step (D12; the result keeps it)
 const FAKE_PTS = 2;                   // fake artist and question master when the fake side wins
 const ARTIST_PTS = 1;                 // every real artist when the artists win
 const THEME_MAX = 12;
@@ -188,7 +198,7 @@ export const rules = {
     '畫到令真畫家睇得明，但唔好太明顯。',
     '畫完同時投票，揪出邊個係假畫家。',
     '揪到假畫家，佢仲有一次機會估題目。',
-    '假畫家同出題者贏各 +2；真畫家贏每人 +1。',
+    '假畫家贏 +2（有出題者，佢都 +2）；真畫家贏每人 +1。',
   ],
   roles: [
     { id: 'artist', name: '真畫家', emoji: '🎨', team: 'good', teamLabel: '真畫家',
@@ -207,8 +217,8 @@ export const rules = {
       + '2. 每個畫家㩒住張卡睇：真畫家見到題目，假畫家見到 ✕。睇完㩒「睇完喇」，齊人先開始畫。\n'
       + '3. 順時針輪流，每人一筆（一筆過，筆離開就算完），畫兩圈。用自己嘅顏色，所以邊筆係邊個畫一睇就知。\n'
       + '4. 畫完同時投票，揀你覺得係假畫家嘅人（唔可以投自己，出題者唔投）。\n'
-      + '5. 揭曉票數；假畫家被揪出就有一次機會估題目。\n'
-      + '6. 揭曉題目、假畫家同分數，然後下一輪。' },
+      + '5. 揭曉票數（邊個投邊個會留喺結果度）；假畫家被揪出就有一次機會估題目。\n'
+      + '6. 揭曉題目、假畫家同分數；全部人㩒「睇完」就開下一輪。' },
     { title: '兩種畫法', body:
       '📱 手機畫板：畫喺手機上，其他人即時睇到；一筆太短（碰一碰）唔算，可以再畫。\n'
       + '📝 實體紙筆：用真紙真筆畫，手機只負責派題、報「輪到邊個（邊個顏色）」同第幾圈，畫完嗰個㩒「畫完」。' },
@@ -232,7 +242,10 @@ export const rules = {
       + '・亦可以改做打固定輪數，玩完比總分。\n'
       + '・「唔計分」（新版盒嘅玩法）：每輪淨係分邊隊贏；打完指定輪數，贏得最多輪嘅人贏。' },
     { title: '有人部手機冇電', body:
-      '房主可以㩒「呢鋪唔計」：呢輪作廢、冇人得分，換下一個出題者重新派過題目。輪數照計返。' },
+      '房主可以㩒「呢鋪唔計」：呢輪作廢、冇人得分，換下一個出題者重新派過題目。輪數照計返。\n'
+      + '睇緊結果嗰陣，呢輪已經計咗分，唔可以作廢；大家㩒「睇完」就得。\n'
+      + '有人走開咗：房主可以將佢設做「唔喺度」（💤）。輪到佢畫就跳過，佢唔使投票，亦唔會再做假畫家或者出題者；'
+      + '如果佢係今輪嘅假畫家（未被揪出）或者出題者，呢輪就唔計，重新嚟過。' },
     { title: '小貼士', body:
       '・真畫家：第一筆唔好太明顯，細節留返後面；睇吓邊個畫得似是而非。\n'
       + '・假畫家：先睇人哋畫乜，筆劃盡量延伸前面嘅線，唔好第一個落筆太具體。\n'
@@ -421,7 +434,9 @@ export const config = {
       { key: 'scoring', label: '計分', type: 'select',
         help: m.scoring === 'none'
           ? '新版盒冇分數：每輪淨係分邊隊贏。打完指定輪數，贏得最多輪嘅人贏。'
-          : '舊版盒有分：假畫家同出題者贏各 +2，真畫家贏每人 +1。',
+          : m.qm === 'player'
+            ? '舊版盒有分：假畫家同出題者贏各 +2，真畫家贏每人 +1。'
+            : '舊版盒有分：假畫家贏 +2，真畫家贏每人 +1。',
         options: [{ value: 'points', label: '計分（舊版）' }, { value: 'none', label: '唔計分（新版：每輪分勝負）' }] },
     ];
     if (m.scoring === 'points') {
@@ -514,6 +529,12 @@ export function strokeLength(pts) {
 
 const nameOf = (s, pid) => s.players.find((p) => p.id === pid)?.name ?? '?';
 const namer = (s) => (pid) => nameOf(s, pid);
+const isAbsent = (s, pid) => !!s.absent?.[pid];
+const here = (s, list) => list.filter((p) => !isAbsent(s, p));
+/** The fewest present seats a round still works with: 3 artists, plus the question master when there is one. */
+const minPresent = (s) => MIN_ARTISTS + (s.cfg.qm === 'player' ? 1 : 0);
+/** Who reads the result and taps 睇完: the round's artists and its question master, if they are at the table. */
+const readers = (s) => here(s, [...s.round.artists, ...(s.round.qm ? [s.round.qm] : [])]);
 
 /** Seats after `pid`, going round the table, excluding `pid`. */
 function after(order, pid) {
@@ -578,7 +599,7 @@ function drawEntry(s, ctx) {
 
 function pickFake(s, ctx) {
   const r = s.round;
-  let pool = r.artists;
+  let pool = here(s, r.artists);
   // optional anti-streak: only while at least 3 candidates remain, so it never comes close to naming the fake
   if (s.cfg.antiStreak && s.lastFake && pool.includes(s.lastFake) && pool.length - 1 >= 3) pool = pool.filter((p) => p !== s.lastFake);
   return pool[rint(ctx.rng, pool.length)];
@@ -595,11 +616,16 @@ function startRound(s, ctx, redo = false) {
   if (!redo) s.roundNo += 1;
   s.started = (s.started ?? s.roundNo - 1) + 1;
   if (s.started > 1) s.inkEpoch += 1;                      // a fresh picture; the session clears the old ink
+  // the question master rotates left, passing over absent seats; absent seats sit the round out (D4)
+  if (s.cfg.qm === 'player') {
+    for (let k = 0; k < s.order.length && isAbsent(s, s.order[s.qmPtr]); k++) s.qmPtr = (s.qmPtr + 1) % s.order.length;
+  }
   const qm = s.cfg.qm === 'player' ? s.order[s.qmPtr] : null;
   if (qm) s.qmPtr = (s.qmPtr + 1) % s.order.length;
-  const artists = qm ? after(s.order, qm) : s.order.slice();
+  const artists = here(s, qm ? after(s.order, qm) : s.order.slice());
   s.round = {
     n: s.roundNo, key: s.started, redo, qm, artists,
+    seen: {},                // result: pid → true, tapped 睇完 (public)
     theme: '', word: '', alt: [], fake: null,
     draft: null, draftSeq: 0, acks: {},
     turnOrder: [], turn: 0, strokes: [],
@@ -638,7 +664,18 @@ function beginDraw(s, ctx, first) {
   r.turn = 0;
   r.strokes = [];
   s.phase = 'draw';
-  setTurnTimer(s, ctx);
+  nextDrawer(s, ctx);
+}
+
+/** The turn lands on the next drawer who is at the table (an absent artist's strokes are skipped, D4). */
+function nextDrawer(s, ctx) {
+  const r = s.round;
+  while (r.turn < strokesTotal(s) && isAbsent(s, drawerOf(r))) {
+    r.strokes.push({ pid: drawerOf(r), lap: lapOf(r), kind: 'away' });
+    r.turn += 1;
+  }
+  if (r.turn >= strokesTotal(s)) startVote(s, ctx);
+  else setTurnTimer(s, ctx);
 }
 
 function setTurnTimer(s, ctx) {
@@ -653,23 +690,26 @@ function advanceTurn(s, ctx, kind) {
   const r = s.round;
   r.strokes.push({ pid: drawerOf(r), lap: lapOf(r), kind });
   r.turn += 1;
-  if (r.turn >= strokesTotal(s)) startVote(s);
-  else setTurnTimer(s, ctx);
+  nextDrawer(s, ctx);
 }
 
-function startVote(s) {
+/** Everyone at the table votes; an absent artist is no candidate either (were it the fake, the round was voided). */
+function startVote(s, ctx) {
   const r = s.round;
-  r.vote = { round: 1, voters: r.artists.slice(), candidates: r.artists.slice(), votes: {} };
+  const present = here(s, r.artists);
+  r.vote = { round: 1, voters: present, candidates: present.slice(), votes: {} };
   s.phase = 'vote';
   clearTimer(s);
+  if (allVoted(r.vote)) resolveVote(s, ctx);
 }
 
-function startRevote(s) {
+function startRevote(s, ctx) {
   const r = s.round;
   const top = r.tally1.top;
-  r.vote = { round: 2, voters: r.artists.filter((a) => !top.includes(a)), candidates: top.slice(), votes: {} };
+  r.vote = { round: 2, voters: here(s, r.artists).filter((a) => !top.includes(a)), candidates: top.slice(), votes: {} };
   s.phase = 'revote';
   clearTimer(s);
+  if (allVoted(r.vote)) resolveVote(s, ctx);             // nobody left to re-vote: the second-tie rule decides
 }
 
 const allVoted = (v) => v.voters.every((p) => p in v.votes);
@@ -693,7 +733,7 @@ function resolveVote(s, ctx) {
     else if (!t.top.includes(F)) caught = false;            // the fake was not among the most-pointed
     else if (s.cfg.tieRule === 'escape') caught = false;    // v1 booklet: any tie at the top = not caught
     else if (s.cfg.tieRule === 'revote') {
-      if (r.artists.some((a) => !t.top.includes(a))) revote = true;
+      if (here(s, r.artists).some((a) => !t.top.includes(a))) revote = true;
       else caught = true;                                   // everybody is tied: nobody left to re-vote
     } else caught = true;                                   // must-guess (current print): in the top = caught
     r.caught = revote ? null : caught;
@@ -715,25 +755,35 @@ function resolveVote(s, ctx) {
 function afterTally(s, ctx) {
   const r = s.round;
   clearTimer(s);
-  if (r.next === 'revote') startRevote(s);
-  else if (r.next === 'guess') startGuess(s);
+  if (r.next === 'revote') startRevote(s, ctx);
+  else if (r.next === 'guess') startGuess(s, ctx);
   else finishRound(s, ctx);
 }
 
 /** Who rules on the guess: the human QM; otherwise the host seat (if it is a real artist), else the next artist after the fake. */
 function pickJudge(s) {
   const r = s.round;
-  if (r.qm) return r.qm;
-  if (s.host && r.artists.includes(s.host) && s.host !== r.fake) return s.host;
-  return nextSeat(r.artists, r.fake, (p) => p !== r.fake);
+  if (r.qm && !isAbsent(s, r.qm)) return r.qm;
+  if (s.host && r.artists.includes(s.host) && s.host !== r.fake && !isAbsent(s, s.host)) return s.host;
+  return nextSeat(r.artists, r.fake, (p) => p !== r.fake && !isAbsent(s, p));
 }
 
-function startGuess(s) {
+function startGuess(s, ctx) {
   const r = s.round;
   r.judge = pickJudge(s);
   r.guess = { text: '', mode: s.cfg.guess, correct: null, by: null };
   s.phase = 'guess';
   clearTimer(s);
+  if (isAbsent(s, r.fake)) noAnswer(s, ctx);               // caught, then left: no answer (D4)
+}
+
+/** The caught fake is not at the table to answer: a wrong guess, said as such. */
+function noAnswer(s, ctx) {
+  const g = s.round.guess;
+  g.text = '';
+  g.correct = false;
+  g.by = 'away';
+  finishRound(s, ctx);
 }
 
 /** The fake typed (or skipped) its one guess. */
@@ -806,7 +856,23 @@ function finishRound(s, ctx) {
   const top = Math.max(...s.order.map((id) => s.scores[id]));
   s.ending = scoring === 'points' && s.cfg.endMode === 'target' ? top >= s.cfg.target : s.roundNo >= s.totalRounds;
   s.phase = 'result';
+  r.seen = {};
   clearTimer(s);
+}
+
+/** 睇完 on the result (D3): once every present seat of the round has tapped, the next round (or the end). */
+function markSeen(s, ctx, pids) {
+  const r = s.round;
+  r.seen ??= {};
+  const who = readers(s);
+  let any = false;
+  for (const p of pids) {
+    if (!who.includes(p) || r.seen[p]) continue;
+    r.seen[p] = true;
+    any = true;
+  }
+  if (any && who.every((p) => r.seen[p])) nextRound(s, ctx);
+  return s;
 }
 
 function nextRound(s, ctx) {
@@ -820,12 +886,73 @@ function nextRound(s, ctx) {
  * artist drops; a QM who drops is replaced by the next in order). What was secret goes into the final recap.
  * A round that is already scored (result) or a finished game is left alone.
  */
-function voidRound(s, ctx) {
+function voidRound(s, ctx, why = 'host', who = null) {
   const r = s.round;
   if (!r || s.phase === 'result' || s.phase === 'over') return s;
   const dealt = !!r.word;
-  s.history.push({ n: r.n, voided: true, qm: r.qm, word: dealt ? r.word : null, theme: dealt ? r.theme : null, fake: dealt ? r.fake : null, phase: s.phase });
+  s.history.push({
+    n: r.n, voided: true, qm: r.qm, word: dealt ? r.word : null, theme: dealt ? r.theme : null, fake: dealt ? r.fake : null,
+    phase: s.phase, why, absent: who,
+  });
   startRound(s, ctx, true);
+  return s;
+}
+
+const LIVE = new Set(['qm-input', 'deal', 'first', 'draw', 'vote', 'revote', 'tally', 'guess', 'judge']);
+
+/**
+ * Host `@absent` (D4): stop waiting on the seat for the rest of the game. Refused (unchanged state) when too few
+ * would be left to draw, or once the game is over.
+ */
+function markAbsent(s, pid, ctx) {
+  if (!s.order.includes(pid) || isAbsent(s, pid) || s.phase === 'over') return s;
+  if (here(s, s.order).length - 1 < minPresent(s)) return s;
+  s.absent = { ...(s.absent ?? {}), [pid]: true };
+  const r = s.round;
+  const live = LIVE.has(s.phase);
+  // Decided already: the fake was caught (it only owes its guess), or it escaped and the tally is on screen.
+  const decided = r.caught === true || (s.phase === 'tally' && r.next === 'score');
+  // the question master, or a fake, before the round is decided: the round cannot go on — deal it again
+  if (live && !decided && (pid === r.qm || pid === r.fake)) return voidRound(s, ctx, 'absent', pid);
+  switch (s.phase) {
+    case 'deal':
+      if (here(s, r.artists).every((p) => r.acks[p])) startDraw(s, ctx);
+      break;
+    case 'draw':
+      if (drawerOf(r) === pid) advanceTurn(s, ctx, 'away');
+      break;
+    case 'vote': case 'revote': {
+      const v = r.vote;
+      if (!(pid in v.votes)) v.voters = v.voters.filter((p) => p !== pid);    // a ballot already cast stays
+      if (allVoted(v)) resolveVote(s, ctx);
+      break;
+    }
+    case 'guess': case 'judge':
+      if (pid === r.fake) noAnswer(s, ctx);
+      else if (pid === r.judge) r.judge = pickJudge(s);
+      break;
+    case 'result': {
+      const who = readers(s);
+      if (who.every((p) => r.seen?.[p])) nextRound(s, ctx);
+      break;
+    }
+    default:
+  }
+  return s;
+}
+
+/** Host `@present`: back at the table — from the next round, or for what is still open in this one. */
+function markPresent(s, pid) {
+  if (!s.order.includes(pid) || !isAbsent(s, pid) || s.phase === 'over') return s;
+  const next = { ...s.absent };
+  delete next[pid];
+  s.absent = next;
+  const r = s.round;
+  // back in time for an open ballot it belongs to
+  if ((s.phase === 'vote' || s.phase === 'revote') && r.artists.includes(pid) && !r.vote.voters.includes(pid)
+    && (r.vote.round === 1 || !r.vote.candidates.includes(pid))) {
+    r.vote.voters = r.artists.filter((p) => r.vote.voters.includes(p) || p === pid);
+  }
   return s;
 }
 
@@ -897,7 +1024,7 @@ function skipStep(s, ctx) {
       if (s.cfg.guess === 'typed') submitGuess(s, ctx, ''); else giveVerdict(s, ctx, false, 'auto');
       break;
     case 'judge': giveVerdict(s, ctx, false, 'auto'); break;
-    case 'result': nextRound(s, ctx); break;
+    case 'result': nextRound(s, ctx); break;          // the host forces it while somebody is still reading (D3)
     default: break;
   }
   return s;
@@ -915,6 +1042,8 @@ function hostAct(s, a, ctx) {
     return skipStep(s, ctx);
   }
   if (a.type === ACT.VOID_ROUND) return voidRound(s, ctx);
+  if (a.type === ABSENT) return markAbsent(s, a.pid, ctx);
+  if (a.type === PRESENT) return markPresent(s, a.pid);
   return s;   // ACT.AUTO is resolved by the session through autoAct()
 }
 
@@ -924,7 +1053,7 @@ function act(state, msg, ctx) {
   const a = msg?.action;
   if (!a || typeof a !== 'object' || typeof a.type !== 'string' || s.phase === 'over') return s;
   if (pid === HOST) return hostAct(s, a, ctx);
-  if (typeof pid !== 'string' || !s.order.includes(pid)) return s;
+  if (typeof pid !== 'string' || !s.order.includes(pid) || isAbsent(s, pid)) return s;   // absent: until marked back
 
   const r = s.round;
   const isQm = pid === r.qm;
@@ -953,11 +1082,11 @@ function act(state, msg, ctx) {
     case 'ready':
       if (s.phase === 'deal' && isArtist && !r.acks[pid]) {
         r.acks[pid] = true;
-        if (r.artists.every((p) => r.acks[p])) startDraw(s, ctx);
+        if (here(s, r.artists).every((p) => r.acks[p])) startDraw(s, ctx);
       }
       return s;
     case 'first':
-      if (s.phase === 'first' && isQm && typeof a.target === 'string' && r.artists.includes(a.target)) beginDraw(s, ctx, a.target);
+      if (s.phase === 'first' && isQm && typeof a.target === 'string' && r.artists.includes(a.target) && !isAbsent(s, a.target)) beginDraw(s, ctx, a.target);
       return s;
     case 'stroke': {
       // 📱 phone mode: the Canvas finished one accepted stroke for the current drawer
@@ -992,9 +1121,12 @@ function act(state, msg, ctx) {
       if (typeof a.correct === 'boolean' && pid === r.judge
         && ((s.phase === 'guess' && s.cfg.guess === 'spoken') || s.phase === 'judge')) giveVerdict(s, ctx, a.correct, 'judge');
       return s;
-    case 'next':
-      if (s.phase === 'result' && (isArtist || isQm)) nextRound(s, ctx);
-      return s;
+    case 'next': {
+      // 睇完 (D3). `seats`: the other seats of a passed-round phone, which reads the result once for all of them
+      if (s.phase !== 'result' || !(isArtist || isQm) || r.seen?.[pid]) return s;
+      const also = Array.isArray(a.seats) ? a.seats.filter((x) => typeof x === 'string') : [];
+      return markSeen(s, ctx, [pid, ...also]);
+    }
     default:
       return s;
   }
@@ -1027,6 +1159,7 @@ function setup({ players, config: cfg, rng, now, bag, hostPid, carry }) {
     wins: Object.fromEntries(order.map((id) => [id, 0])),
     stats: Object.fromEntries(order.map((id) => [id, { fake: 0, fakeWins: 0, caught: 0, qm: 0, spotted: 0 }])),
     lastFake: isObj(carry) ? seatIn(carry.lastFake) : null, history: [], cueAck: '', round: null,
+    absent: {},              // pid → true: the host marked the seat absent (public, D4)
   };
   startRound(s, { rng, now, bag });
   return s;
@@ -1072,6 +1205,7 @@ function view(state, pid) {
     pens: { ...pensOf(s) },
     scores: { ...s.scores },
     wins: { ...winsOf(s) },
+    absent: s.order.filter((p) => isAbsent(s, p)),     // public (D4): shown as 💤, never waited on
     theme: themeKnown ? r.theme : null,
     fake: fakeShown ? r.fake : null,
     myRole: isQm ? 'question-master' : isArtist && themeKnown ? (isFake ? 'fake' : 'artist') : null,
@@ -1087,13 +1221,16 @@ function view(state, pid) {
   if (s.phase === 'qm-input' && isQm && r.draft) v.draft = { seq: r.draft.seq, theme: r.draft.theme, word: r.draft.word };
 
   if (s.phase === 'deal') {
-    v.ready = { done: r.artists.filter((p) => r.acks[p]).length, total: r.artists.length, mine: seat !== null && !!r.acks[seat] };
+    const looking = here(s, r.artists);
+    v.ready = { done: looking.filter((p) => r.acks[p]).length, total: looking.length, mine: seat !== null && !!r.acks[seat] };
   }
-  if (s.phase === 'first') v.first = { candidates: r.artists.slice() };
+  if (s.phase === 'first') v.first = { candidates: here(s, r.artists) };
+  // the result: who has tapped 睇完, of the round's seats at the table (D3)
+  if (s.phase === 'result') v.seen = { who: readers(s).filter((p) => r.seen?.[p]), total: readers(s).length };
 
   if (r.turnOrder.length) {
     const counts = {};
-    for (const p of r.turnOrder) counts[p] = r.strokes.filter((x) => x.pid === p).length;
+    for (const p of r.turnOrder) counts[p] = r.strokes.filter((x) => x.pid === p && x.kind !== 'away').length;
     v.draw = {
       mode: cfg.draw, laps: cfg.laps, total: strokesTotal(s), turn: r.turn, order: r.turnOrder.slice(),
       current: drawer, lap: drawer ? lapOf(r) : cfg.laps, counts, minLen: MIN_STROKE_LEN,
@@ -1135,7 +1272,10 @@ function view(state, pid) {
 
   v.hint = S.hintFor({
     phase: s.phase,
-    role: seat === null ? 'table' : isQm ? 'qm' : 'artist',
+    // a seat that sits this round out (it was away when it was dealt) watches like the table
+    role: seat === null ? 'table' : isQm ? 'qm' : isArtist ? 'artist' : 'table',
+    away: seat !== null && isAbsent(s, seat),
+    seen: seat !== null && !!r.seen?.[seat],
     qmName: r.qm ? nameOf(s, r.qm) : '',
     drawMode: cfg.draw,
     drawerIsMe: seat !== null && seat === drawer,
@@ -1160,7 +1300,7 @@ function focus(state) {
   const r = s.round;
   switch (s.phase) {
     case 'qm-input': case 'first': return { pids: [r.qm] };
-    case 'deal': return { pids: r.artists.filter((p) => !r.acks[p]) };
+    case 'deal': return { pids: here(s, r.artists).filter((p) => !r.acks[p]) };
     case 'draw': return { pids: [drawerOf(r)] };
     case 'vote': case 'revote': return { pids: r.vote.voters.filter((p) => !(p in r.vote.votes)) };
     case 'guess': return { pids: [s.cfg.guess === 'typed' ? r.fake : r.judge] };
@@ -1171,7 +1311,7 @@ function focus(state) {
 
 function legalActions(state, pid) {
   const s = state;
-  if (s.phase === 'over' || typeof pid !== 'string' || !s.order.includes(pid)) return [];
+  if (s.phase === 'over' || typeof pid !== 'string' || !s.order.includes(pid) || isAbsent(s, pid)) return [];
   const r = s.round;
   const isQm = pid === r.qm;
   const isArtist = r.artists.includes(pid);
@@ -1184,7 +1324,7 @@ function legalActions(state, pid) {
       if (isArtist && !r.acks[pid]) out.push({ type: 'ready' });
       break;
     case 'first':
-      if (isQm) for (const a of r.artists) out.push({ type: 'first', target: a });
+      if (isQm) for (const a of here(s, r.artists)) out.push({ type: 'first', target: a });
       break;
     case 'draw':
       if (pid === drawerOf(r) && s.cfg.draw === 'phone') out.push({ type: 'stroke', length: 120 });
@@ -1204,7 +1344,7 @@ function legalActions(state, pid) {
       if (pid === r.judge) out.push({ type: 'verdict', correct: true }, { type: 'verdict', correct: false });
       break;
     case 'result':
-      if (isArtist || isQm) out.push({ type: 'next' });
+      if ((isArtist || isQm) && !r.seen?.[pid]) out.push({ type: 'next' });
       break;
     default: break;
   }
@@ -1214,12 +1354,12 @@ function legalActions(state, pid) {
 /** What the host does for a stalled seat. Never decides a vote and never hands the fake a win by itself. */
 function autoAct(state, pid) {
   const s = state;
-  if (s.phase === 'over' || !s.order.includes(pid)) return null;
+  if (s.phase === 'over' || !s.order.includes(pid) || isAbsent(s, pid)) return null;
   const r = s.round;
   switch (s.phase) {
     case 'qm-input': return pid === r.qm ? { type: 'qm-auto' } : null;
     case 'deal': return r.artists.includes(pid) && !r.acks[pid] ? { type: 'ready' } : null;
-    case 'first': return pid === r.qm ? { type: 'first', target: r.artists[0] } : null;
+    case 'first': return pid === r.qm ? { type: 'first', target: here(s, r.artists)[0] } : null;
     case 'draw':
       if (pid !== drawerOf(r)) return null;
       return s.cfg.draw === 'paper' ? { type: 'done' } : { type: 'skip' };
@@ -1229,19 +1369,35 @@ function autoAct(state, pid) {
       if (s.cfg.guess === 'typed') return pid === r.fake ? { type: 'guess', text: '' } : null;
       return pid === r.judge ? { type: 'verdict', correct: false } : null;
     case 'judge': return pid === r.judge ? { type: 'verdict', correct: false } : null;
-    case 'result': return r.artists.includes(pid) || pid === r.qm ? { type: 'next' } : null;
+    case 'result': return (r.artists.includes(pid) || pid === r.qm) && !r.seen?.[pid] ? { type: 'next' } : null;
     default: return null;
   }
 }
 
 /**
- * Is the table really waiting on this seat? (Stall detection: 「阿明斷咗線 — 代佢做／再等」.) Exactly the seats in
- * focus: the QM while typing / picking, artists who have not looked, the drawer, voters still to vote, the guesser
- * or the judge. Never during the tally linger or on the result screen, where any seat may press 下一輪.
+ * Is the table really waiting on this seat? (Stall detection: 「阿明斷咗線 — 代佢做／再等」.) The seats in focus: the
+ * QM while typing / picking, artists who have not looked, the drawer, voters still to vote, the guesser or the
+ * judge — and, on the result, a present seat that has not tapped 睇完 yet (D3). Never during the tally linger.
  */
 function blocking(state, pid) {
-  const f = focus(state);
-  return !!f && typeof pid === 'string' && f.pids.includes(pid);
+  const s = state;
+  if (typeof pid !== 'string' || isAbsent(s, pid)) return false;
+  if (s.phase === 'result') return readers(s).includes(pid) && !s.round.seen?.[pid];
+  const f = focus(s);
+  return !!f && f.pids.includes(pid);
+}
+
+/**
+ * Would 呢鋪唔計 (@void-round) do anything right now? A scored round (result) or a finished game is left alone, and
+ * the host should hear why instead of 「呢個遊戲唔支援」. Optional hook for the shell:
+ * `engine.canVoid?.(state)` → { ok: true } | { ok: false, message } (the shape of a refused lobby op).
+ */
+function canVoid(state) {
+  const s = state;
+  // the result screen's button reads 睇總結 when this round decided the game (view.last)
+  if (s.phase === 'result') return { ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' };
+  if (s.phase === 'over' || !s.round) return { ok: false, message: '遊戲已經完咗' };
+  return { ok: true };
 }
 
 function result(state) {
@@ -1275,4 +1431,4 @@ function result(state) {
   };
 }
 
-export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, result, canInk };
+export const engine = { setup, act, advance, view, cue, focus, blocking, autoAct, legalActions, result, canInk, canVoid };

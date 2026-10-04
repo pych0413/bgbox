@@ -149,7 +149,7 @@ the real Troublemaker, now holding a Robber card, still does and still swaps.
 
 | step | awake seats | learns (immediately, behind a hold-to-peek cover) | may choose | lapse |
 |---|---|---|---|---|
-| `doppelganger` | the Doppelgänger | after copying: the target's role; | **must** pick another player (never the centre, never herself). If the copy is Seer/Robber/Troublemaker/Drunk she then acts at once with that role's normal options. Copy of Werewolf/Mason/Minion/Insomniac: told she will wake in that step. Villager/Tanner/Hunter: nothing more | copy: random other player (note 「系統幫你隨機揀」); copied Drunk: random centre swap; copied Seer/Robber/Troublemaker: lapses |
+| `doppelganger` | the Doppelgänger | after copying: the target's role; | **must** pick another player (never the centre, never herself). If the copy is Seer/Robber/Troublemaker/Drunk she then acts at once with that role's normal options. Copy of Werewolf/Mason/Minion/Insomniac: told she will wake in that step. Villager/Tanner/Hunter: nothing more. **All of this is behind the 📓 cover** (the copy is a hidden team change): her plain line stays 「你複製咗一個角色 — 㩒住下面 📓 睇係乜、仲要唔要做嘢。」 and the confirm label of her copied ability names only the pick (「👆 確定：阿C」), never the role's emoji or verb | copy: random other player (note 「系統幫你隨機揀」); copied Drunk: random centre swap; copied Seer/Robber/Troublemaker: lapses |
 | `doppelganger-minion` | the Doppelgänger iff she copied Minion | the original werewolves | — | — |
 | `werewolf` | original werewolves + a Doppelgänger who copied Werewolf | who else is awake, or 「冇其他狼人醒，另一張狼人牌一開始喺中間」 | exactly one awake and `loneWolf`: look at **one** centre card | lapses |
 | `minion` | original Minion | the werewolves (original + Doppelgänger-Werewolf), or 「冇狼人醒（冇玩家派到狼人牌）」; wolves never learn her | — | — |
@@ -172,8 +172,9 @@ in the centre now": a Doppelgänger-Drunk may have taken that card out of the ce
 ```
  [icon] 預言家                         ← the step being called: public, spoken aloud
  ▬▬▬▬▬▬▬▬▬▬▬▬                          ← countdown bar, no sound
- ┌ info card ───────────────────────┐   awake:  「👀 你醒咗」 + what you may do (+ a cover: 「㩒住睇結果」)
- └──────────────────────────────────┘   asleep: 「💤 瞓緊 — 呢一輪冇你份。閉住眼，等下一輪。」
+ ┌ info card ───────────────────────┐   awake:  「👀 你醒咗」 + what you may do
+ │ [📓 㩒住睇你今晚見過乜]           │   asleep: 「💤 瞓緊 — 呢一輪冇你份。閉住眼，等下一輪。」
+ └──────────────────────────────────┘   the 📓 cover: on EVERY phone at every step and stage, see below
  [阿B] [阿C] [阿D] [阿E] [阿F]          ← the other seats (live only while you have a choice)
  [中間 1] [中間 2] [中間 3]              ← the three centre cards (live only while you have a choice)
  ┌ 👆 㩒一下 ───────────────────────┐   the one big button: decoy for everybody, confirm for the chooser
@@ -182,8 +183,21 @@ in the centre now": a Doppelgänger-Drunk may have taken that card out of the ce
 
 Choosing: tap what you want, the button turns into the confirmation (`🔮 睇 阿C 張牌`, `🔮 睇中間第 1 張、中間第 3 張`,
 `🗡️ 同 阿C 換牌`, `🌪️ 對調 阿C 同 阿D`, `🍺 同中間第 2 張對調`, `👥 複製 阿B`, `👁 睇中間第 1 張`), a second tap
-commits — a half-pick is never sent, and an optional ability you do not want is simply not confirmed. Seer: a player pick
-clears centre picks and the other way round; Troublemaker: a third pick drops the oldest.
+commits — a half-pick is never sent, and an optional ability you do not want is simply not confirmed (every optional
+prompt says so: 「唔想睇／換就唔使理，時間到就當你唔睇／唔換。」). Seer: a player pick clears centre picks and the other way
+round; Troublemaker: a third pick drops the oldest. A Doppelgänger acting as her copy gets the neutral label 「👆 確定：…」.
+
+**The 📓 cover (playtest #11).** Every seat has the same hold-to-peek cover in its info card at every night step, in the cue
+and the window, from `begin` to `dawn`: back 「📓 㩒住睇你今晚見過乜」, fixed size (a 2:1 box, the same on every phone, about
+seven lines at 360 px), never hidden. Behind it is everything this seat has learned tonight so far (`my.night.seen`, the seat's own
+notes, **newest first** — a lapsed optional ability shows as 「…：今晚你冇用能力。」): a cover held open by a finger cannot scroll, so
+on a long night (a Doppelgänger who became a lone wolf: copy, wolves, the centre card) it is the oldest note that runs off the
+bottom, never what the seat just learned; the newest line is a shade brighter. For a Doppelgänger in her own step what her copy
+means sits right under the copy note (short, e.g. 「即刻用新角色嘅能力：睇一個人張牌，或者中間兩張（二揀一）。唔想用就唔使理。」 — the copy
+note already names the role, and the two must fit the box together); a seat that has learned nothing sees
+「今晚未見過嘢。」. So a result outlives the window it came in (a Seer who confirms at second 11 of 12 can still read it
+in the next step), and the cover itself says nothing about who woke. After acting, the plain line says
+「✓ 搞掂。㩒住下面 📓 睇返；天光之後都仲睇到。」 (the cover is below it).
 
 **Night screens of the shell.** `view.night = true` for every seat from `begin` until the `dawn` step (the screen then
 lights up for 「天光喇」). The shell dims and mutes every seat that is not in `focus`; `focus.pids` = the awake seats during
@@ -228,13 +242,26 @@ discussion length of this game.) Cue ids: `on{gid}:night:{ix}:{step}`; `minMs` =
 ### 3.5 `vote`
 
 Narrated with the countdown line above. Every seat gets the shared `VotePanel`: every other seat, pick then 確定 (two taps),
-改票 allowed until the last vote lands; 「已投 4 / 6」 for everyone, never who. No abstain, no self, no centre.
+改票 allowed until the last vote lands; 「已投 4 / 6」 for everyone, never who. No abstain, no self, no centre. The panel runs with
+**`secretChoice`** (decision D6): your own phone says 「確定投票」 / 「已投 ✓」 and never lights or names whom you picked.
 When the last seat has voted the phase becomes `reveal` and all votes are public at once.
 
 **圈票 (ring vote)** (config `ringVote`): under the ballot, 「⭕ 我同意圈票」. If every seat agrees, the engine gives every seat
 one vote on the next seat clockwise (everybody ends on exactly 1 vote → nobody dies). Agreeing never costs a ballot: if the
 circle falls through, everybody's own vote counts. Choosing a person leaves the circle. If everyone has decided but not all
 agreed, the agreers see 「圈票未成立：其他人已經揀咗人。你要自己揀一個人」 and the shared-phone focus asks them again.
+
+**💤 A seat that stops responding (decision D4).** The host marks it absent from the shell (`{ type: '@absent', pid }`; `@present`
+brings it back). For the rest of this game nothing waits for it: the deal starts the night once every *present* seat tapped 記住喇;
+夠鐘投票 counts present seats; in the vote it casts no ballot and takes no part in the circle (its taps are refused; no legal action,
+no autoAct), is still a candidate (its name carries 💤) and can die, and the vote reveals once every present seat has voted — a
+ballot it cast before it left stands and stays in the 「已投」 total. The circle forms when every *present* seat agrees; each of them
+then points one seat clockwise and an absent seat's early ballot is set aside, so every player still ends on at most one vote and
+nobody dies. 「睇完」 at the reveal counts present seats. If every seat is absent the vote is revealed at once (any ballots cast before leaving stand; with nobody present, no circle forms). The night is
+unchanged: its cards can still be robbed or swapped, and every window runs its fixed length whoever is awake. Public: `view.absent`
+(seat order) is the same on every phone and the table; the deal, day, vote, reveal and table screens show 「💤 暫時離開（唔使等）：阿明」;
+its own vote screen says 「💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。」 with no ballot and no circle. `blocking` is false
+for it. Unchanged state (the shell says the game cannot do it): an unknown seat, a seat already in that state, or `over`.
 
 ### 3.6 `reveal`
 
@@ -243,7 +270,7 @@ Everyone — seats and the table screen — sees the same screen, built to be re
 1. banner 「🎉 你贏咗！」 / 「😿 你輸咗」 (「🐺 開牌」 on the table) and the one-line summary;
 2. 🗳️ 票數: one bar per player with the voters under it, ☠️ on the dead;
 3. ☠️ 死咗: a card per dead player with the role they ended as (🏹 line for a Hunter's shot) — or 「冇人死」;
-4. 🃏 最後張牌: per player 「派到 X → 最後 Y」, the Doppelgänger's copy, team, ✅/❌; the three centre cards at the end;
+4. 🃏 最後張牌: per player 「派到 X → 最後 Y」, the Doppelgänger's copy, team, 「✅ 贏」/「❌ 輸」 (words, not bare marks); the three centre cards at the end;
 5. 點解會咁: the rule that decided it, in sentences;
 6. 夜晚記錄（邊個做咗乜）: collapsed — who looked at what, who swapped what.
 
@@ -314,7 +341,7 @@ included, does not change.
 | phase | hint |
 |---|---|
 | deal | 「㩒住張牌睇你係乜角色，記住佢，再㩒「記住喇」。」 / after: 「等其他人睇完張牌，夠晒人天就會黑。」 |
-| night | begin 「天黑喇：閉埋眼，部手機放低。」 · cue 「閉住眼聽報；叫到你嘅角色先睜眼。」 · asleep 「呢輪冇你份：照㩒大掣，扮有嘢做。」 · one per ability (copy, seer, robber, troublemaker, drunk, lone wolf) · after acting / information only 「㩒住上面格仔睇你見到乜，記住佢。」 · dawn |
+| night | begin 「天黑喇：閉埋眼，部手機放低。」 · cue 「閉住眼聽報；叫到你嘅角色先睜眼。」 · asleep 「呢輪冇你份：照㩒大掣，扮有嘢做。」 · one per ability (copy, seer, robber, troublemaker, drunk, lone wolf) · after acting / information only 「㩒住 📓 格仔睇你見到乜，記住佢。」 · a Doppelgänger who has copied 「㩒住 📓 格仔睇你變咗乜、仲要唔要做嘢。」 (never the copied role's own line, playtest #8) · dawn |
 | day | 「講你係乜、見過乜（可以講大話），搵出狼人。」 |
 | vote | pick · voted · agreed to the circle · the circle fell through |
 | reveal / over | 「睇下邊個死咗、點解；睇完㩒「睇完整個結果」。」 · 「等房主去結果頁。」 · over · void |
@@ -336,11 +363,20 @@ and so no label. `rules.quick`: six short lines.
 - **Every seat has something to tap in every step and stage** (`ack`). Test: all 3–10 head-counts × both presets × every
   step × cue and window — each seat has a legal `ack`.
 - **Identical shape.** One layout for every step and seat; the info card, the cover slot and the button have fixed size (the
-  cover slot is reserved even when empty); the grid is 2 columns up to 6 other seats, 3 above. Test (fake DOM): the night
+  📓 cover is always there, the same on every seat); the grid is 2 columns up to 6 other seats, 3 above. Test (fake DOM): the night
   screen of every seat has the same shape at every step.
 - **No sound at night** from the UI (the only sounds are 記住喇's lock click in the deal, the reveal fanfare and the timers' beeps by day); the shell mutes non-focused seats. Results are behind a hold-to-peek cover (so a
-  neighbour with open eyes in 靜音 mode cannot read them) with no flip sound.
-- **No names in counters:** 「已㩒掣 4 / 6」 on the table screen only.
+  neighbour with open eyes in 靜音 mode cannot read them) with no flip sound. That cover (📓) is on every phone at every step,
+  always visible and the same size, whether or not anything is behind it (§3.2). Test (fake DOM): every seat, every step and
+  stage — same back, never hidden; a Seer's look stays behind her cover until dawn and behind nobody else's.
+- **Nothing secret in plain text:** what a seat learned is never in its plain lines; the Doppelgänger's copied role and the
+  copied ability's instructions are only behind the cover, and her plain line, confirm labels and 💡 line are the same
+  whatever she copied (playtest #8). Test: no role name or emoji in her plain lines or labels, for an active, a later-waking
+  and a no-action copy.
+- **No night counter (playtest #18).** An action counts as a tap, so 「已㩒掣 n / m」 would tell a seatless table screen how
+  many seats are awake (0 / 5 at the werewolf step = no player holds a werewolf). The table screen shows no count at night
+  and no view carries `acks`; `acked` stays engine-internal (the decoy's own ✓ and `legalActions`). Test: the table screen is
+  byte-identical before and after an action or a decoy tap.
 - **Anonymous prompts** for a shared phone: 「預言家請拎起部手機」 — the role, never the seat (`focus.anonymous`).
 - **Honest limit (靜音 mode, eyes open):** a lit screen is visible to the neighbours, because the shell lights exactly the
   awake seats. Voice and 讀稿 play with closed eyes; in 靜音 play ask everyone to turn the brightness down and cup the phone.
@@ -395,7 +431,7 @@ Doppelgänger card what it copied (a card that copied nothing is a Villager).
 | action | pid | when | rule |
 |---|---|---|---|
 | `{type:'ready'}` | seat | `deal` | once; all ready → `night` |
-| `{type:'ack'}` | seat | `night`, both stages | the decoy tap: marks the seat in `acked` (a counter, no names), changes nothing else |
+| `{type:'ack'}` | seat | `night`, both stages | the decoy tap: marks the seat in `acked` (engine-internal, never counted in a view), changes nothing else |
 | `{type:'copy', target}` | Doppelgänger | `doppelganger` window | another player; once |
 | `{type:'look-player', target}` | Seer, or Doppelgänger-Seer | window | another player; one look per step |
 | `{type:'look-centre', cards:[i,j]}` | Seer / Doppelgänger-Seer | window | two distinct of 0–2 |
@@ -411,6 +447,7 @@ Doppelgänger card what it copied (a card that copied nothing is a Villager).
 | `@cue-done {id}` | host | `deal`/`night` cue/`vote`/`reveal` | acknowledges the cue if the id matches; in a night cue it opens the window |
 | `@next` | host | any | acknowledges a pending cue first; then: deal → force night, cue → open window, window → settle and move on, day → vote, reveal → over |
 | `@void-round` | host | `deal` / `night` / `day` / `vote` | 呢局唔計 (§3.7a): straight to `over`, unscored; a seat sending it changes nothing |
+| `@absent {pid}` / `@present {pid}` | host | any before `over` | §3.5: the seat stops / starts being waited for; may complete the deal, 夠鐘投票, the vote, the circle or 睇完 at once |
 
 The Doppelgänger uses the same action types for the copied role (`via: 'doppel'`), only in her own step.
 
@@ -436,7 +473,7 @@ harmless `ack` · `day` → ready-vote · `vote` → random other · `reveal` �
 `true` only where nothing but that seat moves the game: `deal` (it has not tapped 記住喇) and `vote` (the seats `focus`
 still asks). `false` in every night cue and window, the day and the reveal: they run on deadlines, and at night every
 seat has the decoy, so "has a legal action" (the session's fallback) would flag — and show the host — exactly the awake
-seats.
+seats. Never a seat the host marked 💤.
 
 ### `setup` and `carry`
 
@@ -451,14 +488,15 @@ decoy assertion. The Troublemaker's list is all pairs of the others; the Seer's 
 
 ### Views (whitelist, built field by field)
 
-Common: `seat, phase, n, title, subtitle, night, roleList [{role,count}], opts {loneWolf, ringVote, pace}, hint, deadline?, timerLabel?`;
+Common: `seat, phase, n, title, subtitle, night, roleList [{role,count}], opts {loneWolf, ringVote, pace}, hint, deadline?, timerLabel?, absent [pids]`
+(the 💤 seats — every count below is of the seats the table still waits for; `my.absent` on that seat's own view);
 for a seat that has `my`: `hintRoleLabel` (the constant 「你派到嘅角色」 — the 💡 sheet's role heading).
-Per phase: `deal` `ready {done,total}`; `night` `step {ix,total,k,stage}`, `acks {done,total}`; `day` `dayReady {done,total,mine}`,
+Per phase: `deal` `ready {done,total}`; `night` `step {ix,total,k,stage}` (no tap counter, §3.8); `day` `dayReady {done,total,mine}`,
 `canExtend`; `vote` `progress`, `ring {on,done,total,mine,stuck}`; `reveal`/`over` `reveal {…}` and `revealDone` — or, for a
 voided game, only `voided: true`.
 
-`my` (seats only): `dealt` (the viewer's own dealt role), `ready`/`acked`; `night: { awake, info, ab, copied }` — `info` = this
-seat's notes of the current step, `ab = { name, via, mandatory, mode }` is what it may still do (`mode` ∈ `player`, `seer`, `pair`,
+`my` (seats only): `dealt` (the viewer's own dealt role), `ready`/`acked`; `night: { awake, seen, info, ab, copied }` — `seen` =
+all of this seat's own notes so far tonight (every seat, every step and stage: the 📓 cover), `info` = this seat's notes of the current step, `ab = { name, via, mandatory, mode }` is what it may still do (`mode` ∈ `player`, `seer`, `pair`,
 `centre1`); `notes` (day and vote) = the dealt role + all of the seat's own notes. **Never**: the seat's current card, any
 other seat's anything, the centre, the log, others' votes before the reveal. `reveal` (from `reveal` on) carries the votes,
 counts, deaths, shots, every card (`orig`, `face`, `copied`, `final`, `team`, `won`, `dead`), the centre, the summary and the three
@@ -529,6 +567,13 @@ win(village) = villageWins
   the public reveal; vote and ring; a seatless device; the 呢局唔計 screen.
 - **Room**: a dropped phone is never flagged at night or in the day, only when the vote waits on it; `carry` reaches
   `room.carries` and never the results screen.
+- **Decisions (2026-10-04 UTC)**: `@absent` / `@present` at the deal, 夠鐘投票, the vote (no ballot, no circle, still a candidate who
+  can die, an early ballot stands and counts in the total, the last missing voter closes it, @present waits again), the circle
+  (forms on every present seat, an absent ballot set aside, nobody dies; stuck among present seats; an agreer who leaves), 睇完, every
+  seat absent; never `blocking`; `view.absent` in the view whitelist and identical in every view (checked in every leak pass); a fuzz
+  over 3–10 seats that marks random seats absent and back · the night 📓 lists notes newest first, the Doppelgänger's copy line right
+  under her copy note · **UI**: every ballot has `secretChoice`, the absent candidate's name carries 💤, the absent seat sees the 💤
+  line with no ballot and no circle, the public 💤 line; the night cover draws the newest note first.
 
 ## 7. 貼心 touches
 
@@ -539,6 +584,9 @@ win(village) = villageWins
 - Mandatory choices are never lost: a lapsed Drunk or Doppelgänger gets a random choice and a note saying so.
 - The day recap keeps "what I was dealt" and "what I saw" so nobody has to remember, and warns that the card may have changed.
 - 圈票 in one tap, without losing anybody's own ballot if it falls through.
+- Your own vote never shows on your screen before the reveal (「已投 ✓」).
+- A friend who wanders off does not freeze the table: the host marks the seat 💤 and the deal, the vote and the circle go on without it.
+- The night 📓 shows what you just learned on top, so a third note never hides the newest one in a cover that cannot scroll.
 - The reveal shows who voted for whom, the dead players' cards, **every** final card and the swap trail, then the night
   recap: 「原來係咁」 for the whole table, not just the winners.
 - The host phone reads the outcome aloud (tally, deaths, Hunter shot, winners) so people look at each other, not at the phone.

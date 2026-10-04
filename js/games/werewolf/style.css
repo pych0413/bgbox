@@ -42,6 +42,7 @@
 .ww-stage-text { min-width: 0; }
 .ww-stage-title { font-size: 1.125rem; font-weight: 800; letter-spacing: .04em; }
 .ww-stage-say { margin: .25rem 0 0; font-size: .8125rem; line-height: 1.6; color: var(--text-dim); }
+.ww-stage-night { margin: .375rem 0 0; font-size: .875rem; font-weight: 700; line-height: 1.5; color: var(--text); }
 .ww-timer .c-timer { padding: .25rem 0 0; }
 .ww-timer .c-timer-clock { font-size: 2.25rem; line-height: 1.1; }
 
@@ -91,7 +92,7 @@
 }
 .ww-chip:active:not([disabled]) { transform: scale(.97); }
 .ww-chip[disabled] { opacity: .5; cursor: default; }
-.ww-chip.on { color: var(--text); border-color: var(--seat, var(--line)); opacity: 1; }
+.ww-chip.can { color: var(--text); border-color: var(--seat, var(--line)); opacity: 1; }
 .ww-chip.pick { background: rgba(155, 135, 245, .2); border-color: var(--accent); font-weight: 700; }
 .ww-chip.lock { background: rgba(155, 135, 245, .32); border-color: var(--accent); font-weight: 700; }
 .ww-chip.dead .ww-chip-name { text-decoration: line-through; }
@@ -176,6 +177,14 @@
 .ww-me-card .c-cover { aspect-ratio: 16 / 9; margin-bottom: .5rem; }
 .ww-me-card .c-rolecard-front .role-desc { -webkit-line-clamp: 6; font-size: .75rem; }
 .ww-me-card .c-rolecard-front .role-emoji { font-size: 2.25rem; }
+.ww-me-notes { margin-top: .25rem; }
+/* a FIXED height: a notebook that grew with the notes would show at a glance who has night records */
+.ww-me-notes .c-cover { aspect-ratio: auto; height: 10rem; margin-bottom: .5rem; }
+.ww-me-notes .c-cover-art { font-size: 2.25rem; }
+.ww-me-notes .c-cover-front { justify-content: flex-start; align-items: stretch; padding: .625rem .875rem; overflow-y: auto; }
+.ww-notes { display: flex; flex-direction: column; gap: .125rem; width: 100%; text-align: left; }
+.ww-notes .ww-me-line { font-size: .75rem; line-height: 1.5; }
+.ww-notes-head { margin: 0 0 .125rem; font-size: .8125rem; font-weight: 700; color: var(--text); }
 .ww-me-lines { display: flex; flex-direction: column; gap: .25rem; margin-top: .375rem; }
 .ww-me-line { margin: 0; font-size: .8125rem; line-height: 1.6; color: var(--text-dim); }
 .ww-me-line.mates { color: #ff9b86; font-weight: 700; }

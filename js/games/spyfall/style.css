@@ -45,6 +45,24 @@
 .sf-banner.is-yes { background: rgba(78, 201, 122, .12); border-color: rgba(78, 201, 122, .5); }
 .sf-banner.is-no { background: rgba(228, 87, 61, .1); border-color: rgba(228, 87, 61, .4); }
 
+/* ---------- play: the clock bar sticks under the app header (.play-top, 3.5rem + the notch) while the list scrolls ---------- */
+.sf-clock {
+  position: sticky; top: calc(3.5rem + var(--safe-t, 0px)); z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  padding: .25rem .5rem .25rem .875rem; border-radius: .875rem; border: 1px solid var(--line, #3d3524);
+  background: rgba(20, 17, 12, .94); -webkit-backdrop-filter: blur(.5rem); backdrop-filter: blur(.5rem);
+}
+/* while the connection bar shows, the header itself sits under it (base.css: body.has-netbar .play-top) */
+body.has-netbar .sf-clock { top: calc(var(--netbar-h, 2.25rem) + 3.5rem); }
+.sf-clock .c-timer { display: flex; align-items: baseline; gap: .5rem; padding: 0; text-align: left; min-width: 0; }
+.sf-clock .c-timer-clock { font-size: 2.25rem; line-height: 1.15; }
+.sf-clock .c-timer-label, .sf-clock .c-timer-paused { font-size: .75rem; white-space: nowrap; }
+.sf-clock-act { flex: none; }
+.sf-clock-act .btn { width: auto; margin: 0; white-space: nowrap; }
+/* the 🙋 shortcut scrolls the accusation picker into view: keep it clear of the header and the clock bar */
+.sf-actions { scroll-margin-top: calc(7.25rem + var(--safe-t, 0px)); }
+body.has-netbar .sf-actions { scroll-margin-top: calc(var(--netbar-h, 2.25rem) + 7.25rem); }
+
 .sf-frozen {
   text-align: center; font-size: 1.75rem; font-weight: 800; font-variant-numeric: tabular-nums;
   color: var(--text-dim, #a2977f); padding: .25rem 0;
@@ -75,6 +93,7 @@
 .sf-seat:active:not(:disabled) { transform: scale(.97); }
 .sf-seat .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-seat em { font-style: normal; font-size: .6875rem; color: var(--text-dim, #a2977f); }
+.sf-seat .sf-acc { flex: none; font-size: .6875rem; opacity: .8; }   /* used their one accusation (public) */
 .sf-seat.holder { border-color: var(--accent, #3aa7d9); box-shadow: 0 0 0 1px var(--accent, #3aa7d9) inset; }
 .sf-seat.prev { opacity: .5; }
 .sf-seat:disabled { cursor: default; }

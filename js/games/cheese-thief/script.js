@@ -130,6 +130,8 @@ export const HINT = {
   },
   vote: '揀一個你覺得係大盜嘅人，再㩒確定。唔可以投自己。',
   voted: '投咗喇，等其他人；投晒之前仲可以改。',
+  // the host marked this seat 💤 (D4): it casts no vote until the host marks it back
+  absent: '房主當咗你暫時離開：今次唔使投，返嚟就同房主講聲。',
   reveal: '最高票嘅人開牌，等陣就知邊個贏。',
   over: '睇下「點解會咁」同夜晚重溫，再嚟一局。',
   table: {

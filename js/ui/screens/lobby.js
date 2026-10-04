@@ -7,13 +7,13 @@
 // narrator and Web Audio are primed there, as the very first thing.
 // ============================================================
 
-import { el, dieFace, sig, toast } from '../dom.js?v=20261003171423';
-import { sfx, primeAudio } from '../../core/sfx.js?v=20261003171423';
-import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=20261003171423';
-import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=20261003171423';
+import { el, dieFace, sig, toast, copyBox } from '../dom.js?v=1';
+import { sfx, primeAudio } from '../../core/sfx.js?v=1';
+import { SeatEditor, ConfigForm, Scoreboard, RulesSheet } from '../components/index.js?v=1';
+import { fits, turnOrderMatters, savedOrderDiffers, presetMatches } from '../logic.js?v=1';
 
 const ORDER_HINT = '座位次序＝輪流次序，開局前用換位排好';
-import { wantsPreflight } from '../preflight.js?v=20261003171423';
+import { wantsPreflight } from '../preflight.js?v=1';
 
 const QR_CDN = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
 let qrLoading = null;
@@ -49,8 +49,10 @@ export function mountLobby(sh) {
 
   // ---------- top bar ----------
   const title = el('h2');
+  // ‹ is an icon: it keeps its face while armed and a toast says 「再㩒一次」 (#3)
+  const backBtn = el('button', { class: 'icon-btn', type: 'button', 'aria-label': '離開', onclick: () => sh.leave(backBtn, { inline: false }) }, '‹');
   const topbar = el('header', { class: 'topbar' },
-    el('button', { class: 'icon-btn', type: 'button', 'aria-label': '離開', onclick: () => sh.leave() }, '‹'),
+    backBtn,
     title, sh.timer.button(), sh.soundButton(), sh.settingsButton());
   const timerStrip = sh.timer.strip();
 
@@ -60,19 +62,19 @@ export function mountLobby(sh) {
   const qrWrap = el('div', { class: 'qr-wrap' }, qrBox);
   qrWrap.hidden = true;
   const qrBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '📱 QR Code');
+  // the clipboard can refuse (an in-app browser, no permission): the link then shows in the page to copy by
+  // hand — never window.prompt, which freezes the host's phone (the room's server, #3)
+  const linkCopy = copyBox();
   const codeCard = el('div', { class: 'card code-card' },
     el('span', { class: 'field-label', text: '房間號碼 — 講俾朋友聽' }),
     bigCode,
     el('div', { class: 'code-actions' },
       el('button', {
         class: 'btn btn-ghost btn-sm', type: 'button',
-        onclick: async () => {
-          const url = sh.roomLink(last.code);
-          try { await navigator.clipboard.writeText(url); toast('連結已複製'); }
-          catch { window.prompt('複製呢條連結：', url); }
-        },
+        onclick: () => linkCopy.copy(sh.roomLink(last.code)),
       }, '📋 複製連結'),
       qrBtn),
+    linkCopy.el,
     qrWrap);
 
   qrBtn.addEventListener('click', async () => {
@@ -221,6 +223,8 @@ export function mountLobby(sh) {
   // ---------- start ----------
   const startBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button' }, '開始 ▶');
   const status = el('p', { class: 'status' });
+  // #39: 開始 ▶ stays on screen while the host scrolls the long settings (sticky at the bottom)
+  const startBar = el('div', { class: 'lobby-start' }, startBtn, status);
 
   async function doStart() {
     // iOS gesture rule: prime speech and audio from the tap itself, before anything async
@@ -466,7 +470,7 @@ export function mountLobby(sh) {
   }
 
   const root = el('section', { class: 'screen', 'data-screen': 'lobby' },
-    topbar, timerStrip, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBtn, status);
+    topbar, timerStrip, codeCard, seatsCard, gameCard, summaryCard, configCard, narrCard, boardCard, startBar);
 
   return {
     el: root,
@@ -482,7 +486,9 @@ export function mountLobby(sh) {
         const key = String(st.code);
         if (bigCode.dataset.code !== key) {
           bigCode.dataset.code = key;
-          bigCode.replaceChildren(...key.split('').map((ch) => dieFace(Number(ch))));
+          // #37: a small digit under each die, so the code can be read out without counting pips
+          bigCode.replaceChildren(...key.split('').map((ch) => el('div', { class: 'code-cell' },
+            dieFace(Number(ch)), el('span', { class: 'code-digit', 'aria-hidden': 'true', text: ch }))));
         }
         if (qrShown) buildQr();
       }
@@ -499,10 +505,11 @@ export function mountLobby(sh) {
         orderHint: room.gameId && turnOrderMatters(room.gameId, sh.gameMeta(room.gameId)) ? ORDER_HINT : null,
         onMove: (pid, index) => report(app.lobby.moveSeat(pid, index)),
         onColor: (pid, color) => report(app.lobby.setColor(pid, color)),
-        onKick: (pid) => {
+        onKick: (pid, node) => {
           const p = room.players.find((x) => x.id === pid);
           if (mySeats.includes(pid)) report(app.lobby.removeSeat(pid));
-          else if (sh.confirm(`踢走 ${p?.name ?? ''}？`)) report(app.lobby.kick(pid));
+          // ✕ is an icon: armed, it keeps its face and a toast says 「再㩒一次：踢走 X？」 (#3, never a native confirm)
+          else if (sh.confirm(`踢走 ${p?.name ?? ''}？`, node ?? null, { key: `kick:${pid}`, inline: false })) report(app.lobby.kick(pid));
         },
       });
 

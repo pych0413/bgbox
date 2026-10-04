@@ -12,7 +12,13 @@
 //          → vote   (an accusation, or the final vote after time-up)
 //          → tally  (result of a vote stays on screen for TALLY_MS)
 //          → guess  (a spy stopped the clock and names a location)
-//          → roundEnd (reveal + points) → next round, or → over
+//          → roundEnd (reveal + points; moves on when every present seat has tapped 睇完,
+//            or the host's 下一步) → next round, or → over
+//
+// Absent seats (D4, host `{ type: '@absent', pid }`, back with '@present'): public, never waited on —
+// no ready check, no vote (unanimity counts present voters), no turn as final-vote suspect, no 睇完, never
+// dealt the spy again. An absent SPY voids the round: it is replayed under the same number with a spare
+// location (`state.spare`), exactly like the host's 呢鋪唔計 (@void-round). Nobody scores a void round.
 //
 // Clock bookkeeping: the session only shifts `state.deadline` when the host
 // pauses. So the true end of the clock is ALWAYS derived from it:
@@ -26,7 +32,11 @@
 // state.list is the PUBLIC location list (name, emoji, category only).
 // ============================================================
 
-import { HOST, ACT, pick, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=20261003171423';
+import { HOST, ACT, pick, rint, sample, shuffle, seatOrder, nextSeat } from '../../core/engine-kit.js?v=1';
+
+// D4 host actions (the literals, so this engine does not depend on engine-kit having them)
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
 
 // ------------------------------------------------------------
 // constants
@@ -120,7 +130,7 @@ export const rules = {
         '2. 全部準備好就開始計時，由發牌員問第一條問題。',
         '3. 問答期間可以指控、間諜可以停鐘猜地點。',
         '4. 時間到就最後投票。',
-        '5. 揭曉地點同間諜，計分，然後下一局。',
+        '5. 揭曉地點同間諜，計分；全部人㩒「睇完」就開下一局（房主可以㩒下一步唔等）。',
         '發牌員：第一局隨機，之後每局輪到左手邊下一位。發牌員問第一條問題，最後投票都係由佢開始；發牌員都可以係間諜。',
       ].join('\n'),
     },
@@ -140,6 +150,7 @@ export const rules = {
         '一個間諜：所有人都贊成先成立。兩個間諜：最多可以有一個人反對。',
         '成立：被指控嘅人亮牌 — 係間諜就非間諜贏，唔係間諜就間諜贏。',
         '唔成立：鐘由停低嗰一刻繼續行，指控人用咗佢嘅一次機會；間諜又可以再停鐘估地點。',
+        '唔好俾人睇你部手機證明身分：要講服大家，就靠把口。',
       ].join('\n'),
     },
     {
@@ -180,6 +191,14 @@ export const rules = {
         '指控同最後投票：最多容許一個人反對。',
         '兩個間諜都計分：間諜贏每人 +2（中途全票錯怪好人每人 +4）；估中地點嗰個再 +2。',
         '其中一個間諜被揪出：另一個當自己係非間諜計 +1；如果佢係最先中途指控嗰個，指控獎勵都照攞。',
+      ].join('\n'),
+    },
+    {
+      title: '有人走開咗',
+      body: [
+        '房主可以將佢設做「唔喺度」（💤）：唔使等佢準備、投票或者㩒睇完；指控同最後投票只計喺度嘅人。',
+        '如果佢係間諜，呢局作廢、冇人得分，用另一個地點重新派過牌（局數照計返）。',
+        '房主亦可以㩒「呢鋪唔計」：同樣重新派過。',
       ].join('\n'),
     },
     {
@@ -419,14 +438,33 @@ const isPlayer = (s, id) => !!byId(s, id);
 const nameOf = (s, id) => byId(s, id)?.name ?? '?';
 const namesOf = (s, ids) => ids.map((id) => nameOf(s, id)).join('、');
 const maxNo = (s) => maxNoFor(s.cfg.spies, s.cfg.twoSpyThreshold);
-const needYes = (s) => s.order.length - 1 - maxNo(s);   // voters = everyone but the suspect
+const needYes = (s) => votersOf(s).length - maxNo(s);   // voters = every present seat but the suspect
 const clockEnd = (s) => s.deadline + s.clockLeft;
 const locOf = (s, i) => s.list[i];
 const locLabel = (s, i) => `${locOf(s, i).emoji} ${locOf(s, i).name}`;
 
+// ---- absent seats (D4) ----
+const isAbsent = (s, id) => !!s.absent?.[id];
+const presentOf = (s) => s.order.filter((id) => !isAbsent(s, id));
+/** Next present seat clockwise after `from` (optionally also passing `ok`), or null. */
+const nextPresent = (s, from, ok = () => true) => nextSeat(s.order, from, (id) => !isAbsent(s, id) && ok(id));
+/** Fewest present seats a round still works with: 3, and enough voters that one "no" can still sink a vote. */
+const minPresent = (s) => Math.max(MIN_PLAYERS, s.cfg.spies + 2, maxNo(s) + 2);
+const zeros = (s) => Object.fromEntries(s.order.map((id) => [id, 0]));
+
 function votersOf(s) {
   const v = s.round.vote;
-  return s.order.filter((id) => id !== v.suspect);
+  return s.order.filter((id) => id !== v.suspect && !isAbsent(s, id));
+}
+
+/** Where the final vote stands: the current suspect is number `index` of `of` present seats. */
+function finalPos(s) {
+  const r = s.round;
+  const n = s.order.length;
+  const start = s.order.indexOf(r.dealer);
+  let before = 0;
+  for (let k = 0; k < r.finalIdx; k++) if (!isAbsent(s, s.order[(start + k) % n])) before++;
+  return { index: before + 1, of: Math.max(before + 1, presentOf(s).length) };
 }
 
 function setCue(s, key, text, minMs = 2500) {
@@ -439,8 +477,8 @@ function setCue(s, key, text, minMs = 2500) {
 // ------------------------------------------------------------
 
 const T = {
-  deal: (s) => `第${s.roundNo}局，發牌員係${nameOf(s, s.round.dealer)}。每個人㩒住張卡睇自己嘅身分，睇完㩒「準備好」。`,
-  start: (s) => `大家準備好，計時${s.cfg.minutes}分鐘，開始！由${nameOf(s, s.round.dealer)}問第一條問題。`,
+  deal: (s) => `${s.round.redo ? '上一鋪唔計，重新派過牌。' : ''}第${s.roundNo}局，發牌員係${nameOf(s, s.round.dealer)}。每個人㩒住張卡睇自己嘅身分，睇完㩒「準備好」。`,
+  start: (s) => `大家準備好，計時${s.cfg.minutes}分鐘，開始！由${nameOf(s, s.round.floor.holder)}問第一條問題。`,
   warn: () => '仲有一分鐘。',
   accuse: (s, by, suspect) => `鐘停咗。${nameOf(s, by)}指控${nameOf(s, suspect)}，大家投票。`,
   tally(s) {
@@ -448,17 +486,26 @@ const T = {
     if (t.convicted) return `全票通過，${nameOf(s, t.suspect)}要亮牌。`;
     return t.kind === 'accuse' ? '唔通過，鐘繼續行。' : '唔通過。';
   },
-  timeUp: (s) => `時間到！間諜唔可以再估地點。最後投票由${nameOf(s, s.round.dealer)}開始，可以傾，但唔好講出地點。`,
+  timeUp: (s, first) => `時間到！間諜唔可以再估地點。最後投票由${nameOf(s, first)}開始，可以傾，但唔好講出地點。`,
   finalNext: (s, suspect) => `下一位：${nameOf(s, suspect)}。`,
+  accuseOff: (s, suspect) => `${nameOf(s, suspect)}唔喺度，指控取消，鐘繼續行。`,
   guess: (s, pid) => `${nameOf(s, pid)}話佢係間諜！鐘停咗，等佢喺地點清單揀一個。`,
   guessNext: (s, pid) => `另一個間諜${nameOf(s, pid)}都要企出嚟，輪到佢揀。`,
   roundEnd: (s, h) => `${headlineOf(s, h)}。地點係${locOf(s, h.loc).name}，間諜係${namesOf(s, h.spies)}。`,
-  over: (s) => `${s.cfg.rounds === 1 ? '呢局' : `${s.history.length}局`}打完。${summaryOf(s)}。`,
+  over: (s) => `${s.cfg.rounds === 1 ? '呢局' : `${scoredCount(s)}局`}打完。${summaryOf(s)}。`,
 };
+
+const scoredCount = (s) => s.history.filter((h) => h.code !== 'void').length;
+
+/** Why a round was voided, in a few words (history entry `h`, code 'void'). */
+function voidWhy(s, h) {
+  return h.why === 'absent' && h.absent != null ? `${nameOf(s, h.absent)} 唔喺度，佢係間諜` : '房主話呢鋪唔計';
+}
 
 function headlineOf(s, o) {
   const suspect = o.suspect != null ? nameOf(s, o.suspect) : '';
   switch (o.code) {
+    case 'void': return `呢局作廢：${voidWhy(s, o)}`;
     case 'survived': return '間諜贏：冇人被全票通過';
     case 'final-innocent': return `間諜贏：最後投票錯怪咗${suspect}`;
     case 'accused-innocent': return `間諜贏：全場錯怪咗${suspect}`;
@@ -482,6 +529,10 @@ function explainLines(s, o) {
   const lines = [];
 
   switch (o.code) {
+    case 'void':
+      lines.push(`${voidWhy(s, o)}，所以呢局作廢。`);
+      lines.push('冇人得分。');
+      break;
     case 'survived':
       lines.push('時間到，逐個人投過一輪，冇人被全票通過。');
       lines.push(`間諜 ${spyNames} 冇俾人揪出，${each}+2。`);
@@ -540,6 +591,7 @@ function explainLines(s, o) {
 
 /** One line per finished round for the final results screen: where, who, what happened, who scored. */
 function roundLine(s, h) {
+  if (h.code === 'void') return `第 ${h.n} 局 ${locLabel(s, h.loc)}（間諜：${namesOf(s, h.spies)}）— 作廢，唔計分（${voidWhy(s, h)}）`;
   const scored = s.order.filter((id) => h.deltas[id] > 0);
   const pts = scored.length > 3 && h.winTeam === 'agent'
     ? `非間諜各 +1${h.bonusTo != null ? `，${nameOf(s, h.bonusTo)} +2` : ''}`
@@ -672,6 +724,10 @@ export function setup({ players, config: rawCfg, rng, now, bag }) {
   const entries = sortList(shuffle(rng, drawn));
   // One distinct secret per round, fixed now. Only these keep their role pool in the state.
   const plan = sample(rng, entries.map((_, i) => i), cfg.rounds).map((loc) => ({ loc, roles: entries[loc].roles }));
+  // The rest of the list, kept (with roles) for a round that is voided and dealt again. Drawn without rng, so a
+  // game that never voids plays exactly as before.
+  const planned = new Set(plan.map((p) => p.loc));
+  const spare = entries.map((e, loc) => ({ loc, roles: e.roles })).filter((x) => !planned.has(x.loc));
 
   const state = {
     v: 1,
@@ -680,6 +736,8 @@ export function setup({ players, config: rawCfg, rng, now, bag }) {
     order,
     list: entries.map((e) => ({ name: e.name, emoji: e.emoji, cat: e.cat })),
     plan,                     // PRIVATE: [{ loc, roles }] — the secret of each round
+    spare,                    // PRIVATE: [{ loc, roles }] — unplanned list entries, for a voided round's replay
+    absent: {},               // pid → true: the host marked the seat absent (public, D4)
     roundNo: 0,
     totals: Object.fromEntries(order.map((id) => [id, 0])),
     history: [],              // finished rounds (public)
@@ -695,22 +753,35 @@ export function setup({ players, config: rawCfg, rng, now, bag }) {
   return state;
 }
 
-function startRound(s, ctx) {
-  s.roundNo += 1;
+/**
+ * Deal a round. `redo` = the last one was voided (an absent spy, or the host's 呢鋪唔計): same number and dealer
+ * (the next present seat if the dealer is away), the fresh location already put in `plan` by voidRound.
+ */
+function startRound(s, ctx, { redo = false } = {}) {
+  if (!redo) s.roundNo += 1;
   const order = s.order;
+  const present = presentOf(s);
   // Dealer = first asker and first final-vote suspect: random over ALL seats in round 1 (drawn
-  // before and independently of the spies), then the next seat clockwise (Spyfall 2 rotation).
-  const dealer = s.round ? nextSeat(order, s.round.dealer) : pick(ctx.rng, order);
+  // before and independently of the spies), then the next seat clockwise (Spyfall 2 rotation). Absent seats are
+  // passed over.
+  let dealer;
+  if (!s.round) dealer = pick(ctx.rng, order);
+  else if (redo) dealer = isAbsent(s, s.round.dealer) ? nextPresent(s, s.round.dealer) : s.round.dealer;
+  else dealer = nextPresent(s, s.round.dealer) ?? nextSeat(order, s.round.dealer);
   const { loc, roles: pool } = s.plan[s.roundNo - 1];
-  // Spies uniform over all seats. Optional anti-streak: last round's spies sit out when enough others remain.
-  const lastSpies = s.history.length ? s.history[s.history.length - 1].spies : [];
-  const others = order.filter((id) => !lastSpies.includes(id));
-  const spyPool = s.cfg.antiStreak && lastSpies.length && others.length >= s.cfg.spies ? others : order;
+  // Spies uniform over the present seats. Optional anti-streak: the last scored round's spies sit out when enough
+  // others remain.
+  const lastScored = s.history.filter((h) => h.code !== 'void');
+  const lastSpies = lastScored.length ? lastScored[lastScored.length - 1].spies : [];
+  const others = present.filter((id) => !lastSpies.includes(id));
+  const spyPool = s.cfg.antiStreak && lastSpies.length && others.length >= s.cfg.spies ? others : present;
   const spies = sample(ctx.rng, spyPool, s.cfg.spies);
   const roles = dealRoles(ctx.rng, pool, order.filter((id) => !spies.includes(id)));
 
   s.round = {
     n: s.roundNo, dealer, loc, spies, roles,
+    redo,                     // this deal replaces a voided one (public)
+    seen: {},                 // pid → true: tapped 睇完 on the round's reveal (public)
     ready: {},                // pid → true (public)
     accUsed: {},              // pid → true (public)
     accusations: [],          // [{ by, suspect, result: null | 'passed' | 'failed' }] (public)
@@ -750,7 +821,8 @@ function stopClock(s, now) {
 
 function startPlay(s, ctx) {
   s.phase = 'play';
-  s.round.floor = { holder: s.round.dealer, prev: null };
+  const d = s.round.dealer;
+  s.round.floor = { holder: isAbsent(s, d) ? (nextPresent(s, d) ?? d) : d, prev: null };
   runClock(s, ctx.now, s.cfg.minutes * 60_000);
   setCue(s, 'start', T.start(s));
 }
@@ -759,9 +831,11 @@ function startPlay(s, ctx) {
 // votes
 // ------------------------------------------------------------
 
+/** Hands mode: who taps the result — the dealer, else the next present seat that is not the suspect. */
 function reporterFor(s, suspect) {
   const d = s.round.dealer;
-  return suspect === d ? nextSeat(s.order, d) : d;
+  const ok = (id) => id !== suspect && !isAbsent(s, id);
+  return ok(d) ? d : nextSeat(s.order, d, ok);
 }
 
 function openVote(s, kind, suspect, by) {
@@ -777,12 +851,26 @@ function openVote(s, kind, suspect, by) {
   s.clockLeft = 0;
 }
 
+/** The next final-vote suspect from `finalIdx` on (absent seats are passed over), or null when nobody is left. */
 function openFinalVote(s) {
   const r = s.round;
+  const n = s.order.length;
   const start = s.order.indexOf(r.dealer);
-  const suspect = s.order[(start + r.finalIdx) % s.order.length];
+  while (r.finalIdx < n && isAbsent(s, s.order[(start + r.finalIdx) % n])) r.finalIdx += 1;
+  if (r.finalIdx >= n) return null;
+  const suspect = s.order[(start + r.finalIdx) % n];
   openVote(s, 'final', suspect, null);
   return suspect;
+}
+
+/** The final vote on one suspect failed (or they left): the next present seat, or the spy survives. */
+function nextFinal(s, ctx) {
+  const r = s.round;
+  r.finalIdx += 1;
+  const next = r.finalIdx < s.order.length ? openFinalVote(s) : null;
+  if (next == null) return endRound(s, ctx, { code: 'survived' });
+  setCue(s, 'final', T.finalNext(s, next), 1500);
+  return s;
 }
 
 function closeVote(s, ctx) {
@@ -798,9 +886,10 @@ function closeVote(s, ctx) {
     noCount = no.length;
   }
   const convicted = noCount <= maxNo(s);
+  const pos = v.kind === 'final' ? finalPos(s) : null;
   s.tally = {
     kind: v.kind, suspect: v.suspect, by: v.by, mode: v.mode, yes, no, noCount, voters: voters.length, convicted,
-    index: v.kind === 'final' ? r.finalIdx + 1 : null,
+    index: pos ? pos.index : null, of: pos ? pos.of : presentOf(s).length,
   };
   if (v.kind === 'accuse') r.accusations[r.accusations.length - 1].result = convicted ? 'passed' : 'failed';
   r.vote = null;
@@ -826,19 +915,16 @@ function finishTally(s, ctx) {
     runClock(s, ctx.now, r.frozen);
     return s;
   }
-  r.finalIdx += 1;
-  if (r.finalIdx >= s.order.length) return endRound(s, ctx, { code: 'survived' });
-  const next = openFinalVote(s);
-  setCue(s, 'final', T.finalNext(s, next), 1500);
-  return s;
+  return nextFinal(s, ctx);
 }
 
-function timeUp(s) {
+function timeUp(s, ctx) {
   const r = s.round;
   r.frozen = 0;
   r.finalIdx = 0;
-  openFinalVote(s);
-  setCue(s, 'timeup', T.timeUp(s));
+  const first = openFinalVote(s);
+  if (first == null) { endRound(s, ctx, { code: 'survived' }); return; }   // (never: a round keeps ≥ 3 present seats)
+  setCue(s, 'timeup', T.timeUp(s, first));
 }
 
 // ------------------------------------------------------------
@@ -883,6 +969,120 @@ function endRound(s, ctx, o) {
 }
 
 // ------------------------------------------------------------
+// void round (absent spy, or the host's 呢鋪唔計) and absent seats (D4)
+// ------------------------------------------------------------
+
+const LIVE = new Set(['reveal', 'play', 'vote', 'tally', 'guess']);
+
+/**
+ * Throw the round in play away: nobody scores, its location and spies go into the history (the round is dead, so
+ * they are public now and the location greys out), and the same round number is dealt again with a spare location.
+ * With no spare left the round simply does not count and the game moves on.
+ * `why` = 'absent' (`who` = the absent spy) | 'host'.
+ */
+function voidRound(s, ctx, why, who = null) {
+  const r = s.round;
+  s.history.push({
+    n: r.n, loc: r.loc, dealer: r.dealer, spies: r.spies.slice(), code: 'void', why, absent: who,
+    winTeam: null, suspect: null, suspectRole: null, by: null, caught: null, bonusTo: null,
+    bonusMode: s.cfg.accuserBonus, accusations: r.accusations.map((a) => ({ by: a.by, suspect: a.suspect })),
+    picks: null, rightSpies: [], deltas: zeros(s),
+  });
+  r.vote = null;
+  r.guess = null;
+  s.tally = null;
+  const spare = Array.isArray(s.spare) ? s.spare : [];
+  if (spare.length && ctx && typeof ctx.rng === 'function') {
+    const [next] = spare.splice(rint(ctx.rng, spare.length), 1);
+    s.plan[s.roundNo - 1] = next;
+    startRound(s, ctx, { redo: true });
+    return s;
+  }
+  if (r.n >= s.cfg.rounds) {
+    s.phase = 'over';
+    s.deadline = null;
+    s.clockLeft = 0;
+    setCue(s, 'over', T.over(s), 3000);
+    return s;
+  }
+  startRound(s, ctx);
+  return s;
+}
+
+/** The round's reveal: `pids` tapped 睇完; once every present seat has, the next round (or the end). */
+function markSeen(s, pids, ctx) {
+  const r = s.round;
+  r.seen ??= {};                // (a round restored from a snapshot taken before 睇完 existed)
+  let any = false;
+  for (const id of pids) {
+    if (!isPlayer(s, id) || isAbsent(s, id) || r.seen[id]) continue;
+    r.seen[id] = true;
+    any = true;
+  }
+  if (any && presentOf(s).every((id) => r.seen[id])) doNextRound(s, ctx);
+  return s;
+}
+
+/** Host `@absent`: stop waiting on `pid` for the rest of this game. Unchanged state = refused. */
+function markAbsent(s, pid, ctx) {
+  if (!isPlayer(s, pid) || isAbsent(s, pid) || s.phase === 'over') return s;
+  if (presentOf(s).length - 1 < minPresent(s)) return s;       // too few left to play a round
+  s.absent = { ...(s.absent ?? {}), [pid]: true };
+  const r = s.round;
+  if (LIVE.has(s.phase) && r.spies.includes(pid)) return voidRound(s, ctx, 'absent', pid);
+
+  // the question card never rests on an empty chair
+  if (r.floor && r.floor.holder === pid) r.floor = { holder: nextPresent(s, pid) ?? pid, prev: null };
+
+  switch (s.phase) {
+    case 'reveal':
+      if (presentOf(s).every((id) => r.ready[id])) startPlay(s, ctx);
+      break;
+    case 'vote': {
+      const v = r.vote;
+      if (pid === v.suspect) {
+        if (v.kind === 'final') return nextFinal(s, ctx);
+        // an accusation of a seat that has left: called off, the accuser keeps the one try, the clock resumes
+        r.accusations.pop();
+        delete r.accUsed[v.by];
+        r.vote = null;
+        s.phase = 'play';
+        runClock(s, ctx.now, r.frozen);
+        setCue(s, 'accuse-off', T.accuseOff(s, pid), 2000);
+        break;
+      }
+      // (a ballot already cast stays on file: it counts again if the seat comes back before the vote closes)
+      if (v.mode === 'hands') {
+        if (v.reporter === pid) v.reporter = reporterFor(s, v.suspect);
+      } else if (votersOf(s).every((id) => id in v.votes)) closeVote(s, ctx);
+      break;
+    }
+    case 'roundEnd':
+      if (presentOf(s).every((id) => r.seen?.[id])) doNextRound(s, ctx);
+      break;
+    default:
+  }
+  return s;
+}
+
+/** Host `@present`: the seat is back and is waited on again from now on. */
+function markPresent(s, pid) {
+  if (!isPlayer(s, pid) || !isAbsent(s, pid) || s.phase === 'over') return s;
+  const next = { ...s.absent };
+  delete next[pid];
+  s.absent = next;
+  return s;
+}
+
+/** Would 呢鋪唔計 (@void-round) do anything now? (engine.canVoid, read by the shell for its message.) */
+export function canVoid(state) {
+  const s = state;
+  if (!s || s.phase === 'over') return { ok: false, message: '遊戲已經完咗' };
+  if (s.phase === 'roundEnd') return { ok: false, message: '呢局已經計咗分，㩒「睇完」就得' };
+  return { ok: true };
+}
+
+// ------------------------------------------------------------
 // act
 // ------------------------------------------------------------
 
@@ -893,33 +1093,48 @@ export function act(state, msg, ctx) {
   if (!action || typeof action !== 'object' || typeof action.type !== 'string') return s;
   ctx = ctx || {};
 
-  if (pid === HOST) return hostAct(s, action);
-  if (!isPlayer(s, pid)) return s;
+  if (pid === HOST) return hostAct(s, action, ctx);
+  if (!isPlayer(s, pid) || isAbsent(s, pid)) return s;      // an absent seat acts again once the host marks it back
 
   switch (s.phase) {
     case 'reveal': return action.type === 'ready' ? doReady(s, pid, ctx) : s;
     case 'play': return playAct(s, pid, action, ctx);
     case 'vote': return voteAct(s, pid, action, ctx);
     case 'guess': return action.type === 'guess' ? doGuess(s, pid, action, ctx) : s;
-    case 'roundEnd': return action.type === 'next-round' ? doNextRound(s, ctx) : s;
+    case 'roundEnd': {
+      // 睇完. `seats` = the other seats this same phone holds (a passed-round phone reads the reveal once for all)
+      if (action.type !== 'next-round' || s.round.seen?.[pid]) return s;
+      const also = Array.isArray(action.seats) ? action.seats.filter((x) => typeof x === 'string') : [];
+      return markSeen(s, [pid, ...also], ctx);
+    }
     default: return s;
   }
 }
 
-function hostAct(s, a) {
-  if (a.type === ACT.CUE_DONE) {
-    if (s.cue && !s.cue.done && s.cue.id === a.id) s.cue.done = true;
-  } else if (a.type === ACT.NEXT) {
-    if (s.cue && !s.cue.done) s.cue.done = true;   // 下一步 only skips narration; nothing here waits on it
+function hostAct(s, a, ctx) {
+  switch (a.type) {
+    case ACT.CUE_DONE:
+      if (s.cue && !s.cue.done && s.cue.id === a.id) s.cue.done = true;
+      return s;
+    case ACT.NEXT:
+      // 下一步: first it finishes the narration; on the round's reveal it then moves everybody on (D3: the host can
+      // force it while somebody is still reading). Nothing else waits on it.
+      if (s.cue && !s.cue.done) s.cue.done = true;
+      else if (s.phase === 'roundEnd') doNextRound(s, ctx);
+      return s;
+    case ACT.VOID_ROUND:
+      return LIVE.has(s.phase) ? voidRound(s, ctx, 'host') : s;
+    case ABSENT: return markAbsent(s, a.pid, ctx);
+    case PRESENT: return markPresent(s, a.pid);
+    default: return s;
   }
-  return s;
 }
 
 function doReady(s, pid, ctx) {
   const r = s.round;
   if (r.ready[pid]) return s;
   r.ready[pid] = true;
-  if (s.order.every((id) => r.ready[id])) startPlay(s, ctx);
+  if (presentOf(s).every((id) => r.ready[id])) startPlay(s, ctx);
   return s;
 }
 
@@ -928,7 +1143,7 @@ function playAct(s, pid, a, ctx) {
   switch (a.type) {
     case 'ask': {
       const f = r.floor;
-      if (!isPlayer(s, a.target) || a.target === f.holder || a.target === f.prev) return s;
+      if (!isPlayer(s, a.target) || isAbsent(s, a.target) || a.target === f.holder || a.target === f.prev) return s;
       r.askHist.push({ holder: f.holder, prev: f.prev });
       if (r.askHist.length > UNDO_DEPTH) r.askHist.shift();
       r.floor = { holder: a.target, prev: f.holder };
@@ -939,7 +1154,7 @@ function playAct(s, pid, a, ctx) {
       r.floor = r.askHist.pop();
       return s;
     case 'accuse': {
-      if (r.accUsed[pid] || !isPlayer(s, a.target) || a.target === pid) return s;
+      if (r.accUsed[pid] || !isPlayer(s, a.target) || isAbsent(s, a.target) || a.target === pid) return s;
       if (ctx.now >= clockEnd(s)) return s;          // 0:00 already passed, the final vote is coming
       r.accUsed[pid] = true;
       r.accusations.push({ by: pid, suspect: a.target, result: null });
@@ -964,14 +1179,14 @@ function voteAct(s, pid, a, ctx) {
   const v = s.round.vote;
   if (a.type === 'vote') {
     if (v.mode !== 'phone' || typeof a.yes !== 'boolean') return s;
-    if (pid === v.suspect || pid in v.votes) return s;
+    if (!votersOf(s).includes(pid) || pid in v.votes) return s;
     v.votes[pid] = a.yes;
     if (votersOf(s).every((id) => id in v.votes)) closeVote(s, ctx);
     return s;
   }
   if (a.type === 'verdict') {
     if (v.mode !== 'hands' || pid !== v.reporter) return s;
-    if (!Number.isInteger(a.no) || a.no < 0 || a.no > s.order.length - 1) return s;
+    if (!Number.isInteger(a.no) || a.no < 0 || a.no > votersOf(s).length) return s;
     v.noCount = a.no;
     closeVote(s, ctx);
     return s;
@@ -1023,7 +1238,7 @@ export function advance(state, ctx) {
       setCue(s, 'warn', T.warn(), 1500);
       return s;
     }
-    timeUp(s);
+    timeUp(s, ctx);
     return s;
   }
   if (s.phase === 'tally') return finishTally(s, ctx);
@@ -1036,27 +1251,28 @@ export function advance(state, ctx) {
 
 export function legalActions(state, pid) {
   const s = state;
-  if (!s || !isPlayer(s, pid)) return [];
+  if (!s || !isPlayer(s, pid) || isAbsent(s, pid)) return [];
   const r = s.round;
   const out = [];
+  const here = presentOf(s);
   switch (s.phase) {
     case 'reveal':
       if (!r.ready[pid]) out.push({ type: 'ready' });
       break;
     case 'play': {
       const f = r.floor;
-      for (const id of s.order) if (id !== f.holder && id !== f.prev) out.push({ type: 'ask', target: id });
+      for (const id of here) if (id !== f.holder && id !== f.prev) out.push({ type: 'ask', target: id });
       if (r.askHist.length) out.push({ type: 'undo-ask' });
-      if (!r.accUsed[pid]) for (const id of s.order) if (id !== pid) out.push({ type: 'accuse', target: id });
+      if (!r.accUsed[pid]) for (const id of here) if (id !== pid) out.push({ type: 'accuse', target: id });
       if (r.spies.includes(pid)) out.push({ type: 'spy-stop' });
       break;
     }
     case 'vote': {
       const v = r.vote;
       if (v.mode === 'phone') {
-        if (pid !== v.suspect && !(pid in v.votes)) out.push({ type: 'vote', yes: true }, { type: 'vote', yes: false });
+        if (votersOf(s).includes(pid) && !(pid in v.votes)) out.push({ type: 'vote', yes: true }, { type: 'vote', yes: false });
       } else if (pid === v.reporter) {
-        for (let no = 0; no <= s.order.length - 1; no++) out.push({ type: 'verdict', no });
+        for (let no = 0; no <= votersOf(s).length; no++) out.push({ type: 'verdict', no });
       }
       break;
     }
@@ -1066,7 +1282,7 @@ export function legalActions(state, pid) {
       break;
     }
     case 'roundEnd':
-      out.push({ type: 'next-round' });
+      if (!r.seen?.[pid]) out.push({ type: 'next-round' });       // 睇完 (the UI may add `seats` on a shared phone)
       break;
     default:
   }
@@ -1083,7 +1299,7 @@ export function autoAct(state, pid, ctx) {
     case 'vote':
       return s.round.vote.mode === 'phone'
         ? { type: 'vote', yes: false }
-        : { type: 'verdict', no: Math.min(s.order.length - 1, maxNo(s) + 1) };   // one more "no" than a conviction can survive
+        : { type: 'verdict', no: Math.min(votersOf(s).length, maxNo(s) + 1) };   // one more "no" than a conviction can survive
     case 'guess': return ctx && ctx.rng ? pick(ctx.rng, opts) : opts[0];
     case 'roundEnd': return { type: 'next-round' };
     default: return null;
@@ -1094,7 +1310,7 @@ export function focus(state) {
   const s = state;
   const r = s.round;
   if (s.phase === 'reveal') {
-    const wait = s.order.filter((id) => !r.ready[id]);
+    const wait = presentOf(s).filter((id) => !r.ready[id]);
     return wait.length ? { pids: wait } : null;
   }
   if (s.phase === 'vote') {
@@ -1135,9 +1351,11 @@ function subtitleOf(s) {
   switch (s.phase) {
     case 'reveal': return '睇身分';
     case 'play': return `${nameOf(s, r.floor.holder)} 發問`;
-    case 'vote': return r.vote.kind === 'accuse'
-      ? `${nameOf(s, r.vote.by)} 指控 ${nameOf(s, r.vote.suspect)}`
-      : `最後投票 ${r.finalIdx + 1}/${s.order.length}`;
+    case 'vote': {
+      if (r.vote.kind === 'accuse') return `${nameOf(s, r.vote.by)} 指控 ${nameOf(s, r.vote.suspect)}`;
+      const pos = finalPos(s);
+      return `最後投票 ${pos.index}/${pos.of}`;
+    }
     case 'tally': return '投票結果';
     case 'guess': return '間諜猜地點';
     case 'roundEnd': return '本局結果';
@@ -1154,6 +1372,7 @@ function hintOf(s, pid) {
   const r = s.round;
   const me = pid != null && isPlayer(s, pid) ? pid : null;
   const v = r.vote;
+  if (me && isAbsent(s, me) && s.phase !== 'over') return '房主當咗你唔喺度；返咗嚟就叫房主加返你。';
   switch (s.phase) {
     case 'reveal':
       if (!me) return '大家睇緊身分，齊人準備好就開始。';
@@ -1182,7 +1401,8 @@ function hintOf(s, pid) {
       return `等${nameOf(s, cur)}喺清單揀地點：估中間諜贏，估錯大家贏。`;
     }
     case 'roundEnd':
-      return r.n >= s.cfg.rounds ? '睇吓地點、間諜同點計分，睇完㩒「睇總分」。' : '睇吓地點、間諜同點計分，睇完㩒「下一局」。';
+      if (me && r.seen?.[me]) return r.n >= s.cfg.rounds ? '等其他人睇完，齊人就睇總分。' : '等其他人睇完，齊人就開下一局。';
+      return '睇吓地點、間諜同點計分，睇完㩒「睇完」。';
     default: return '打完喇！睇吓總分同每局發生咩事。';
   }
 }
@@ -1191,6 +1411,7 @@ function viewVote(s) {
   const v = s.round.vote;
   if (!v) return null;
   const voters = votersOf(s);
+  const pos = v.kind === 'final' ? finalPos(s) : null;
   return {
     kind: v.kind,
     suspect: v.suspect,
@@ -1201,8 +1422,8 @@ function viewVote(s) {
     need: needYes(s),
     maxNo: maxNo(s),
     reporter: v.reporter,
-    index: v.kind === 'final' ? s.round.finalIdx + 1 : null,
-    of: s.order.length,
+    index: pos ? pos.index : null,
+    of: pos ? pos.of : presentOf(s).length,
   };
 }
 
@@ -1214,7 +1435,7 @@ function viewTally(s) {
     yes: t.yes ? t.yes.slice() : null,
     no: t.no ? t.no.slice() : null,
     noCount: t.noCount, voters: t.voters, convicted: t.convicted,
-    index: t.index, of: s.order.length,
+    index: t.index, of: t.of ?? s.order.length,
   };
 }
 
@@ -1265,8 +1486,9 @@ function viewMine(s, pid) {
     role: isSpy ? 'spy' : 'agent',      // rules.roles id (for the 💡 sheet; private like the card)
     ready: !!r.ready[pid],
     accUsed: !!r.accUsed[pid],
-    isVoter: !!v && pid !== v.suspect,
+    isVoter: !!v && votersOf(s).includes(pid),
     vote: v && v.mode === 'phone' && pid in v.votes ? v.votes[pid] : null,
+    seen: !!r.seen?.[pid],
   };
 }
 
@@ -1276,6 +1498,8 @@ export function view(state, pid) {
   const running = s.phase === 'play';
   const pastRounds = s.history.map((h) => h.loc);
   const f = r.floor;
+  const here = presentOf(s);
+  const lastVoid = r.redo ? s.history.filter((h) => h.code === 'void' && h.n === r.n).pop() : null;
   return {
     phase: s.phase,
     title: `間諜 · 第 ${r.n}/${s.cfg.rounds} 局`,
@@ -1289,8 +1513,18 @@ export function view(state, pid) {
     deadline: running ? clockEnd(s) : null,
     frozen: !running && r.frozen != null && ['vote', 'tally', 'guess'].includes(s.phase) ? r.frozen : null,
     ready: s.phase === 'reveal'
-      ? { done: s.order.filter((id) => r.ready[id]).length, total: s.order.length, who: s.order.filter((id) => r.ready[id]) }
+      ? { done: here.filter((id) => r.ready[id]).length, total: here.length, who: s.order.filter((id) => r.ready[id]) }
       : null,
+    // the round's reveal: who has tapped 睇完 (present seats only), so every phone shows 「睇完 3 / 5」
+    seen: s.phase === 'roundEnd'
+      ? { done: here.filter((id) => r.seen?.[id]).length, total: here.length, who: here.filter((id) => r.seen?.[id]) }
+      : null,
+    absent: s.order.filter((id) => isAbsent(s, id)),     // public (D4): shown as 💤, never waited on
+    // this deal replaces a voided one: what was thrown away (all of it public now)
+    redo: lastVoid ? {
+      why: lastVoid.why, absent: lastVoid.absent ?? null, spies: lastVoid.spies.slice(),
+      location: { i: lastVoid.loc, name: locOf(s, lastVoid.loc).name, emoji: locOf(s, lastVoid.loc).emoji },
+    } : null,
     accUsed: s.order.filter((id) => r.accUsed[id]),
     accusations: r.accusations.map((a) => ({ by: a.by, suspect: a.suspect, result: a.result })),
     floor: f ? {
@@ -1311,4 +1545,4 @@ export function view(state, pid) {
   };
 }
 
-export const engine = { setup, act, advance, view, cue, focus, autoAct, legalActions, result };
+export const engine = { setup, act, advance, view, cue, focus, autoAct, legalActions, result, canVoid };

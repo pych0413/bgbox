@@ -14,6 +14,8 @@
 //  - While paused every dispatch is refused (returns false): "paused" freezes
 //    the table, and refusing input is the only way a deadline set during the
 //    pause could not be shifted twice.
+//  - D4 absent seats: setAbsent(pid, away) sends `@absent` / `@present` as HOST and keeps `absent` (the
+//    seats the engine accepted it for) — blocking() is false for them, so the room never waits on one.
 //  - A restored session starts PAUSED, with the clock stopped at the moment it
 //    was last saved, so the host taps 繼續 (which also satisfies iOS' gesture
 //    rule for speech) and every timer carries on from where it was.
@@ -127,6 +129,7 @@ export class Session {
     this.silentRemaining = null;   // ms left when a pause interrupted it
     this.lastCueId = null;
     this.cueStartedAt = 0;
+    this.absent = [];              // D4: seats the host marked absent this game (the engine took '@absent'), seat order
 
     const snap = o.restore;
     if (snap) {
@@ -141,6 +144,8 @@ export class Session {
       this.paused = true;
       this.pausedAt = snap.paused ? (snap.pausedAt ?? snap.savedAt) : snap.savedAt;
       this.silentRemaining = snap.silentRemaining ?? null;
+      const ids = new Set(this.players.map((p) => p.id));
+      this.absent = Array.isArray(snap.absent) ? snap.absent.filter((id) => ids.has(id)) : [];
     } else {
       this.players = clone(o.players);
       this.config = clone(o.config);
@@ -214,6 +219,26 @@ export class Session {
 
   cueDone(id) { return this.dispatch(HOST, { type: ACT.CUE_DONE, id }); }
   next() { return this.dispatch(HOST, { type: ACT.NEXT }); }
+
+  /**
+   * D4 — the host marks a seat absent (`away`) or back. Dispatches `{ type: '@absent' | '@present', pid }` as HOST;
+   * the seat joins / leaves `this.absent` only when the engine changed state (an engine without it, or one that
+   * ignores @present, leaves everything as it was → false). The list is updated BEFORE the engine call, so the
+   * onChange it fires (the room's stall check) already sees it; a refusal puts it back.
+   */
+  setAbsent(pid, away = true) {
+    if (this.stopped || this.paused) return false;
+    if (!this.players.some((p) => p.id === pid)) return false;
+    if (this.absent.includes(pid) === !!away) return false;
+    const before = this.absent;
+    const set = new Set(away ? [...before, pid] : before.filter((x) => x !== pid));
+    this.absent = this.players.map((p) => p.id).filter((id) => set.has(id));
+    const ok = this.dispatch(HOST, { type: away ? ACT.ABSENT : ACT.PRESENT, pid });
+    if (!ok) this.absent = before;
+    return ok;
+  }
+
+  isAbsent(pid) { return this.absent.includes(pid); }
 
   /** Act on behalf of a stalled seat: engine.autoAct if it has one, else the first legal action. */
   autoAct(pid) {
@@ -358,6 +383,7 @@ export class Session {
    * game has it; else whether focus() names the seat (when focus gives an answer); else legalActions.
    */
   blocking(pid) {
+    if (this.absent.includes(pid)) return false;          // D4: nobody waits on an absent seat
     return this.#query(() => {
       if (typeof this.engine.blocking === 'function') return !!this.engine.blocking(this.state, pid);
       const f = this.engine.focus?.(this.state);
@@ -366,6 +392,18 @@ export class Session {
     }, false);
   }
   deadline() { return typeof this.state?.deadline === 'number' ? this.state.deadline : null; }
+
+  /**
+   * Would `@void-round` do anything now? `engine.canVoid?(state)` → `{ ok: true }` | `{ ok: false, message }`, so the
+   * host hears why (「呢輪已經計咗分…」) instead of 「唔支援」. null when the engine does not say (or threw).
+   */
+  canVoid() {
+    if (this.stopped || typeof this.engine.canVoid !== 'function') return null;
+    const r = this.#query(() => this.engine.canVoid(this.state), null);
+    if (!r || typeof r !== 'object') return null;
+    const message = typeof r.message === 'string' ? r.message.trim().slice(0, 60) : '';
+    return r.ok === false ? { ok: false, message } : { ok: true, message: '' };
+  }
   /**
    * Extra host buttons the game offers right now (engine.hostActions?(state) → [{ label, action }]), sanitised:
    * at most 6, labels ≤ 24 chars, actions plain objects with a string `type`. Dispatched as HOST.
@@ -433,6 +471,7 @@ export class Session {
       silentRemaining: this.paused
         ? this.silentRemaining
         : (this.silent ? Math.max(0, this.silent.due - this.nowFn()) : null),
+      absent: this.absent.slice(),
     };
   }
 }

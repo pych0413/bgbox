@@ -53,7 +53,8 @@ role, so even the hint sheet reads the same for good and evil.
 | `revealSecs` | seconds 0–120 | `25` | the identity window. `0` = no clock, each seat taps 「我睇完」 (one-phone play) |
 | `questSecs` | seconds 0–60 | `12` | minimum time before the quest result. `0` = result as soon as every card is in (one-phone play) |
 | `discussSecs` | seconds 0–600 | `0` | team-talk timer shown while the leader picks. A nudge only: nothing happens at 0:00 |
-| `assassinSecs` | seconds 0–600 | `0` | talk timer during the assassination. A nudge only |
+| `assassinSecs` | seconds 0–600 | `120` | talk timer during the assassination, **soft** (decision D8, 2026-10-04): the clock shows, nothing happens at 0:00 (every phone says 「⏰ 夠鐘 — 等刺客揀，唔會自動揀」), the Assassin can still pick any time, and the host can add 60 s (⋯ → ⏱️ 刺殺 ＋60 秒, up to 5 times). `0` = no clock |
+| `cfgRev` | number (not a form field) | `2` | the setup mark: a setup saved before 2026-10-04 (no mark) that still holds the old default `assassinSecs: 0` moves to 120 once; a table that picks 0 afterwards keeps it |
 | `passPhone` | bool (not a form field) | `false` | set by `defaults` when one phone holds every seat; remembers that the two clocks were zeroed *for* the shared phone |
 
 `defaults(n, prev, env)`: keeps every valid key of `prev`, drops junk, coerces numeric strings. `roles` follows the
@@ -120,7 +121,7 @@ the Lady while the Lady is on. The validate `message` of a good setup is the com
 
 `7 人：4 好 3 壞` · `🔵 好人：梅林、派西維爾、亞瑟忠臣 ×2` · `🔴 邪惡：刺客、莫甘娜、奧伯倫` · `🌊 湖中女神：開（人數夠，自動開）` ·
 (Oberon in deck) `奧伯倫：梅林睇到，女神驗到邪惡` · `💡 <the reason>` · `⏱ 睇身份 25 秒（人人一樣長）` · `出牌 12 秒（時間到先公佈）` ·
-optional `組隊討論 …` / `刺殺商量 …` / `刺殺前邪惡亮牌`.
+`刺殺商量 120 秒（只係提醒，唔會自動揀）` (the default, D8; gone when 0) · optional `組隊討論 …` / `刺殺前邪惡亮牌`.
 
 ## 3. Flow
 
@@ -201,7 +202,7 @@ Cue: 「阿明提議自己、阿欣出任務。大家請投票：贊成定反對
 
 | who | screen |
 |---|---|
-| every seat | 「投票：贊成定反對？」; `隊員：` chips of the team; two big tiles 👍 贊成 / 👎 反對; the confirm button 「揀一個先」 → 「確定：贊成」/「確定：反對」 (two taps, so a stray thumb does not lock anyone in); after confirming 「你投咗：贊成 ✓　等緊其他人…」 and a small 「改票」 (a vote may be changed until the last one lands); 「已投 3/7」 (a count, never who); note 「全部人投完先會同時公開，每個人投咩都會見到。」 |
+| every seat | 「投票：贊成定反對？」; `隊員：` chips of the team; two big tiles 👍 贊成 / 👎 反對; the confirm button 「揀一個先」 → 「確定：贊成」/「確定：反對」 (two taps, so a stray thumb does not lock anyone in); after confirming 「已投 ✓　等緊其他人…」 with **neither tile lit** and a small 「改票」 (a vote may be changed until the last one lands). A locked vote is never on screen — a neighbour who has not voted could read it and follow it (research: the vote being cast is private until all are locked); your own choice shows only while you pick it or after 改票 reopens it; 「已投 3/7」 (a count, never who); note 「全部人投完先會同時公開，每個人投咩都會見到。」 |
 | table | the team and the count |
 
 The leader and the team members vote like everybody else. When the last vote lands the engine tallies at once.
@@ -230,13 +231,17 @@ Cue: 「隊伍通過喇。阿明、阿欣，請喺電話揀「成功」或者「
 
 | who | screen |
 |---|---|
-| team member | 「出任務牌」; `隊員：` chips; the `Timer` 「出牌時間」 (timed mode); **two tiles** ✅ 成功 (幫任務成功) and ❌ 失敗 (破壞任務), in a random order per seat per quest; the confirm button 「揀一張牌先」 → 「出「成功」牌」 / 「出「失敗」牌」; the same caption for everybody 「只有邪惡陣營先出得「失敗」。其他人㩒「失敗」冇反應。」; after playing 「已經出牌 ✓　時間到先公佈結果。」 and both tiles dim (no echo of the choice) |
+| team member | 「出任務牌」; `隊員：` chips; the `Timer` 「出牌時間」 (timed mode); **two tiles** ✅ 成功 (幫任務成功) and ❌ 失敗 (破壞任務), in a random order per seat per quest, with **one look for both** (neutral border, and the same accent ring when picked — never a team colour); the confirm button 「揀一張牌先」 → 「確定出牌」 whichever tile is picked; the same caption for everybody 「只有邪惡陣營先出得「失敗」。其他人㩒「失敗」冇反應。」; after playing 「已經出牌 ✓　時間到先公佈結果。」 and both tiles dim (no echo of the choice) |
 | not on the team | 「你唔喺隊入面，等隊員出牌。」 |
 | table | 「隊員正喺各自部電話秘密出牌。」 |
 
 **Good and evil see the identical screen.** For a good seat the 「失敗」 tile is simply inert: it is not greyed, not disabled, makes the
 same `tap` sound, and the confirm button stays on 「揀一張牌先」. The UI never offers `fail` to good, and the engine would refuse it
 anyway. Tile order is mirrored per seat at random so an over-the-shoulder glance at *where* a finger went is uninformative too.
+A picked Fail looks exactly like a picked Success and the button says 「確定出牌」 for both (playtest #17): a red glow or 「出「失敗」牌」
+could only ever appear on an evil phone and is readable across the table; a tinted border on the *other* tile would give the pick away
+just the same. Only the emoji and words inside the tile say which card it is. Test: the CSS has no rule that tells the two tiles apart,
+and a good seat with Success picked and an evil seat with Fail picked have the same picked-tile classes and the same button.
 
 **The clock is a minimum.** In timed mode (`questSecs > 0`) nothing resolves early, even when every card is in: the result appears at the
 later of the deadline and the last card. A card still missing at the deadline is **waited for** (the engine never plays success on an evil
@@ -282,7 +287,15 @@ The answer is in no view except the holder's, during `lady-peek`, and in the fin
 Cue: 「好人完成咗三個任務，但係梅林仲未安全。邪惡陣營可以商量，刺客請揀一個人。好人同梅林請保持安靜，唔好出聲。」 (+ 「邪惡陣營嘅角色已經公開。」 with `flipEvil`).
 
 **Every seat gets the same screen**: 「邪惡陣營商量，刺客揀人」 / 「只有刺客嘅選擇先算數。好人同梅林請保持安靜。」 / a `PlayerPicker` of every
-seat except yourself / a confirm button 「確定刺殺 阿明」 (second tap 「再㩒一下確定」 within 3 s) / the optional soft timer 「商量時間」.
+seat except yourself / a confirm button 「確定刺殺 阿明」 (second tap 「再㩒一下確定」 within 3 s) / the soft timer 「商量時間」 (120 s by default).
+
+**The soft clock (decision D8).** At 0:00 the engine does nothing: no shot, no random pick, the step stays open and the clock stays on 0:00.
+Every phone (the same line on every seat, so it says nothing about anybody) shows 「⏰ 夠鐘 — 等刺客揀，唔會自動揀」. The host's ⋯ menu has
+⏱️ 刺殺 ＋60 秒 (`engine.hostActions`, dispatched as `@host` `{type:'extend'}`: the new deadline is 60 s after the later of the old deadline and now,
+at most 5 times). This was chosen over an automatic pick at 0 (it would decide the game for the Assassin, the one thing the rules never allow) and over
+silently dropping the clock (a table that agreed on two minutes should see that they are over). The only thing that ever shoots for the Assassin is
+the host's 代佢做 for a seat whose phone is gone. With the clock running (or run out) the room does not list a connected Assassin under 「冇反應」
+(a game clock is on), so no host menu names the Assassin while they think.
 For the Assassin the second tap sends the real `{assassinate, target}`; for everybody else it sends `{decoy}`, which changes nothing public,
 and their screen says 「已記低（只有刺客嘅選擇先算數）」. Same taps, same sound (`lock`), same layout — finger noise tells nothing about who
 the Assassin is. With `flipEvil` an extra box lists the evil seats with their roles for everybody.
@@ -306,27 +319,32 @@ Lines (the shell lists them under 「點解會咁」) — the first sentence say
 
 ```
 好人完成咗三個任務，刺客 阿欣 刺咗 阿強（🛡️ 派西維爾），但係梅林係 阿明，好人贏。
-🎭 身份同夜晚情報
+── 🎭 身份同夜晚情報 ──
 阿明：🧙 梅林（好人）— 夜晚見到邪惡：阿傑、阿玲、阿欣
 阿強：🛡️ 派西維爾（好人）— 夜晚見到梅林同莫甘娜（唔知邊個真）：阿明、阿玲
 阿傑：👤 奧伯倫（邪惡）— 孤軍作戰，冇人識佢
 …
-📜 任務記錄（連出咗咩牌）
+── 📜 任務記錄（連出咗咩牌） ──
 任務 2（3 人，隊長 阿欣）：阿強、阿玲、阿輝 → 失敗（2 成功、1 失敗）
 　出牌：阿強 成功、阿玲 失敗、阿輝 成功
 任務 4（4 人，隊長 阿輝）：… → 成功（3 成功、1 失敗）
 　出牌：…
 　（呢個任務要兩張失敗先算失敗，得一張失敗所以仍然成功）
-🗳 提議同投票記錄
+── 🗳 提議同投票記錄 ──
 任務 1 · 第 1 次提議：隊長 阿明 揀 阿輝、阿欣 → 通過 4:3（贊成：…；反對：…）
-🌊 湖中女神
+── 🌊 湖中女神 ──
 阿傑 驗 阿玲 → 睇到邪惡
-🗡️ 刺殺
+── 🗡️ 刺殺 ──
 阿欣 刺咗 阿強（🛡️ 派西維爾）→ 刺錯咗
 ```
 
+Every heading is a 「── 標題 ──」 line, so the shell folds the recap into sections (the why-line first, untitled; a long recap opens
+only its first section). Proposals are numbered **per quest** — 「任務 3 · 第 2 次提議」, as on the game screens and the 連續否決 track —
+never with the game-wide counter, which would read like rejections (playtest #33); a 呢鋪唔計 line uses the same number.
 If a card was defaulted by the host's 下一步 the quest block adds 「（X 冇出牌，由系統代出成功）」. Who played which card is only ever shown here,
-after the game — never live.
+after the game — never live. This is a **deliberate deviation** from the research ("who played which is never shown", §9), kept by the user's
+decision D8 (2026-10-04): it is the 「原來係咁」 moment of the evening, and it cannot change a game that is already over.
+A seat marked 💤 adds 「💤 中途唔喺度：X（冇投票、出牌當成功）」, and a proposal it missed lists 「💤 冇投：X」.
 
 ### 3.11 💡 hints (`view.hint`, BACKLOG U1)
 
@@ -395,18 +413,20 @@ flip {pid: bool}                       per-seat tile mirroring (only that seat's
 cards {pid: 'success'|'fail'}          PRIVATE until over (never in a view; not even as a count per seat)
 windowOver, auto [pid…]                the quest clock is over / seats whose card the host defaulted
 outcome {no, team, leader, successes, fails, need, success, pile}   public pile = counts, shuffled
-results [true|false|null ×5], quests [{…, played PRIVATE until over}], voteLog [{q, no, leader, team, votes, approves, rejects, approved}] public after each reveal
+results [true|false|null ×5], quests [{…, played PRIVATE until over}], voteLog [{q, no, k, leader, team, votes, approves, rejects, approved}] public after each reveal (no = game-wide id; k = the proposal's number within its quest, rejects + 1)
 seen [pid…], decoyed [pid…]            internal bookkeeping for the two decoy taps
-voids [{q, no, phase, leader}]         the host's 呢鋪唔計 (public; recapped in the results)
+voids [{q, no, k, phase, leader}]      the host's 呢鋪唔計 (public; recapped in the results with k)
+absent [pid…]                          💤 seats the host marked absent (public, D4); voteLog entries carry `absent` when somebody did not vote
+leaderSkips, extends                   the token moved past a seat that went 💤 in `pick` (fresh cue id) / the host's ＋60 秒 on this assassination
 lady {holder, held [pid…], step {holder, target, loyalty PRIVATE (holder only)}, log [{q, holder, target, loyalty}]}
 shot {assassin, target, hit, merlin}, pendingEnd {winner, reason}, winner, reason, final {winners, summary, lines, points}
 ```
 
 `view(state, pid)` is built field by field. Common: `me, phase, n, title, subtitle, hint, deadline?, timerLabel?, order, deck, board {sizes, need, results, questNo,
-wins, losses}, track {rejects, max}, leader, proposalNo, lady {holder, held, log, step}|null, history [public proposals], quests [public quests],
+wins, losses}, track {rejects, max}, leader, absent [pid…], proposalNo, lady {holder, held, log, step}|null, history [public proposals, each with `absent`], quests [public quests],
 opts {reveal, quest, flipEvil}`, and `redo: true` while a step restarted by 呢鋪唔計 is running (public). Seats also get `mine {role, knows {kind, pids}, seen}`; the table view has no `mine`.
 Per phase: `pick {leader, size, need, canPick}` · `vote {leader, team, progress {done,total}, mine}` · `voted {leader, team, votes, approves, rejects,
-approved, needed, before, after, ends, nextLeader}` · `quest {no, team, size, need, mode, mine, progress?}` where `mine` is
+approved, needed, before, after, ends, nextLeader, absent}` · `quest {no, team, size, need, mode, mine, progress?}` where `mine` is
 `{member, done, flip, canFail}` for a member (the **same keys for good and evil**) and `null` otherwise · `outcome {no, team, leader, successes, fails,
 need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (holder only), held, mine {loyalty} (holder only, peek stage)}` ·
 `assassinate {canShoot, tapped, candidates, flipped}` (**the same keys for every seat**) · `shot {assassin, target, hit, merlin, canContinue}` ·
@@ -428,7 +448,9 @@ need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (hol
 | `{type:'continue'}` | the Assassin | `shot` | → `over` |
 | `@cue-done {id}` | host | any | acknowledges the cue if `id` matches |
 | `@next` | host | any | first acknowledges a pending cue; then skips: `reveal` → `pick`, `voted`/`quest-result` → continue, `quest` → play success for every missing card (recorded in `auto`) and resolve, `lady-peek` → done, `shot` → `over`. `pick`, `vote`, `lady`, `assassinate` need a real decision and are left alone |
-| `@void-round` | host | `pick`, `vote`, `quest` | 呢鋪唔計 for a dead phone, with no effect on the score or the vote track. `pick`: the token moves one seat — **not** a rejection, not a proposal. `vote`: the ballots cast so far are discarded (none was public) and the same team is voted on again (no-op if nobody voted). `quest`: the cards played so far are discarded (none was public), the same team plays again with a fresh window (no-op if no card yet). Recorded in `voids`; the next cue gets a new id and a preface (「隊長換人，唔算否決。」 / 「啱啱嘅投票唔計，重新投過。」 / 「啱啱出嘅牌唔計，重新出過。」), and every phone shows a banner while the step runs again (`view.redo`: 「上一位隊長冇揀到隊，主持叫咗下一位（唔算否決）。」 / 「主持取消咗啱啱嘅投票，請重新投。」 / 「主持取消咗啱啱出嘅牌，請重新出。」). Every other phase: unchanged — public screens are skipped with `@next`, and the Lady's check and the shot need the real person (`@auto` covers a dead phone there) |
+| `@absent {pid}` / `@present {pid}` | host | any but `over` | 💤 (decision D4): the seat is not waited on for the rest of the game. It does **not vote**: the majority is over the seats at the table (`approvalsNeeded(present)`), a ballot it cast in the open vote is dropped (never public), and the vote tallies as soon as every present seat voted. Its quest card is **Success** at once (the dead-phone rule, listed in `auto`). The leader token skips it (`pick` with it as leader: the token moves on — not a rejection, not a new proposal, a fresh cue); on `voted` / `quest-result` with the leader away, any present seat may tap 繼續. The Lady skips a holder who is away (no check that time; the token stays). If it is the Assassin, the next evil seat at the table (seat order after the Assassin) takes the shot — every screen stays the same, only that seat's confirm becomes real; with no evil seat left the game ends 「好人贏 — 邪惡陣營冇人喺度刺殺」 (`no-shot`). The tap-mode reveal does not wait for it. Its own actions are ignored until `@present`. Refused (unchanged) when fewer than 3 seats would be left. `@present`: it votes again from the next count (an open vote waits for it) and leads when the token comes round |
+| `{type:'extend'}` (`@host`) | host | `assassinate` with a clock | ⏱️ 刺殺 ＋60 秒 (D8): deadline = max(deadline, now) + 60 s, at most 5 times; offered by `engine.hostActions` only then |
+| `@void-round` | host | `pick`, `vote`, `quest` | 呢鋪唔計 for a dead phone, with no effect on the score or the vote track. `pick`: the token moves one seat — **not** a rejection, not a proposal. `vote`: the ballots cast so far are discarded (none was public) and the same team is voted on again (no-op if nobody voted). `quest`: the cards played so far are discarded (none was public), the same team plays again with a fresh window (no-op if no card yet, or only the system's Success for a 💤 seat). Recorded in `voids`; the next cue gets a new id and a preface (「隊長換人，唔算否決。」 / 「啱啱嘅投票唔計，重新投過。」 / 「啱啱出嘅牌唔計，重新出過。」), and every phone shows a banner while the step runs again (`view.redo`: 「上一位隊長冇揀到隊，主持叫咗下一位（唔算否決）。」 / 「主持取消咗啱啱嘅投票，請重新投。」 / 「主持取消咗啱啱出嘅牌，請重新出。」). Every other phase: unchanged — public screens are skipped with `@next`, and the Lady's check and the shot need the real person (`@auto` covers a dead phone there) |
 
 `@auto` is resolved by the session through `autoAct`.
 
@@ -436,12 +458,12 @@ need, success, pile, next}` · `ladyStep {stage, holder, target, candidates (hol
 
 `reveal`: `now + revealSecs·1000` (timed mode) → `pick`. `quest`: `now + questSecs·1000` (timed mode): at the deadline `windowOver` is set; the quest resolves then
 if every card is in, otherwise on the last card. `pick`: `discussSecs` and `assassinate`: `assassinSecs` are soft — `advance` leaves the state alone (the `Timer`
-just beeps). `shot`: 8 s → `over`. No other phase has a deadline.
+just beeps; the assassination clock stays on 0:00 until the shot or the host's ＋60 秒, see §3.8). `shot`: 8 s → `over`. No other phase has a deadline.
 
 ### `focus`
 
-`reveal` → seats that have not looked · `pick`/`voted`/`quest-result` → `[leader]` · `vote` → seats that have not voted · `quest` → members who have not played ·
-`lady`/`lady-peek` → `[holder]` · `assassinate` → `{ pids: [assassin], anonymous: '刺客請拎起部手機' }` · `shot` → `[assassin]` · `over` → null.
+`reveal` → present seats that have not looked · `pick`/`voted`/`quest-result` → `[leader]` (`voted`/`quest-result` with the leader 💤 → null: anybody taps 繼續) · `vote` → present seats that have not voted · `quest` → members who have not played ·
+`lady`/`lady-peek` → `[holder]` · `assassinate` → `{ pids: [shooter], anonymous: '刺客請拎起部手機' }` (the Assassin, or the stand-in when the Assassin is 💤) · `shot` → `[assassin]` · `over` → null.
 
 ### `blocking(state, pid)` — is the table really waiting on this seat?
 
@@ -450,13 +472,14 @@ Stall detection (`Session.blocking`) asks this instead of `legalActions`, becaus
 `pick`/`voted`/`quest-result` → the leader · `vote` → seats that have not voted · `quest` → members who owe a card · `lady`/`lady-peek` → the holder ·
 `assassinate` → **the Assassin only** (the decoys never block) · `shot`/`over` → nobody (the shot's 8 s clock ends it). Tested per phase, as a property over
 fuzzed games (a blocker always has a legal action; outside the timed reveal and the shot it equals `focus`), and in a real `Room`: a disconnected
-non-assassin during the assassination is never listed in `stalled`; a disconnected Assassin is, and 代佢做 then shoots.
+non-assassin during the assassination is never listed in `stalled`; a disconnected Assassin is, and 代佢做 then shoots. A seat marked 💤 never blocks.
 
 ### `autoAct(state, pid)` — a stalled seat
 
 `reveal` → `seen` · `pick` → a random team · `vote` → **approve** (a dead phone has no opinion; reject would risk the fifth-rejection loss) · `quest` → **success**
 (never a surprise sabotage; an evil player on a dead phone does not sabotage) · `voted`/`quest-result`/`lady-peek`/`shot` → continue / done · `lady` → a random legal
 target · `assassinate` → the Assassin shoots a random seat; every other seat answers `decoy` (so a disconnected decoy seat is cleared by 代佢做).
+`autoAct` is only ever the host's 代佢做; the soft assassination clock never calls it (D8). A seat marked 💤 gets `null` (nobody waits on it).
 
 ### `legalActions(state, pid)`
 
@@ -528,6 +551,10 @@ QA additions (2026-10-03 UTC)
 - 💡: hint ≤ 40 characters for every phase × seat × table, independent of the role, identical on the anti-tell screens; `rules.quick` ≤ 6 short lines; every role text splits into 做乜 / 點贏.
 - #3: the timed reveal gives every seat a tap, nobody blocks it, it ends exactly at its deadline even when all have looked.
 
+Decisions 2026-10-04 (D8, D4)
+- D8: `assassinSecs` is 120 at every n with no warning and a summary line that says 唔會自動揀; an old saved 0 (no `cfgRev`) moves to 120 once, a later 0 stays; at and long after the deadline `advance` changes nothing (no shot); ⏱️ ＋60 秒 from the host only, from now when the clock ran out, stacking on a running clock, at most 5, only in the assassination with a clock; the Assassin still shoots after 0:00; the UI shows 「⏰ 夠鐘」 on every phone with one screen shape. The results keep who played which card (one 出牌 line per quest).
+- D4 💤: a seat that is away does not vote (6 of 7 voting, a 3:3 tie rejects with 4 needed), a ballot cast before going away is dropped, the vote record and the recap say 💤 冇投; a quest member who is away plays Success at once (in `auto`); the leader token, the Lady and the tap reveal skip the seat; anybody at the table may 繼續 while the leader is away; an Assassin who is away is replaced by the next evil seat at the table (one screen shape, one real confirm, anonymous focus), no evil left → `no-shot` good win; refused below 3 seats; its own actions ignored; a fuzz with random 💤 / back keeps every game finishing with the leak sweep at every step. UI: 💤 on the roster, 💤 冇投 on the vote result, 繼續 for anybody while the leader is away.
+
 ## 7. 貼心 touches
 
 - The reason for the recommended deck is shown in the lobby, per head-count, plus a gentle 「基本版（新手）」 for new friends.
@@ -548,8 +575,7 @@ QA additions (2026-10-03 UTC)
 2. ~~Stall detection and decoys~~ — done by core (`engine.blocking`); adopted (§5).
 3. **Uniform 輪到你 badge.** During the assassination only the Assassin's phone gets the badge (`focus` = the Assassin so that a shared phone's gate can be
    anonymous). On separate phones that is a tiny tell for an over-the-shoulder glance. A `focus.decoyPids` (badge shown, gate not opened) would close it. Low priority.
-4. **Results screen headings.** `result.lines` can be 40+ lines long (roles, quests, votes, Lady, shot). Plain `li`s work; collapsible sections (lines starting with
-   an emoji heading folded under it) would read better. Low priority.
+4. ~~**Results screen headings.**~~ — done: the shell folds `result.lines` at 「── 標題 ──」 lines, and every recap heading is one (§3.10).
 5. **Seat order.** Leader rotation follows seat order, so the lobby's 換位 should be used to match the real table; the lobby could say so for games with rotating
    turn order. (The rules sheet's 手機點用 says it; nothing in the lobby does.)
 6. **呢鋪唔計 button.** `app.hostCtl.voidRound()` exists but no screen offers it yet. For 阿瓦隆 it only does something in `pick`, `vote` and `quest`
@@ -583,5 +609,8 @@ Each rule of `docs/research/avalon.md` (Verification section wins) → this doc 
 | One phone: timed windows cannot work; several phones must stay timed | §2, §4 | `defaults(…, env)`, `passPhone` | **FIX** (once zeroed for a host alone in the lobby, the clocks never came back when friends joined) |
 | Dead phone recoverable or host default (house rule) | §5 | `autoAct`, `@void-round`, `blocking` | **FIX** (no 呢鋪唔計; a long timed reveal could report a decoy-only seat as stalling) |
 | AFK evil quest card: research says "ask host" | §5 autoAct | success | deliberate: asking the host would tell a playing host that the seat is evil |
+| "No information about who played which quest card ever leaves the engine. Only counts." (research, Procedure 6 and App notes) | §3.10 | `explain` (`RECAP.played`), `endView` (`quests[].played`) | **deliberate deviation**, user decision D8 (2026-10-04): live screens show counts only, as the research says; the results screen, after `over`, lists who played which card. Nothing that is still in play can change, and it is the evening's 「原來係咁」 moment |
+| Assassination timing: the rules give the Assassin as long as evil needs | §3.8 | `assassinSecs` 120 soft, `advance` no-op, `hostActions` ＋60 秒 | OK (D8, 2026-10-04): the clock only shows the agreed time; nothing picks at 0 |
+| A player who leaves (house rule) | §5 `@absent` | `setAway`, `votersOf`, `shooterOf` | D4 (2026-10-04): not waited on; no vote (majority over the present seats); quest card Success; leader / Lady skip; another evil seat shoots for an absent Assassin |
 | Eyes-closed narrated night (optional mode) | §1 | not built | out of scope: phone reveal is the research's default |
 | Lancelot, Excalibur, Targeting, Plot cards | §1 | not built | out of scope (research: variants) |

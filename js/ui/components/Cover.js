@@ -12,6 +12,9 @@
 // 'none' + locked (a dice cup) only freezes the roll: it is still your own
 // number so you can keep looking, and the lock shows as a corner badge.
 //
+// While closed, the front is aria-hidden and die faces in it carry no 「N 點」 label (#37); both come
+// back only while the cover is held open.
+//
 // Hard-won iOS behaviour kept from v1:
 //  - setPointerCapture can throw for pointers the browser stopped tracking;
 //    it must never stop the reveal.
@@ -19,8 +22,8 @@
 //    a card is never left face-up when the phone is put down or handed over.
 // ============================================================
 
-import { el, fromHTML, restartAnim, toast } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
+import { el, fromHTML, restartAnim, toast, labelDice } from '../dom.js?v=1';
+import { sfx } from '../../core/sfx.js?v=1';
 
 const covers = new Set();
 let hooked = false;
@@ -64,11 +67,26 @@ export function Cover(props = {}) {
     toast(p.lockedMessage ?? '鎖咗，要先解鎖');
   }
 
+  /**
+   * #37: what is under the cover says nothing while it is closed — the front is aria-hidden and every die face
+   * in it loses its 「N 點」 label; both come back only while it is held open.
+   */
+  function syncFront() {
+    front.setAttribute('aria-hidden', open ? 'false' : 'true');
+    labelDice(front, open);
+  }
+  // a game may swap the dice under a closed cover (a re-roll) without telling us: strip those too
+  const watcher = typeof MutationObserver === 'function'
+    ? new MutationObserver(() => { if (!open) labelDice(front, false); })
+    : null;
+  watcher?.observe(front, { childList: true, subtree: true });
+
   function setOpen(v) {
     if (v && p.locked && p.lockMode === 'peek') { deny(); return; }   // latched shut: refuse, and say why
     if (open === v) return;
     open = v;
     root.classList.toggle('open', v);
+    syncFront();
     if (v) {
       // an explicit null / false / 'none' means silent (a night peek must make no sound)
       const sound = p.openSound === undefined ? 'flip' : p.openSound;
@@ -121,17 +139,20 @@ export function Cover(props = {}) {
         shownFront = p.front;
         front.replaceChildren(...(p.front ? [p.front] : []));
       }
+      syncFront();
     },
     close() {
       if (!open) return;
       open = false;
       root.classList.remove('open');
+      syncFront();
       p.onOpen?.(false);
     },
     shake() { restartAnim(root, 'shaking'); },
     isOpen: () => open,
     destroy() {
       covers.delete(api);
+      watcher?.disconnect();
       root.remove();
     },
   };

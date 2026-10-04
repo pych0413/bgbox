@@ -1169,8 +1169,14 @@ test('werewolf: final action — the public sees the same thing for a hunter and
   const hv = a.view('p6'); const vv = b.view('p7');
   assert.equal(hv.nt.chips.length, vv.nt.chips.length);
   assert.deepEqual(Object.keys(hv.nt).sort(), Object.keys(vv.nt).sort());
-  assert.ok(hv.nt.info[0].includes('獵人'));
-  assert.ok(!vv.nt.info.join('').includes('獵人'));
+  // by day the dead player's own panel is word for word the same for a hunter and anybody else (a face-up phone)
+  assert.deepEqual(hv.nt.info, vv.nt.info);
+  assert.equal(hv.nt.skip, vv.nt.skip);
+  assert.equal(hv.nt.ok, vv.nt.ok);
+  assert.ok(!hv.nt.info.join('').includes('你係獵人'));
+  // …and so is his 💡 line (plain text on the sheet)
+  assert.equal(hv.hint, vv.hint);
+  assert.ok(!hv.hint.includes('你係獵人'));
   assert.equal(JSON.stringify(a.view('p7')) === JSON.stringify(b.view('p6')), false);
 });
 
@@ -1328,8 +1334,11 @@ test('werewolf: speaking order — starts next to a lone dead player, every livi
   const idx = (p) => +p.slice(1);
   const wraps = first.reduce((n, p, i) => n + (i && (dirUp ? idx(p) < idx(first[i - 1]) : idx(p) > idx(first[i - 1])) ? 1 : 0), 0);
   assert.equal(wraps, 1);
-  // the first cue reads the order direction out
-  assert.ok(sim.cue().text.includes(dirUp ? '由細到大' : '由大到細'));
+  // the first cue names the next two speakers (not 「由大到細」, which reads wrong when the order wraps) and the direction
+  const nameOf = (p) => sim.state.names[p];
+  assert.ok(sim.cue().text.includes(`由${nameOf(first[0])}開始，跟住係${nameOf(first[1])}、${nameOf(first[2])}`), sim.cue().text);
+  assert.ok(sim.cue().text.includes(dirUp ? '順數' : '倒數'));
+  assert.ok(!/由細到大|由大到細/.test(sim.cue().text));
   // next day: the direction flips
   drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
   castVotes(sim, {});
@@ -2526,8 +2535,8 @@ test('werewolf: leaks — explicit per-field checks (notes, potions, mates, caus
     const kinds = v.my.notes.map((n) => n.k).sort().join();
     const expected = { p5: 'seer', p6: 'poison', p8: 'guard' }[p] ?? '';
     assert.equal(kinds, expected, `${p} notes`);
-    assert.equal(v.seats.filter((x) => x.role).length, 1 + (sim.state.alive[p] ? 0 : 0), `${p} sees exactly one role in the roster`);
-    assert.equal(v.seats.find((x) => x.pid === p).role, role);
+    // the roster carries no role at all: not even the seat's own (it is in v.my, behind the cover on screen)
+    assert.equal(v.seats.filter((x) => x.role).length, 0, `${p} sees a role in the roster`);
     for (const d of v.seats.filter((x) => !x.alive)) assert.equal(d.how, null, 'causes of night deaths stay secret');
     assertNoKeys(v, ['over', 'god', 'all'], p);
   }
@@ -3141,7 +3150,26 @@ function stubComponents(spy) {
     api.update(p0);
     return api;
   };
-  return { Cover: null, RoleCard, DiceCup: null, VotePanel, Timer, PlayerPicker: null, Canvas: null, dieFace: null };
+  // hold-to-peek: the front is in the DOM (as in the real Cover) but only readable while held, so the leak checks below
+  // drop every c-cover / c-rolecard subtree before reading what a neighbour could see
+  const Cover = (p0 = {}) => {
+    const front = E('div', 'cv-front');
+    const root = E('div', 'c-cover', front);
+    let shown = null;
+    const api = {
+      el: root,
+      update(p) {
+        api.props = p;
+        if (p.front !== shown) { shown = p.front; front.replaceChildren(...(p.front ? [p.front] : [])); }
+        root.setAttribute('aria-label', p.ariaLabel ?? p.backLabel ?? '');
+      },
+      close() {}, isOpen: () => false,
+      destroy() { root.remove(); },
+    };
+    api.update(p0);
+    return api;
+  };
+  return { Cover, RoleCard, DiceCup: null, VotePanel, Timer, PlayerPicker: null, Canvas: null, dieFace: null };
 }
 
 let uiModule = null;
@@ -3469,5 +3497,768 @@ test('werewolf ui: the final-action window — only the dead player gets the gri
     clickN(findAll(a.seats.p6.root, (n) => hasCls(n, 'ww-ok'))[0]);
     assert.equal(a.sim.state.cur.sel.p6.lock, true);
     for (const s of [...Object.values(a.seats), ...Object.values(b.seats)]) s.handle.destroy();
+  });
+});
+
+// ============================================================
+// multi-agent playtest fixes (docs/playtest/multi/werewolf.md; SUMMARY #2 #10 #12 #25 #26 and the #40 polish)
+// ============================================================
+
+test('werewolf: the roster shows a role only when it is public — never the viewer\'s own, alive or dead (playtest #2)', () => {
+  const sim = deal(mk(R9, { openCard: 'off', spectate: false }));
+  nightKill(sim, 'p7');
+  for (const p of [...sim.state.pl, null]) {
+    const v = sim.view(p);
+    assert.ok(v.seats.every((x) => x.role === undefined), `${p} sees a role in the roster`);
+    if (p) assert.equal(v.my.role, R9[p], 'the own card is still in my');
+  }
+  // 明牌: a dead seat's role is public — to everyone, its owner included; the living stay hidden
+  const open = deal(mk(R9, { openCard: 'on' }));
+  nightKill(open, 'p7');
+  for (const p of [...open.state.pl, null]) {
+    assert.deepEqual(open.view(p).seats.filter((x) => x.role).map((x) => [x.pid, x.role]), [['p7', 'villager']], `${p}`);
+  }
+});
+
+test('werewolf: the dawn result stays up at least 8 s, peaceful or not; every other cue keeps its own length (playtest #10)', () => {
+  assert.equal(S.DAWN_MIN_MS, 8000);
+  const peace = deal(mk(R9));
+  night(peace);
+  assert.equal(phase(peace), 'dawn');
+  const c1 = peace.cue();
+  assert.ok(c1.text.includes('平安夜') && c1.minMs >= 8000, JSON.stringify(c1));
+  const dead = deal(mk(R9));
+  nightKill(dead, 'p7');
+  assert.ok(dead.cue().minMs >= 8000);
+  dead.cueDone();
+  const words = dead.cue();
+  assert.equal(cur(dead).k, 'words');
+  assert.equal(words.minMs, S.cueMinMs(words.text), 'only the dawn has the floor');
+});
+
+test('werewolf: day views keep last night\'s result and every past 票型 — public, identical on every phone (playtest #10)', () => {
+  const sim = deal(mk(R9));
+  const same = (f) => {
+    const vals = [...sim.state.pl, null].map((p) => JSON.stringify(f(sim.view(p)) ?? null));
+    assert.equal(new Set(vals).size, 1, vals.join(' // '));
+    return JSON.parse(vals[0]);
+  };
+  assert.equal(same((v) => v.lastNight), null, 'nothing before the first dawn');
+  assert.deepEqual(same((v) => v.voteLog), []);
+  night(sim, { wolves: wolvesPick('p9', ['p1', 'p2', 'p3']), witch: { p5: pk('p8') } });   // p9 killed, p8 poisoned
+  assert.deepEqual(same((v) => v.lastNight), { n: 1, deaths: ['p8', 'p9'] }, 'seat order, no cause');
+  toSpeech(sim);
+  assert.deepEqual(same((v) => v.lastNight), { n: 1, deaths: ['p8', 'p9'] }, 'still there during the speeches');
+  toVote(sim);
+  assert.deepEqual(same((v) => v.voteLog), [], 'no ballot shows before the tally');
+  sim.act('p1', { type: 'vote', target: 'p4' });
+  assert.deepEqual(same((v) => v.voteLog), [], 'a cast ballot is not in the log either');
+  assert.equal(same((v) => v.recent), null, 'nor in the shell fold');
+  castVotes(sim, { p1: 'p4', p2: 'p4', p3: 'p4', p4: 'p1', p5: 'p1', p6: 'p1' });   // 3–3: PK
+  const log1 = same((v) => v.voteLog);
+  assert.deepEqual(log1.map((r) => [r.d, r.round, r.outcome, r.pid, r.tied]), [[1, 1, 'tie', null, ['p1', 'p4']]]);
+  assert.deepEqual(log1[0].votes.find((x) => x.by === 'p7'), { by: 'p7', to: null }, 'abstainers are listed');
+  assert.deepEqual(same((v) => v.recent), [{
+    id: 'ww-votes', title: S.UI.day.voteLogHead,
+    entries: [{ title: '第 1 日・投票', lines: ['4號玩家4 3 票（1號玩家1、2號玩家2、3號玩家3）', '1號玩家1 3 票（4號玩家4、5號玩家5、6號玩家6）', '棄權：7號玩家7', '➜ 1號玩家1、4號玩家4 同票，PK'] }],
+  }]);
+  drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
+  assert.equal(cur(sim).round, 2);
+  castVotes(sim, { p2: 'p4', p3: 'p4', p5: 'p1', p6: 'p1', p7: 'p1' });
+  assert.deepEqual(same((v) => v.voteLog).map((r) => [r.round, r.outcome, r.pid]), [[1, 'tie', null], [2, 'exile', 'p1']]);
+  // the next night: last night's line goes, the log stays
+  toNight(sim);
+  assert.equal(same((v) => v.lastNight), null);
+  assert.equal(same((v) => v.voteLog).length, 2);
+});
+
+test('werewolf: the witch\'s pick names its potion on her own panel, a stray tap is taken back by tapping again, and the close says what she did (playtest #12)', () => {
+  const W = S.PANEL.witch;
+  const sim = deal(mk(R9));
+  toStep(sim, 'wolves');
+  for (const w of ['p1', 'p2', 'p3']) sim.act(w, pk('p7'));
+  sim.advance();
+  let g = 0;
+  while (!(cur(sim).step === 'witch' && cur(sim).stage === 'cue')) { assert.ok(g++ < 10); sim.cueDone(); }
+  // her opening line: every phone's chips are grey and every phone says why, in the same words
+  for (const p of sim.state.pl) {
+    const nt = sim.view(p).nt;
+    assert.equal(nt.hint, S.PANEL.cueWait, `${p} is told the chips open after the line`);
+    assert.ok(nt.chips.every((c) => !c.on));
+  }
+  sim.cueDone();
+  assert.equal(sim.view('p5').nt.ok, S.PANEL.ok);
+  assert.equal(sim.view('p5').nt.hint, W.hint);
+  const lineCount = sim.view('p5').nt.info.length;
+  sim.act('p5', { type: 'night', pick: 'p7' });
+  let nt = sim.view('p5').nt;
+  assert.equal(nt.ok, W.okSave('7號玩家7'));
+  assert.ok(nt.info.includes(W.pickedSave('7號玩家7')), nt.info.join('|'));
+  // the pick line takes the potions line's place: her panel does not grow a line when she taps (a 靜音 table sees it)
+  assert.equal(nt.info.length, lineCount);
+  sim.act('p5', { type: 'night', pick: 'p8' });
+  nt = sim.view('p5').nt;
+  assert.equal(nt.ok, W.okPoison('8號玩家8'));
+  assert.ok(nt.info.includes(W.pickedPoison('8號玩家8')));
+  assert.equal(nt.info.length, lineCount);
+  for (const p of ['p1', 'p4', 'p6', 'p8']) assert.equal(sim.view(p).nt.ok, S.PANEL.ok, `${p}'s button is unchanged`);
+  // tapping the picked chip again (the UI sends pick:null) takes it back: nothing is spent at the window's end
+  sim.act('p5', { type: 'night', pick: null });
+  assert.equal(sim.view('p5').nt.ok, S.PANEL.ok);
+  sim.advance();
+  assert.deepEqual(sim.state.potion, { save: true, poison: true });
+  assert.equal(cur(sim).stage, 'tail');
+  assert.equal(sim.view('p5').nt.info[0], W.didNone);
+  const keys = new Set(sim.state.pl.map((p) => Object.keys(sim.view(p).nt).sort().join()));
+  assert.equal(keys.size, 1, 'the closing panel has the same shape for every seat');
+
+  // confirmed picks: the line says so, and the close names what was spent
+  const at = (potion, victim) => {
+    const w = deal(mk(R9));
+    w.state.potion = { ...potion };
+    toStep(w, 'wolves');
+    if (victim) for (const x of ['p1', 'p2', 'p3']) w.act(x, pk(victim));
+    w.advance();
+    toStep(w, 'witch');
+    return w;
+  };
+  const lp = at({ save: true, poison: true }, 'p7');
+  lp.act('p5', pk('p8'));
+  assert.ok(lp.view('p5').nt.info.includes(W.lockedPoison('8號玩家8')));
+  lp.advance();
+  assert.equal(lp.view('p5').nt.info[0], W.didPoison('8號玩家8'));
+  const ls = at({ save: true, poison: true }, 'p7');
+  ls.act('p5', pk('p7'));
+  assert.ok(ls.view('p5').nt.info.includes(W.lockedSave('7號玩家7')));
+  ls.advance();
+  assert.equal(ls.view('p5').nt.info[0], W.didSave('7號玩家7'));
+  const ln = at({ save: true, poison: true }, 'p7');
+  ln.act('p5', skipA);
+  assert.ok(ln.view('p5').nt.info.includes(W.lockedNone));
+  // the hint follows what she can still do tonight
+  assert.equal(at({ save: true, poison: true }, 'p7').view('p5').nt.hint, W.hint);
+  assert.equal(at({ save: false, poison: true }, 'p7').view('p5').nt.hint, W.hintPoison);
+  assert.equal(at({ save: true, poison: false }, 'p7').view('p5').nt.hint, W.hintSave);
+  assert.equal(at({ save: true, poison: false }, null).view('p5').nt.hint, W.hintNone);
+});
+
+test('werewolf: a wolves\' win that took the last wolf down the same night says why (狼刀優先, playtest #25)', () => {
+  const board = { p1: 'werewolf', p2: 'werewolf', p3: 'seer', p4: 'witch', p5: 'villager', p6: 'villager' };
+  // the playtest's night 4: one wolf against the witch; she is killed and poisons him the same night
+  const sim = deal(mk(board, { winRule: 'city' }));
+  for (const p of ['p2', 'p3', 'p5', 'p6']) sim.state.alive[p] = false;
+  sim.state.potion.save = false;
+  night(sim, { wolves: { p1: pk('p4') }, witch: { p4: pk('p1') } });
+  drive(sim, (s) => s.phase === 'over');
+  const r = sim.result();
+  assert.equal(r.summary, '狼人隊贏：好人全部出局（屠城）');
+  assert.ok(r.lines.slice(0, 4).some((l) => l.includes('狼刀優先')), r.lines.join('\n'));
+  // an ordinary wolves' win (a wolf still standing) has no such line
+  const plain = deal(mk(board, { winRule: 'city' }));
+  for (const p of ['p3', 'p5', 'p6']) plain.state.alive[p] = false;
+  night(plain, { wolves: { p1: pk('p4'), p2: pk('p4') } });
+  drive(plain, (s) => s.phase === 'over');
+  assert.equal(plain.state.win, 'wolves');
+  assert.ok(!plain.result().lines.some((l) => l.includes('狼刀優先')));
+  // and 屠邊: the last god dies while the witch poisons the last wolf
+  const edge = deal(mk({ p1: 'werewolf', p2: 'witch', p3: 'villager', p4: 'villager', p5: 'villager', p6: 'villager' }, { winRule: 'edge' }));
+  for (const p of ['p3', 'p4', 'p5']) edge.state.alive[p] = false;
+  night(edge, { wolves: { p1: pk('p2') }, witch: { p2: pk('p1') } });
+  drive(edge, (s) => s.phase === 'over');
+  assert.ok(edge.result().lines.some((l) => l.includes('狼刀優先')));
+});
+
+test('werewolf: the role card states this table\'s win rule for the player\'s side, and a wolf\'s 💡 gives a wolf\'s job (playtest #26)', async () => {
+  const { roleParts } = await import('../js/ui/logic.js');
+  const wolfCity = S.roleCardText('werewolf', { win: 'city' });
+  assert.ok(wolfCity.includes('屠城') && !wolfCity.includes('屠邊') && !wolfCity.includes('睇'), wolfCity);
+  const wolfEdge = S.roleCardText('werewolf', { win: 'edge' });
+  assert.ok(wolfEdge.includes('屠邊') && !wolfEdge.includes('屠城'), wolfEdge);
+  for (const id of ['villager', 'seer', 'witch', 'hunter', 'guard', 'idiot']) {
+    for (const win of ['city', 'edge']) {
+      const t = S.roleCardText(id, { win });
+      assert.ok(roleParts(t).win.startsWith('所有狼人出局'), `${id}/${win}: ${t}`);
+      assert.ok(t.includes(win === 'city' ? '屠城' : '屠邊'));
+    }
+  }
+  // without a table (the 📖 sheet and the 💡 role box) both rules are named, and the good side wins by 出局 not 放逐
+  assert.ok(S.ROLES.werewolf.text.includes('屠邊') && S.ROLES.werewolf.text.includes('屠城'));
+  assert.ok(roleParts(S.ROLES.villager.text).win.startsWith('所有狼人出局'));
+  // the 💡 line by day is plain text on a face-up phone (only the sheet's role box is covered): the SAME for a wolf and
+  // a good seat, worded for both sides — a wolf is no longer told to 揾出講大話嘅人, and nobody's line says 扮好人
+  const dayLines = [S.HINT.day.speech.other, S.HINT.day.tally, S.HINT.day.vote].join('|');
+  assert.ok(!/揾出講大話|覺得係狼人|扮好人/.test(dayLines), dayLines);
+  const sim = deal(mk(R9));
+  night(sim);
+  toSpeech(sim);
+  sim.cueDone();
+  const speaker = cur(sim).pid;
+  const wolf = ['p1', 'p2', 'p3'].find((p) => p !== speaker);
+  const good = ['p4', 'p7', 'p8'].find((p) => p !== speaker);
+  for (const p of [wolf, good, null]) assert.equal(sim.view(p).hint, S.HINT.day.speech.other, `${p}`);
+  toVote(sim);
+  for (const p of [wolf, good]) assert.equal(sim.view(p).hint, S.HINT.day.vote, `${p}`);
+  castVotes(sim, { p1: 'p9', p2: 'p9', p4: 'p9' });
+  assert.equal(phase(sim), 'say');
+  for (const p of [wolf, good]) assert.equal(sim.view(p).hint, S.HINT.day.tally, `${p} at the tally`);
+});
+
+/** One fresh UI, one view: what that phone draws. */
+function renderView(ui, sim, pid, view) {
+  const root = new FEl('div');
+  const api = {
+    me: pid, players: sim.players, isHost: pid === 'p1', meta: game.meta, config: sim.state.cfg, send: () => false,
+    ink() {}, now: () => sim.now, sfx() {}, toast() {}, components: stubComponents({ sfx: [], timers: 0 }),
+  };
+  const handle = ui.mount(root, api);
+  handle.update(view, { focus: null, paused: false, narrationMode: 'voice' });
+  return { root, handle };
+}
+
+/** What a neighbour can read off a face-up phone: every visible text node outside the hold-to-peek covers. */
+function uncovered(root) {
+  const parts = [];
+  const go = (n) => {
+    if (n instanceof FText) { parts.push(n.data); return; }
+    if (n.hidden || hasCls(n, 'c-cover') || hasCls(n, 'c-rolecard')) return;
+    for (const c of n.children) go(c);
+  };
+  go(root);
+  return parts.join('|');
+}
+
+test('werewolf ui: by day nothing secret is on screen outside a hold-to-peek cover — not your role, mates, potions or notes (playtest #2)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mk(R9, { openCard: 'off', spectate: false }));
+    // something to remember for every night role: the wolves attack p8, the witch saves him, the seer checks p1
+    night(sim, { wolves: wolvesPick('p8', ['p1', 'p2', 'p3']), witch: { p5: pk('p8') }, seer: { p4: pk('p1') } });
+    toSpeech(sim);
+    sim.cueDone();
+    const seats = mountAll(ui, sim, [], { sfx: [], timers: 0 });
+    pushViews(sim, seats, undefined, true);
+    const notes = (key) => findAll(seats[key].root, (n) => hasCls(n, 'ww-me-notes'))[0];
+    for (const p of sim.state.pl) {
+      const root = seats[p].root;
+      assert.equal(findAll(root, (n) => hasCls(n, 'ww-me'))[0].open, false, `${p}: 我嘅身份 starts closed`);
+      const me = findAll(root, (n) => hasCls(n, 'ww-seat') && hasCls(n, 'is-me'))[0];
+      assert.equal(findAll(me, (n) => n.tag === 'small').length, 0, `${p}: no role glyph on the own chip`);
+      for (const secret of ['🐺 隊友', '解藥有', '解藥冇', '夜驗', '用解藥救咗', '冇夜晚記錄']) {
+        assert.ok(!uncovered(root).includes(secret), `${p} shows 「${secret}」 outside a cover`);
+      }
+      assert.equal(findAll(notes(p), (n) => hasCls(n, 'c-cover')).length, 1, `${p}: every card holder has the 📓 cover`);
+    }
+    // …and the records are on the 📓 cover's hidden face
+    const front = (key) => findAll(notes(key), (n) => hasCls(n, 'ww-notes'))[0].textContent;
+    assert.ok(front('p1').includes('🐺 隊友：2號玩家2、3號玩家3'));
+    assert.ok(front('p4').includes('第 1 夜驗 1號玩家1'));
+    assert.ok(front('p5').includes('第 1 夜用解藥救咗 8號玩家8') && front('p5').includes('解藥冇'));
+    assert.ok(front('p7').includes(S.UI.me.notesNone));
+    assert.ok(findAll(seats.p1.root, (n) => hasCls(n, 'rc-body'))[0].textContent.includes('今局屠邊'), 'the card says this table\'s rule');
+    for (const seat of Object.values(seats)) seat.handle.destroy();
+
+    // metamorphic: through a whole day, a phone's uncovered screen is the same whatever card it holds
+    const other = (role) => (role === 'villager' ? 'werewolf' : 'villager');
+    let checked = 0;
+    let g = 0;
+    while (sim.state.phase !== 'night' && g++ < 200) {
+      const s = sim.state;
+      for (const p of s.pl) {
+        const v = sim.view(p);
+        const swapped = clone(v);
+        swapped.roleId = other(v.my.role);
+        swapped.my = { ...swapped.my, role: other(v.my.role), notes: [] };
+        delete swapped.my.mates;
+        delete swapped.my.potion;
+        const a = renderView(ui, sim, p, v);
+        const b = renderView(ui, sim, p, swapped);
+        assert.equal(uncovered(a.root), uncovered(b.root), `${p} (${v.my.role}) in ${s.phase}/${s.cur?.k}: the uncovered screen depends on the card`);
+        a.handle.destroy(); b.handle.destroy();
+        checked++;
+      }
+      if (s.phase === 'vote' && s.cur.stage === 'run') castVotes(sim, { p2: 'p1', p3: 'p1', p4: 'p1', p6: 'p1', p7: 'p1' });
+      else if (sim.cue()) sim.cueDone();
+      else if (s.phase === 'speech' || s.phase === 'words') sim.act(s.cur.pid, { type: 'done' });
+      else sim.advance();
+    }
+    assert.ok(checked > 40, `checked ${checked} screens`);
+    assert.equal(sim.state.alive.p1, false, 'the day included an exile, its 遺言 and its final window');
+  });
+});
+
+test('werewolf ui: the day keeps 「🌅 昨晚…」 in the stage card and the shell folds every past 票型 under 🗳 之前嘅投票 (playtest #10)', async () => {
+  await withFakeDom(async (ui) => {
+    const { RecentFold } = await import('../js/ui/components/RecentFold.js');
+    const sim = deal(mk(R9));
+    nightKill(sim, 'p9');
+    const seats = mountAll(ui, sim, [], { sfx: [], timers: 0 });
+    pushViews(sim, seats, undefined, true);
+    const lastNight = (key) => findAll(seats[key].root, (n) => hasCls(n, 'ww-stage-night'))[0];
+    // the play screen renders view.recent under the game with the shared RecentFold, the same on every phone
+    const folds = {};
+    const log = (key) => {
+      const v = sim.view(key === 'table' ? null : key);
+      folds[key] ??= RecentFold({});
+      folds[key].update({ recent: v.recent ?? null, players: sim.players });
+      return folds[key].el;
+    };
+    assert.equal(phase(sim), 'dawn');
+    assert.equal(lastNight('p1').hidden, true, 'the dawn card has the list itself');
+    toSpeech(sim);
+    pushViews(sim, seats, undefined, true);
+    for (const key of ['p1', 'p5', 'p9', 'table']) {
+      assert.equal(lastNight(key).hidden, false, key);
+      assert.equal(lastNight(key).textContent, S.UI.day.lastNightDead('9號玩家9'));
+      assert.equal(log(key).hidden, true, 'no vote yet');
+    }
+    toVote(sim);
+    castVotes(sim, { p1: 'p4', p2: 'p4', p3: 'p4', p4: 'p1', p5: 'p1', p6: 'p1' });   // 3–3 → PK
+    pushViews(sim, seats, undefined, true);
+    const recents = new Set(['p2', 'p7', 'p9', null].map((p) => JSON.stringify(sim.view(p).recent)));
+    assert.equal(recents.size, 1, 'the fold is public: the same on every phone');
+    for (const key of ['p2', 'p7', 'p9', 'table']) {
+      assert.equal(log(key).hidden, false, key);
+      assert.equal(findAll(log(key), (n) => n.tag === 'details')[0].open, false, 'folded until tapped');
+      const t = log(key).textContent;
+      assert.ok(t.includes(S.UI.day.voteLogHead) && t.includes('第 1 日・投票'), t);
+      assert.ok(t.includes('4號玩家4 3 票（1號玩家1、2號玩家2、3號玩家3）') && t.includes('棄權：7號玩家7、8號玩家8'), t);
+      assert.ok(t.includes('➜ 1號玩家1、4號玩家4 同票，PK'));
+    }
+    drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
+    castVotes(sim, { p2: 'p1', p3: 'p1', p5: 'p1', p6: 'p4', p7: 'p4', p8: 'p4' });   // 3–3 again → 平安日
+    pushViews(sim, seats, undefined, true);
+    assert.ok(seats.p2.root.textContent.includes(S.UI.day.tallyTie2), 'the tally says why nobody leaves');
+    assert.deepEqual(sim.view('p2').recent[0].entries.map((e) => e.title), ['第 1 日・PK 投票', '第 1 日・投票'], 'newest first');
+    assert.ok(log('p2').textContent.includes('➜ 第二次都平票，平安日'));
+    toNight(sim);
+    pushViews(sim, seats, undefined, true);
+    assert.equal(sim.view('p2').recent, undefined, 'no fold under the night panel');
+    assert.equal(log('p2').hidden, true);
+    assert.equal(lastNight('p2').hidden, true);
+    for (const f of Object.values(folds)) f.destroy();
+    for (const seat of Object.values(seats)) seat.handle.destroy();
+
+    // the 'nobody' outcome (a tie with nobody left to vote) gets its own reason line
+    const t = deal(mk(R9));
+    night(t);
+    toVote(t);
+    castVotes(t, { p1: 'p4', p4: 'p1' });
+    const v = clone(t.view('p2'));
+    v.sayInfo.outcome = 'nobody';
+    const r = renderView(ui, t, 'p2', v);
+    assert.ok(r.root.textContent.includes(S.UI.day.tallyNobody));
+    r.handle.destroy();
+  });
+});
+
+test('werewolf ui: night chips are class "can" (not "on"), the pick is aria-pressed, and the witch\'s button names the potion (playtest #12)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mk(R9));
+    const seats = mountAll(ui, sim, [], { sfx: [], timers: 0 });
+    toStep(sim, 'wolves');
+    for (const w of ['p1', 'p2', 'p3']) sim.act(w, pk('p7'));
+    sim.advance();
+    toStep(sim, 'witch');
+    pushViews(sim, seats, undefined, true);
+    const chips = (key) => findAll(seats[key].root, (n) => hasCls(n, 'ww-chip'));
+    const chip = (key, name) => chips(key).find((c) => c.textContent.includes(name));
+    const ok = (key) => findAll(seats[key].root, (n) => hasCls(n, 'ww-ok'))[0];
+    const pressed = (key) => chips(key).filter((c) => c.attrs['aria-pressed'] === 'true');
+    for (const key of ['p4', 'p5']) {
+      assert.ok(chips(key).every((c) => !hasCls(c, 'on')), 'no "on" class');
+      assert.ok(chips(key).some((c) => hasCls(c, 'can')));
+      assert.ok(chips(key).every((c) => c.attrs['aria-pressed'] === 'false'));
+    }
+    clickN(chip('p5', '玩家8'));
+    pushViews(sim, seats, undefined, true);
+    assert.equal(ok('p5').textContent, S.PANEL.witch.okPoison('8號玩家8'));
+    assert.ok(seats.p5.root.textContent.includes(S.PANEL.witch.pickedPoison('8號玩家8')));
+    assert.equal(ok('p4').textContent, S.PANEL.ok, 'a decoy\'s button is unchanged');
+    assert.deepEqual(pressed('p5').map((c) => c.textContent.includes('玩家8')), [true]);
+    clickN(chip('p5', '玩家8'));                                  // a stray tap, taken back
+    pushViews(sim, seats, undefined, true);
+    assert.equal(sim.state.nt.sel.p5.pick, null);
+    assert.equal(ok('p5').textContent, S.PANEL.ok);
+    assert.equal(pressed('p5').length, 0);
+    clickN(chip('p5', '玩家7'));
+    pushViews(sim, seats, undefined, true);
+    assert.equal(ok('p5').textContent, S.PANEL.witch.okSave('7號玩家7'));
+    assert.equal(new Set(sim.state.pl.map((p) => nightShape(seats[p].root))).size, 1, 'one night shape on every phone');
+    for (const seat of Object.values(seats)) seat.handle.destroy();
+  });
+});
+
+// ============================================================
+// decisions 2026-10-04: D7 timings, D6 secret own vote, D4 absent seats
+// ============================================================
+
+const ABSENT = (pid) => ({ type: ACT.ABSENT ?? '@absent', pid });
+const PRESENT = (pid) => ({ type: ACT.PRESENT ?? '@present', pid });
+
+test('werewolf: 遺言 is 60 s by default (D7) — the research and the official default; the quick preset keeps 30 s', () => {
+  for (let n = 6; n <= 13; n++) assert.equal(config.defaults(n).wordsSecs, 60, `n=${n}`);
+  assert.equal(config.presets(9).find((x) => x.id === 'quick').cfg.wordsSecs, 30);
+  const sim = deal(mk(R9));
+  nightKill(sim, 'p7');
+  sim.cueDone();                                                 // the dawn
+  assert.equal(cur(sim).k, 'words');
+  assert.ok(sim.cue().text.includes('60 秒'), sim.cue().text);
+  sim.cueDone();
+  assert.equal(sim.state.deadline, sim.now + 60000);
+});
+
+test('werewolf: the 票型 stays up 4 s + 0.8 s per voter, at most 15 s (D7); the dawn keeps its 8 s floor', () => {
+  assert.equal(S.tallyMinMs(0), 4000);
+  assert.equal(S.tallyMinMs(5), 8000);
+  assert.equal(S.tallyMinMs(9), 11200);
+  assert.equal(S.tallyMinMs(12), 13600);
+  assert.equal(S.tallyMinMs(14), 15000);
+  assert.equal(S.tallyMinMs(40), 15000, 'capped');
+  // a 9-voter tally
+  const sim = deal(mk(R9));
+  night(sim);
+  assert.ok(sim.cue().minMs >= S.DAWN_MIN_MS, 'the dawn floor is unchanged');
+  toVote(sim);
+  castVotes(sim, { p1: 'p4', p2: 'p4', p3: 'p4', p4: 'p1', p5: 'p1', p6: 'p1' });   // 3–3 → PK; 9 ballots incl. abstentions
+  assert.equal(cur(sim).kind, 'tally');
+  const t1 = sim.cue();
+  assert.equal(t1.minMs, Math.max(11200, S.cueMinMs(t1.text)));
+  assert.ok(t1.minMs >= 11200 && t1.minMs <= 15000, String(t1.minMs));
+  // the PK round: the two tied players do not vote → 7 ballots
+  drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
+  assert.equal(cur(sim).voters.length, 7);
+  castVotes(sim, { p2: 'p4', p3: 'p4' });
+  const t2 = sim.cue();
+  assert.equal(t2.minMs, Math.max(S.tallyMinMs(7), S.cueMinMs(t2.text)));
+  // 12 voters at a 12-player table: still under the cap, and longer than any plain cue
+  const big = deal(mk(R12));
+  night(big);
+  toVote(big);
+  castVotes(big, {});
+  assert.equal(big.cue().minMs, Math.max(13600, S.cueMinMs(big.cue().text)));
+  assert.ok(big.cue().minMs <= 15000);
+});
+
+test('werewolf: @absent at the deal — the night does not wait for an absent seat; @present makes it count again (D4)', () => {
+  const sim = mk(R9);
+  for (const p of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) sim.act(p, { type: 'ready' });
+  assert.equal(phase(sim), 'deal');
+  assert.deepEqual(sim.view('p1').ready, { done: 7, total: 9 });
+  assert.equal(sim.host(ABSENT('p8')), true);
+  assert.equal(phase(sim), 'deal', 'p9 still has to look');
+  assert.deepEqual(sim.view('p1').ready, { done: 7, total: 8 }, 'the count is of the seats the night waits for');
+  assert.deepEqual(sim.focus().pids, ['p9']);
+  assert.equal(engine.blocking(sim.state, 'p8'), false);
+  assert.equal(engine.blocking(sim.state, 'p9'), true);
+  assert.equal(sim.host(ABSENT('p8')), false, 'already absent: nothing changes');
+  assert.equal(sim.host(PRESENT('p8')), true);
+  assert.equal(engine.blocking(sim.state, 'p8'), true, 'back: waited on again');
+  assert.equal(sim.host(PRESENT('p8')), false, 'already present');
+  sim.host(ABSENT('p8'));
+  sim.host(ABSENT('p9'));                                        // the last unready seat leaves → night
+  assert.equal(phase(sim), 'night');
+  // what never changes: unknown seats, a missing pid, a present seat marked present; a seat cannot send it
+  for (const bad of [ABSENT('nobody'), ABSENT(null), { type: ACT.ABSENT ?? '@absent' }, PRESENT('p1')]) assert.equal(sim.host(bad), false, JSON.stringify(bad));
+  assert.equal(sim.act('p1', ABSENT('p2')), false, 'a seat cannot mark anybody');
+});
+
+test('werewolf: @absent by day — no ballot, never waited on, still a candidate; a ballot cast before leaving counts; @present rejoins an open vote (D4)', () => {
+  const sim = deal(mk(R9, { voteSecs: 0 }));
+  night(sim);
+  sim.host(ABSENT('p9'));
+  toVote(sim);
+  const c = cur(sim);
+  assert.ok(!c.voters.includes('p9') && c.cands.includes('p9'), 'not a voter, still a candidate');
+  assert.equal(sim.act('p9', { type: 'vote', target: 'p1' }), false, 'its taps cast nothing');
+  assert.deepEqual(sim.legal('p9'), []);
+  assert.equal(engine.blocking(sim.state, 'p9'), false);
+  assert.equal(sim.view('p1').vote.progress.total, 8);
+  assert.equal(sim.view('p9').hint, S.HINT.day.absent);
+  // everyone present votes p9 out: the vote resolves without it
+  for (const v of c.voters) sim.act(v, { type: 'vote', target: 'p9' });
+  assert.equal(phase(sim), 'say');
+  assert.equal(cur(sim).outcome, 'exile');
+  assert.equal(cur(sim).pid, 'p9');
+  assert.ok(!cur(sim).votes.some((x) => x.by === 'p9'), 'no abstention is listed for the absent seat');
+
+  // marking the last missing voter absent closes an untimed vote at once; a cast ballot stays
+  const v2 = deal(mk(R9, { voteSecs: 0 }));
+  night(v2);
+  toVote(v2);
+  for (const p of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) v2.act(p, { type: 'vote', target: 'p8' });
+  v2.act('p8', { type: 'vote', target: 'p1' });
+  assert.equal(phase(v2), 'vote');
+  assert.equal(v2.host(ABSENT('p8')), true, 'p8 already voted: its ballot stands');
+  assert.ok(cur(v2).voters.includes('p8'));
+  assert.equal(phase(v2), 'vote', 'still waiting on p9');
+  assert.equal(v2.host(ABSENT('p9')), true);
+  assert.equal(phase(v2), 'say', 'nobody left to wait for');
+  assert.deepEqual(cur(v2).votes.map((x) => x.by), ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8']);
+
+  // @present while the vote is open: a voter again, in seat order
+  const v3 = deal(mk(R9, { voteSecs: 0 }));
+  night(v3);
+  v3.host(ABSENT('p5'));
+  toVote(v3);
+  assert.ok(!cur(v3).voters.includes('p5'));
+  v3.host(PRESENT('p5'));
+  assert.deepEqual(cur(v3).voters, v3.state.pl.filter((p) => v3.state.alive[p]));
+  assert.equal(engine.blocking(v3.state, 'p5'), true);
+});
+
+test('werewolf: @absent and PK — an absent seat is not a PK voter, and a tie with only absent seats left to vote is a peaceful day (D4)', () => {
+  const sim = deal(mk(R9));
+  night(sim);
+  toVote(sim);
+  castVotes(sim, { p1: 'p4', p2: 'p4', p3: 'p4', p4: 'p1', p5: 'p1', p6: 'p1' });
+  assert.equal(cur(sim).outcome, 'tie');
+  sim.host(ABSENT('p7'));
+  drive(sim, (s) => s.phase === 'vote' && s.cur.stage === 'run');
+  assert.ok(!cur(sim).voters.includes('p7') && !cur(sim).voters.includes('p1') && !cur(sim).voters.includes('p4'));
+  assert.equal(cur(sim).voters.length, 6);
+  // both tied are the only present voters: nobody can vote the PK
+  const t = deal(mk(R9));
+  night(t);
+  for (const p of ['p2', 'p3', 'p5', 'p6', 'p7', 'p8', 'p9']) t.host(ABSENT(p));
+  toVote(t);
+  assert.deepEqual(cur(t).voters, ['p1', 'p4']);
+  castVotes(t, { p1: 'p4', p4: 'p1' });
+  assert.equal(cur(t).outcome, 'nobody');
+  // a seat already 💤 when it ties: still a PK candidate, but no PK speech — the present one gets the opening as 1/1
+  const u = deal(mk(R9));
+  night(u);
+  u.host(ABSENT('p1'));
+  toVote(u);
+  castVotes(u, { p2: 'p4', p3: 'p4', p5: 'p1', p6: 'p1' });
+  assert.equal(cur(u).outcome, 'tie');
+  assert.deepEqual(cur(u).tied, ['p1', 'p4']);
+  u.cueDone();
+  assert.equal(cur(u).k, 'speech');
+  assert.equal(cur(u).pid, 'p4');
+  assert.equal(cur(u).idx, 0);
+  assert.equal(cur(u).total, 1);
+  assert.ok(u.cue().text.includes('平票，要 PK 發言'), u.cue().text);
+  drive(u, (s) => s.phase === 'vote' && s.cur.stage === 'run');
+  assert.deepEqual(cur(u).cands, ['p1', 'p4']);
+  assert.ok(!cur(u).voters.includes('p1') && !cur(u).voters.includes('p4'));
+});
+
+test('werewolf: @absent and speeches — an absent seat has no turn, the turns left are renumbered, its own turn ends at once (D4)', () => {
+  const sim = deal(mk(R9, { speakOrder: 'random' }, 3));
+  night(sim);
+  toSpeech(sim);
+  const order = speakers(sim).slice();
+  assert.equal(order.length, 9);
+  // a later speaker leaves before its turn
+  sim.host(ABSENT(order[4]));
+  assert.deepEqual(speakers(sim), order.filter((p) => p !== order[4]));
+  assert.deepEqual(sim.state.speechOrder, order.filter((p) => p !== order[4]));
+  for (const x of [cur(sim), ...sim.state.q].filter((y) => y.k === 'speech')) {
+    assert.equal(x.total, 8);
+    assert.equal(x.idx, sim.state.speechOrder.indexOf(x.pid));
+  }
+  // the current speaker leaves mid-turn: the next one is called, with the opening line (order[0] never finished its turn)
+  sim.cueDone();
+  assert.equal(cur(sim).stage, 'run');
+  assert.equal(sim.host(ABSENT(order[0])), true);
+  assert.equal(cur(sim).k, 'speech');
+  assert.equal(cur(sim).pid, order[1]);
+  assert.equal(cur(sim).stage, 'cue');
+  assert.ok(!sim.state.speechOrder.includes(order[0]));
+  assert.equal(cur(sim).idx, 0);
+  assert.ok(sim.cue().text.includes('而家開始發言'), sim.cue().text);
+  // play the turns out: the last one is still 「最後一位」, then the vote (without the two absent seats)
+  let turns = 0;
+  while (phase(sim) === 'speech') {
+    if (cur(sim).idx === cur(sim).total - 1) assert.ok(sim.cue().text.includes('最後一位'));
+    sim.cueDone();
+    sim.act(cur(sim).pid, { type: 'done' });
+    turns++;
+  }
+  assert.equal(turns, 7);
+  assert.equal(phase(sim), 'vote');
+  assert.ok(!cur(sim).voters.includes(order[0]) && !cur(sim).voters.includes(order[4]));
+  // next day the absent seats get no turn at all
+  sim.cueDone();
+  castVotes(sim, {});
+  toNight(sim); night(sim); toSpeech(sim);
+  assert.ok(!speakers(sim).includes(order[0]) && !speakers(sim).includes(order[4]));
+  assert.equal(cur(sim).total, speakers(sim).length);
+});
+
+test('werewolf: @absent and 遺言 / PK speeches — dropped and renumbered; the final-action window keeps its fixed length (D4)', () => {
+  // a night-1 death that is absent: no 遺言, but the same final window as anybody (anti-tell)
+  const sim = deal(mk(R9));
+  nightKill(sim, 'p7');
+  sim.host(ABSENT('p7'));
+  assert.ok(!sim.state.q.some((x) => x.k === 'words'), 'its 遺言 is dropped');
+  assert.ok(sim.state.q.some((x) => x.k === 'final' && x.pid === 'p7'), 'the final window stays');
+  // PK: the first tied speaker is absent → the second gets the opening line
+  const pk2 = deal(mk(R9));
+  night(pk2);
+  toVote(pk2);
+  castVotes(pk2, { p1: 'p4', p2: 'p4', p3: 'p4', p4: 'p1', p5: 'p1', p6: 'p1' });
+  const firstPk = pk2.state.q.find((x) => x.k === 'speech' && x.pk);
+  pk2.host(ABSENT(firstPk.pid));
+  const left = pk2.state.q.filter((x) => x.k === 'speech' && x.pk);
+  assert.equal(left.length, 1);
+  assert.equal(left[0].idx, 0);
+  assert.equal(left[0].total, 1);
+  pk2.cueDone();                                                 // the tally
+  assert.equal(cur(pk2).k, 'speech');
+  assert.ok(pk2.cue().text.includes('平票，要 PK 發言'), pk2.cue().text);
+});
+
+test('werewolf: absent seats are public — every phone marks the same seats 💤, and nothing at night changes (D4)', () => {
+  const sim = deal(mk(R9));
+  night(sim);
+  sim.host(ABSENT('p2'));
+  sim.host(ABSENT('p6'));
+  const marks = [...sim.state.pl, null].map((p) => JSON.stringify(sim.view(p).seats.filter((x) => x.absent).map((x) => x.pid)));
+  assert.equal(new Set(marks).size, 1);
+  assert.deepEqual(JSON.parse(marks[0]), ['p2', 'p6']);
+  assert.equal(sim.view('p2').my.absent, true);
+  assert.equal(sim.view('p3').my.absent, undefined);
+  // at night nothing waits on anyone, absent or not, and every seat still has its decoy
+  toNight(sim);
+  while (cur(sim).stage !== 'run' || cur(sim).step === 'begin') sim.cueDone();
+  for (const p of sim.state.pl) {
+    assert.equal(engine.blocking(sim.state, p), false);
+    assert.ok(sim.legal(p).length > 0, `${p} has its night tap`);
+  }
+  // the human moderator is not a player: he cannot be marked
+  const h = hmk();
+  assert.equal(h.host(ABSENT('p1')), false);
+  // after the end nothing moves
+  const done = deal(mk(R9));
+  done.state.phase = 'over';
+  assert.equal(done.host(ABSENT('p3')), false);
+});
+
+test('werewolf: fuzz — the host marks random seats absent and back during random games; every game still ends and nothing waits on an absent seat (D4)', () => {
+  for (const n of [6, 9, 12]) {
+    for (let seed = 1; seed <= 12; seed++) {
+      const sim = newSim(n, seed * 41 + n, seed % 2 ? { voteSecs: 0, speakSecs: 0, wordsSecs: 0 } : {});
+      const rng = mulberry32(seed * 3 + n);
+      const base = makeInvariants();
+      let marks = 0;
+      const inv = (x) => {
+        base(x);
+        const s = x.state;
+        if (s.phase !== 'over' && rng() < 0.03) {
+          const p = s.pl[Math.floor(rng() * s.pl.length)];
+          const a = s.absent?.[p] ? PRESENT(p) : ABSENT(p);
+          const nx = engine.act(x.state, { pid: HOST, action: a }, x.ctx());
+          if (nx) x.state = nx;
+          marks++;
+        }
+        const t = x.state;
+        const c = t.cur;
+        for (const p of t.pl) if (t.absent?.[p]) assert.equal(engine.blocking(t, p), false, `${p} is absent but blocks`);
+        if (c && (c.k === 'speech' || c.k === 'words')) assert.ok(!t.absent?.[c.pid], 'an absent seat never holds the floor');
+        if (c && c.k === 'vote') assert.ok(c.voters.every((p) => p in c.votes || !t.absent?.[p]), 'an absent seat is never waited on in a vote');
+        if (t.phase === 'deal') assert.ok(t.pl.some((p) => !t.ready[p] && !t.absent?.[p]), 'the deal ends once every present seat is ready');
+      };
+      playRandom(sim, { rng, actP: 0.3 + 0.3 * rng(), inv });
+      assertGoodResult(sim, `absent fuzz n=${n} seed=${seed}`);
+      assert.ok(marks > 0, `n=${n} seed=${seed}: the fuzz marked nobody`);
+    }
+  }
+});
+
+/** mountAll, with every VotePanel the UI makes kept for its props. */
+function mountWithPanels(ui, sim) {
+  const seats = mountAll(ui, sim, [], { sfx: [], timers: 0 });
+  // mountAll shares one component set: wrap its VotePanel before anything is drawn
+  const comps = Object.values(seats)[0].api.components;
+  const made = [];
+  const base = comps.VotePanel;
+  comps.VotePanel = (p) => { const x = base(p); made.push(x); return x; };
+  return { seats, made };
+}
+
+test('werewolf ui: your own ballot is secret on your phone (D6), absent candidates carry 💤, and an absent seat sees a 💤 line instead of a ballot (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    const sim = deal(mk(R9));
+    night(sim);
+    sim.host(ABSENT('p9'));
+    toVote(sim);
+    const { seats, made } = mountWithPanels(ui, sim);
+    pushViews(sim, seats, undefined, true);
+    const live = made.filter((x) => x.props && !x.props.reveal);
+    assert.ok(live.length >= 8, `one ballot per voter (${live.length})`);
+    for (const x of live) {
+      assert.equal(x.props.secretChoice, true, 'secretChoice on every ballot');
+      assert.ok(x.props.players.find((p) => p.id === 'p9').name.endsWith(S.UI.roster.absent), 'the absent candidate is marked 💤');
+      assert.ok(!x.props.players.find((p) => p.id === 'p8').name.includes(S.UI.roster.absent));
+    }
+    const panelOf = (key) => findAll(seats[key].root, (n) => hasCls(n, 'ww-votehost'))[0];
+    assert.ok(visible(panelOf('p1')));
+    assert.ok(!visible(panelOf('p9')), 'no ballot for an absent seat');
+    assert.ok(seats.p9.root.textContent.includes(S.UI.day.voteAbsent));
+    for (const key of ['p1', 'p5', 'table']) {
+      const chip = findAll(seats[key].root, (n) => hasCls(n, 'ww-seat') && n.textContent.includes('玩家9'))[0];
+      assert.ok(chip && chip.textContent.includes(S.UI.roster.absent), `${key}: 💤 on p9's chip`);
+      const other = findAll(seats[key].root, (n) => hasCls(n, 'ww-seat') && n.textContent.includes('玩家8'))[0];
+      assert.ok(!other.textContent.includes(S.UI.roster.absent));
+    }
+    for (const seat of Object.values(seats)) seat.handle.destroy();
+  });
+});
+
+test('werewolf: the 💡 role box says this table\'s rule (view.hintRoleText) — the same words for every seat holding that card, all game', async () => {
+  const { roleFor, roleParts } = await import('../js/ui/logic.js');
+  const textOf = (sim, p) => JSON.stringify(sim.view(p).hintRoleText);
+  const check = (sim, win) => {
+    const byRole = {};
+    for (const p of sim.state.pl) (byRole[sim.state.role[p]] ||= new Set()).add(textOf(sim, p));
+    for (const [role, set] of Object.entries(byRole)) assert.equal(set.size, 1, `${role}: one text for every holder`);
+    for (const p of sim.state.pl) {
+      const t = sim.view(p).hintRoleText;
+      assert.ok(t && t.what && t.win, `${p} has a role text`);
+      assert.ok(t.win.includes(win === 'city' ? '屠城' : '屠邊') && !t.win.includes(win === 'city' ? '屠邊' : '屠城'), `${p}: ${t.win}`);
+      if (sim.state.role[p] !== 'werewolf') assert.ok(t.win.startsWith('所有狼人出局'), t.win);
+      // what the shell's 💡 sheet shows: this table's rule, split into 做乜 / 點贏
+      const card = roleFor(sim.view(p), rules);
+      assert.equal(roleParts(card.text).win, t.win);
+    }
+    assert.equal(sim.view(null).hintRoleText, undefined, 'the table has no card');
+  };
+  const edge = deal(mk(R9));
+  assert.equal(edge.state.cfg.win, 'edge');
+  check(edge, 'edge');
+  const before = edge.state.pl.map((p) => textOf(edge, p));
+  nightKill(edge, 'p7');
+  toVote(edge);
+  assert.deepEqual(edge.state.pl.map((p) => textOf(edge, p)), before, 'the text never changes with what happens in the game');
+  check(deal(mk(R9, { winRule: 'city' })), 'city');
+  // the board's extra line goes with 做乜: a witch with a guard on the board is told about 同守同救
+  const g = deal(mk(R12));
+  assert.ok(g.view('p6').hintRoleText.what.includes('守衛'));
+  assert.ok(g.view('p1').hintRoleText.what.includes('隊友'));
+  // the human moderator holds no card
+  assert.equal(hmk().view('p1').hintRoleText, undefined);
+});
+
+test('werewolf ui: with seats marked 💤 and back through whole random games, every screen still renders for every seat, idempotently (D4)', async () => {
+  await withFakeDom(async (ui) => {
+    for (const [n, seed] of [[7, 3], [10, 5]]) {
+      const sim = newSim(n, seed, { voteSecs: 0 });
+      const seats = mountAll(ui, sim, [], { sfx: [], timers: 0 });
+      const rng = mulberry32(seed * 101);
+      let k = 0;
+      playRandom(sim, {
+        rng, actP: 0.4,
+        inv: (x) => {
+          if (x.state.phase !== 'over' && rng() < 0.04) {
+            const p = x.state.pl[Math.floor(rng() * x.state.pl.length)];
+            const nx = engine.act(x.state, { pid: HOST, action: x.state.absent?.[p] ? PRESENT(p) : ABSENT(p) }, x.ctx());
+            if (nx) x.state = nx;
+          }
+          if (k++ % 4 === 0) pushViews(x, seats);
+        },
+      });
+      pushViews(sim, seats, undefined, true);
+      for (const seat of Object.values(seats)) seat.handle.destroy();
+    }
   });
 });

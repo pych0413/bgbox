@@ -2,7 +2,11 @@
 // screens/results.js — who won and why, this game's points, the evening's
 // scoreboard, and (host only) 再玩一局 / 換遊戲.
 //
-//  - 「點解會咁」 renders result.lines in sections: a line that is { h: '標題' } or a
+//  - The hero states the RESULT (logic.resultHero, #39): the game's emoji + name are a small kicker
+//    line, the headline is the game's own summary (「貪瞓鼠贏 — 大盜 阿明 畀人揪出」), 呢鋪唔計, or
+//    「邊個贏由你哋講」 for a game that does not judge (`result.noScore`). Confetti rains the game's own
+//    emoji, not the 🧀 mascot.
+//  - 「點解會咁」 (or `result.linesTitle`) renders result.lines in sections: a line that is { h: '標題' } or a
 //    string '── 標題 ──' starts a foldable section. A long recap starts folded except
 //    its first section (logic.js resultSections / sectionsOpen).
 //  - Drawing games leave a keepsake: the picture(s) of the game just played, view-only,
@@ -11,17 +15,17 @@
 //    navigator.share (iOS only allows it inside a real tap).
 // ============================================================
 
-import { el, sig, toast } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
-import { Scoreboard, Canvas } from '../components/index.js?v=20261003171423';
-import { resultSections, sectionsOpen, pictureFileName } from '../logic.js?v=20261003171423';
-import { paintStrokes } from '../ink.js?v=20261003171423';
+import { el, sig, toast } from '../dom.js?v=1';
+import { sfx } from '../../core/sfx.js?v=1';
+import { Scoreboard, Canvas } from '../components/index.js?v=1';
+import { resultSections, sectionsOpen, pictureFileName, resultHero, confettiSet } from '../logic.js?v=1';
+import { paintStrokes } from '../ink.js?v=1';
 
-const CONFETTI = ['🎉', '✨', '🧀', '🎊', '⭐'];
 const PNG_PX = 1080;              // the picture itself; a strip underneath says what and when
 const PNG_FOOTER = 96;
 
-function confetti() {
+function confetti(meta) {
+  const set = confettiSet(meta);
   const n = 22;
   return el('div', { class: 'confetti', 'aria-hidden': 'true' }, Array.from({ length: n }, (_, i) => el('i', {
     style: {
@@ -30,7 +34,7 @@ function confetti() {
       '--w': `${((i * 29) % 14) / 10}s`,
       '--r': `${(i % 2 ? 1 : -1) * (240 + ((i * 41) % 200))}deg`,
     },
-    text: CONFETTI[i % CONFETTI.length],
+    text: set[i % set.length],
   })));
 }
 
@@ -111,7 +115,7 @@ export function mountResults(sh) {
     onclick: async () => { try { report(await app.results.toLobby()); } catch (err) { console.error(err); } },
   }, '🎲 換遊戲');
   const waiting = el('p', { class: 'status', text: '等房主揀，再玩一局定換遊戲…' });
-  const leaveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { margin: '1rem auto 0' }, onclick: () => sh.leave() }, '🚪 離開房間');
+  const leaveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { margin: '1rem auto 0' }, onclick: () => sh.leave(leaveBtn) }, '🚪 離開房間');
 
   // a table timer keeps running between games (T1): its strip stays on screen here too
   const timerStrip = sh.timer?.strip?.() ?? null;
@@ -123,14 +127,14 @@ export function mountResults(sh) {
   root.append(confettiHost);
 
   // ---------- 「點解會咁」 in sections ----------
-  function paintLines(lines) {
+  function paintLines(lines, title = '點解會咁') {
     const sections = resultSections(lines);
     linesCard.hidden = !sections.length;
     if (!sections.length) { linesCard.replaceChildren(); return; }
     const open = sectionsOpen(sections);
     const list = (ls) => el('ul', { class: 'results-lines' }, ls.map((l) => el('li', { text: l })));
     linesCard.replaceChildren(
-      el('div', { class: 'card-head' }, el('h3', { text: '點解會咁' })),
+      el('div', { class: 'card-head' }, el('h3', { text: title })),
       ...sections.map((s, i) => (s.title === null
         ? list(s.lines)
         : el('details', { class: 'results-sec', open: open[i] },
@@ -237,19 +241,20 @@ export function mountResults(sh) {
     const winnerIds = new Set(res?.winners ?? []);
     const iWon = (st.mySeats ?? []).some((id) => winnerIds.has(id));
 
-    const voided = res?.void === true;          // 呢鋪唔計: nothing was scored
-    const title = `${meta.emoji ?? ''} ${meta.name ?? ''}`;
+    // the result first; the game's name is only the kicker (#39)
+    const h = resultHero(res, meta);
     hero.replaceChildren(...[
-      el('div', { class: 'results-trophy', text: voided ? '🚫' : winners.length ? '🏆' : '🤝' }),
-      el('h2', { text: voided ? `${title} — 呢鋪唔計` : winners.length ? `${title} — 贏家` : `${title} — 冇人贏` }),
+      el('div', { class: 'results-trophy', text: h.trophy }),
+      el('div', { class: 'results-kicker', text: `${meta.emoji ?? ''} ${meta.name ?? ''}`.trim() }),
+      el('h2', { text: h.heading }),
       el('div', { class: 'winners' }, winners.map((p, i) => el('span', {
         class: 'winner-chip', style: { '--seat': p.color ?? 'var(--cheese)', '--delay': `${i * 120}ms` },
         text: p.name,
       }))),
-      res?.summary ? el('p', { class: 'results-summary', text: res.summary }) : null,
+      h.summaryBelow && res?.summary ? el('p', { class: 'results-summary', text: res.summary }) : null,
     ].filter(Boolean));
 
-    paintLines(res?.lines ?? []);
+    paintLines(res?.lines ?? [], typeof res?.linesTitle === 'string' && res.linesTitle ? res.linesTitle : '點解會咁');
 
     const pts = Object.entries(res?.points ?? {}).filter(([id]) => names.has(id));
     pointsCard.hidden = !pts.length;
@@ -263,7 +268,7 @@ export function mountResults(sh) {
     if (first) {
       sfx(iWon ? 'win' : 'reveal');
       if (iWon) {
-        confettiHost.replaceChildren(confetti());
+        confettiHost.replaceChildren(confetti(meta));
         setTimeout(() => confettiHost.replaceChildren(), 6000);
       }
     }

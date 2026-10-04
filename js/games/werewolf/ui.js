@@ -15,7 +15,12 @@
 //    beeps would tell the room who is awake. The night clock is a silent bar.
 //  - no optimistic state: a tap is sent, and the screen changes when the host echoes the view.
 //
-// Only api.components (RoleCard, VotePanel, Timer) and plain DOM are used. Every Cantonese line is in
+// Day rule (playtest #2): a phone lies face-up on the table all day, so NOTHING secret is drawn in the open. Your role,
+// a wolf's mates, the witch's potions and every night record sit behind a hold-to-peek cover (the RoleCard and the
+// 📓 notes cover); your own seat chip is marked only by the is-me ring. The uncovered screen is the same whatever
+// your card is (a UI test swaps the card and compares).
+//
+// Only api.components (RoleCard, Cover, VotePanel, Timer) and plain DOM are used. Every Cantonese line is in
 // script.js. Flow and wording: docs/games/werewolf.md.
 // ============================================================
 
@@ -53,6 +58,7 @@ export function mount(root, api) {
   const rerender = () => { if (view) apply(view, ctx); };
 
   const seatOf = (v, pid) => v.seats.find((s) => s.pid === pid) ?? null;
+  const seatName = (v, pid) => `${seatOf(v, pid)?.no ?? ''}號${nameOf(pid)}`;
   const labelOf = (v, pid) => {
     const s = seatOf(v, pid);
     return `${s ? `${s.no}號 ` : ''}${nameOf(pid)}${pid === v.me ? S.UI.common.you : ''}`;
@@ -66,11 +72,12 @@ export function mount(root, api) {
   const stageIcon = el('div', { class: 'ww-stage-icon' });
   const stageTitle = el('div', { class: 'ww-stage-title' });
   const stageSay = el('p', { class: 'ww-stage-say' });
+  const stageNight = el('p', { class: 'ww-stage-night', hidden: true });   // 🌅 昨晚：… — public, all day
   const barFill = el('i');
   const bar = el('div', { class: 'ww-bar', hidden: true }, barFill);
   const timerHost = el('div', { class: 'ww-timer', hidden: true });
   const stage = el('section', { class: 'ww-stage' },
-    el('div', { class: 'ww-stage-head' }, stageIcon, el('div', { class: 'ww-stage-text' }, stageTitle, stageSay)),
+    el('div', { class: 'ww-stage-head' }, stageIcon, el('div', { class: 'ww-stage-text' }, stageTitle, stageSay, stageNight)),
     bar, timerHost);
 
   let timer = null;
@@ -109,6 +116,11 @@ export function mount(root, api) {
     setText(stageTitle, v.subtitle || v.title || '');
     setText(stageSay, v.say ?? '');
     setHidden(stageSay, !v.say);
+    // who left last night, kept on every day screen (the dawn card itself has the list, so not twice there)
+    const ln = v.phase !== 'dawn' ? v.lastNight : null;
+    const lnText = !ln ? '' : ln.deaths.length ? S.UI.day.lastNightDead(ln.deaths.map((p) => seatName(v, p)).join('、')) : S.UI.day.lastNightPeace;
+    setText(stageNight, lnText);
+    setHidden(stageNight, !lnText);
     stage.classList.toggle('is-night', night);
     if (night) {
       setTimer(v, c);
@@ -140,25 +152,31 @@ export function mount(root, api) {
       el('span', { class: 'ww-seat-name', text: nameOf(s.pid) }),
       s.flipped ? el('em', { text: S.UI.roster.flipped }) : null,
       !s.alive ? el('em', { text: S.UI.roster.dead }) : null,
+      s.absent ? el('em', { class: 'ww-seat-absent', text: S.UI.roster.absent }) : null,
       role ? el('small', { text: role.emoji }) : null);
     }));
   }
 
-  // ---- "me": role card, mates, potions, notes ----
+  // ---- "me": role card, then mates / potions / notes behind a 📓 cover (never in plain text by day) ----
   const meRoleHost = el('div', { class: 'ww-me-card' });
+  const notesHost = el('div', { class: 'ww-me-notes' });
+  const notesFront = el('div', { class: 'ww-notes' });   // one node for the cover's life: the Cover swaps fronts by identity
   const meLines = el('div', { class: 'ww-me-lines' });
   const meBanner = el('p', { class: 'ww-banner', hidden: true });
-  const meBox = el('details', { class: 'ww-me', open: true },
-    el('summary', { text: S.UI.me.head }), meBanner, meRoleHost, meLines);
+  // closed by default: a face-up phone shows only the 「我嘅身份」 summary
+  const meBox = el('details', { class: 'ww-me' },
+    el('summary', { text: S.UI.me.head }), meBanner, meRoleHost, notesHost, meLines);
   let roleCard = null;
+  let notesCover = null;
   let meSig = '';
+  let notesSig = '';
 
   function roleProps(v) {
     const id = v.my.role;
     const r = S.ROLES[id];
     const board = Object.fromEntries(v.board.map((b) => [b.id, b.count]));
     return {
-      role: { emoji: r.emoji, name: r.name, team: r.team, text: S.roleCardText(id, { hasWitch: !!board.witch, hasGuard: !!board.guard }) },
+      role: { emoji: r.emoji, name: r.name, team: r.team, text: S.roleCardText(id, { hasWitch: !!board.witch, hasGuard: !!board.guard, win: v.opts.win }) },
       locked: roleLocked,
       onLockToggle: () => { roleLocked = !roleLocked; rerender(); },
       hint: roleLocked ? undefined : (v.phase === 'deal' ? S.UI.deal.cardBack : undefined),
@@ -177,19 +195,37 @@ export function mount(root, api) {
     setText(meBanner, banner);
     setHidden(meBanner, !banner);
 
-    const lines = [];
+    // Secret lines go on the 📓 cover's hidden face. EVERY seat with a card gets the cover (a villager's says
+    // 「冇夜晚記錄」), so having one tells nothing; it shares the role card's 🔒.
+    const notes = [];
     if (my.mates) {
-      const names = my.mates.map((p) => `${seatOf(v, p)?.no ?? ''}號${nameOf(p)}${seatOf(v, p)?.alive === false ? S.UI.roster.dead : ''}`).join('、');
-      lines.push(['mates', my.mates.length ? S.UI.me.mates(names) : S.PANEL.wolves.matesAlone]);
+      const names = my.mates.map((p) => `${seatName(v, p)}${seatOf(v, p)?.alive === false ? S.UI.roster.dead : ''}`).join('、');
+      notes.push(['mates', my.mates.length ? S.UI.me.mates(names) : S.PANEL.wolves.matesAlone]);
     }
-    if (my.potion) lines.push(['potion', S.UI.me.potions(my.potion.save, my.potion.poison)]);
+    if (my.potion) notes.push(['potion', S.UI.me.potions(my.potion.save, my.potion.poison)]);
     for (const n of my.notes) {
-      const who = `${seatOf(v, n.pid)?.no ?? ''}號${nameOf(n.pid)}`;
-      if (n.k === 'seer') lines.push(['note', S.UI.me.seer(n.n, who, n.camp)]);
-      else if (n.k === 'save') lines.push(['note', S.UI.me.witchSave(n.n, who)]);
-      else if (n.k === 'poison') lines.push(['note', S.UI.me.witchPoison(n.n, who)]);
-      else if (n.k === 'guard') lines.push(['note', S.UI.me.guard(n.n, n.pid ? who : null)]);
+      const who = seatName(v, n.pid);
+      if (n.k === 'seer') notes.push(['note', S.UI.me.seer(n.n, who, n.camp)]);
+      else if (n.k === 'save') notes.push(['note', S.UI.me.witchSave(n.n, who)]);
+      else if (n.k === 'poison') notes.push(['note', S.UI.me.witchPoison(n.n, who)]);
+      else if (n.k === 'guard') notes.push(['note', S.UI.me.guard(n.n, n.pid ? who : null)]);
     }
+    if (!notes.length) notes.push(['none', S.UI.me.notesNone]);
+    const ns = sig(notes);
+    if (ns !== notesSig) {
+      notesSig = ns;
+      notesFront.replaceChildren(el('p', { class: 'ww-notes-head', text: `📓 ${S.UI.me.notesHead}` }),
+        ...notes.map(([k, text]) => el('p', { class: `ww-me-line ${k}`, text })));
+    }
+    const coverProps = {
+      front: notesFront, backArt: '📓', backLabel: S.UI.me.notesBack, lockMode: 'peek', locked: roleLocked,
+      lockedMessage: S.UI.me.notesLocked, ariaLabel: S.UI.me.notesBack, openSound: null,
+    };
+    if (!notesCover) { notesCover = C.Cover(coverProps); notesHost.append(notesCover.el); } else notesCover.update(coverProps);
+
+    // Only what this seat may see in the open: the whole table's roles once dead with 出局後睇到全場 (the roster
+    // shows them too; the setting's help warns the table about it).
+    const lines = [];
     if (v.all) {
       lines.push(['head', S.UI.me.spectateAll]);
       for (const s of v.seats) lines.push(['all', `${s.no} ${nameOf(s.pid)}：${S.roleTag(v.all[s.pid])}`]);
@@ -274,7 +310,9 @@ export function mount(root, api) {
         for (const i of items) {
           const n = nodes.get(i.pid);
           n.b.disabled = !i.on;
-          n.b.classList.toggle('on', i.on);
+          // 'can' = tappable now (the old 'on' read as "selected" to tools); the pick itself is aria-pressed
+          n.b.classList.toggle('can', i.on);
+          n.b.setAttribute('aria-pressed', i.mark ? 'true' : 'false');
           n.b.classList.toggle('pick', i.mark === 'pick');
           n.b.classList.toggle('lock', i.mark === 'lock');
           n.b.classList.toggle('dead', !!i.dead);
@@ -519,16 +557,25 @@ export function mount(root, api) {
         const me = v.me;
         const can = !!me && vt.voters.includes(me);
         const tied = vt.round === 2;
-        const text = can ? S.UI.day.votePick : !me ? '' : (seatOf(v, me)?.alive === false ? S.UI.day.voteDead : (tied ? S.UI.day.voteNoPk : S.UI.day.voteNo));
+        const mine = me ? seatOf(v, me) : null;
+        const text = can ? S.UI.day.votePick : !me ? ''
+          : mine?.alive === false ? S.UI.day.voteDead
+            : mine?.absent ? S.UI.day.voteAbsent
+              : tied ? S.UI.day.voteNoPk : S.UI.day.voteNo;
         setText(info, text);
         setHidden(info, !text);
         setHidden(panelHost, !can);
         if (can) {
+          // an absent seat is still a candidate: its name carries the public 💤
+          const absent = new Set(v.seats.filter((s) => s.absent).map((s) => s.pid));
           const props = {
-            players: players().filter((p) => v.seats.some((s) => s.pid === p.id)),
+            players: players().filter((p) => v.seats.some((s) => s.pid === p.id))
+              .map((p) => (absent.has(p.id) ? { ...p, name: `${p.name} ${S.UI.roster.absent}` } : p)),
             candidates: vt.cands, me,
             myVote: 'myVote' in vt ? vt.myVote : undefined,
             allowAbstain: true, allowChange: true,
+            // your own phone never prints whom you picked (D6): 「已投 ✓」 until the tally, so a glance learns nothing
+            secretChoice: true,
             progress: vt.progress, reveal: null,
             onVote: (t) => api.send({ type: 'vote', target: t }),
           };
@@ -564,7 +611,8 @@ export function mount(root, api) {
           if (!panel) { panel = C.VotePanel(props); panelHost.append(panel.el); } else panel.update(props);
           const text = s.outcome === 'exile' ? S.UI.day.tallyExile(labelOf(v, s.pid))
             : s.outcome === 'tie' ? S.UI.day.tallyTie(s.tied.map((p) => labelOf(v, p)).join('、'))
-              : s.outcome === 'flip' ? S.UI.day.tallyNoExile(labelOf(v, s.pid)) : S.UI.day.tallyPeace;
+              : s.outcome === 'flip' ? S.UI.day.tallyNoExile(labelOf(v, s.pid))
+                : s.outcome === 'tie2' ? S.UI.day.tallyTie2 : s.outcome === 'nobody' ? S.UI.day.tallyNobody : S.UI.day.tallyPeace;
           setText(outcome, text);
           setHidden(outcome, false);
           const abst = s.votes.filter((x) => x.to === null).map((x) => labelOf(v, x.by));
@@ -683,6 +731,7 @@ export function mount(root, api) {
   }
 
   const bodyHost = el('div', { class: 'ww-body' });
+  // (the 🗳 之前嘅投票 fold is the shell's: view.recent, rendered under this UI by the play screen)
   const wrap = el('div', { class: 'ww' }, godBox, stage, bodyHost, roster, meBox);
   root.replaceChildren(wrap);
 
@@ -700,6 +749,7 @@ export function mount(root, api) {
       timer?.destroy();
       body?.destroy();
       roleCard?.destroy();
+      notesCover?.destroy();
       body = null;
       root.replaceChildren();
     },

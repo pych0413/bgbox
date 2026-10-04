@@ -935,7 +935,7 @@ test('custom: views are whitelist-built (no state field leaks through by name)',
   assert.deepEqual(Object.keys(sim.view('p1')).sort(), topKeys);
   assert.deepEqual(Object.keys(sim.view('p2')).sort(), topKeys.filter((k) => k !== 'all'));
   assert.deepEqual(Object.keys(sim.view(null)).sort(), topKeys.filter((k) => k !== 'all'));
-  const seatKeys = ['diceLocked', 'id', 'name', 'playing', 'roleLocked', 'rolled', 'seenRole'];
+  const seatKeys = ['diceLocked', 'id', 'name', 'playing', 'roleLocked', 'rolled', 'rolls', 'seenRole'];
   for (const s of sim.view('p3').seats) assert.deepEqual(Object.keys(s).sort(), seatKeys);
   assert.equal(sim.view('p1').deadline, undefined, 'no timers here');
   for (const r of sim.view('p3').roles) assert.deepEqual(Object.keys(r).sort(), ['count', 'desc', 'emoji', 'filler', 'id', 'name']);
@@ -1316,6 +1316,58 @@ test('custom ui: taps send the actions the engine accepts — peek on release, l
   });
 });
 
+test('custom ui: #3 — host buttons confirm in the page (api.confirm on the tapped button), never with a native dialog', async () => {
+  await withCustomUi(async (ui) => {
+    const native = globalThis.confirm;
+    globalThis.confirm = () => { throw new Error('a native confirm() froze the host phone'); };
+    try {
+      const sim = mk(4, { seed: 3 });
+      const asked = [];
+      const armed = new Set();
+      // the shell's arm-then-confirm: the first tap on a button arms it (false), the second goes ahead (true)
+      const confirm = (text, node, opts) => {
+        asked.push({ text, node, key: opts?.key });
+        if (armed.has(node)) { armed.delete(node); return true; }
+        armed.add(node);
+        return false;
+      };
+      const host = mountFor(ui, sim, 'p1', { confirm });
+      host.handle.update(sim.view('p1'), {});
+      for (const [label, type] of [['👁 開晒啲骰', 'reveal-dice'], ['🃏 重新派牌', 'redeal'], ['🔓 開晒角色', 'reveal-roles'], ['🏁 結束遊戲', 'end']]) {
+        const b = button(host.root, label);
+        b.click();
+        assert.deepEqual(host.sent, [], `${label}: the first tap only arms it`);
+        assert.equal(asked.at(-1).node, b, `${label}: the confirm sits on the tapped button`);
+        assert.ok(asked.at(-1).text.length > 4 && asked.at(-1).key === `custom:${type}`);
+        b.click();
+        assert.deepEqual(host.sent, [{ type }], `${label}: the second tap sends`);
+        host.sent.length = 0;
+      }
+      // 全體搖骰 only asks when somebody's cup is locked
+      button(host.root, '🎲 全體搖骰').click();
+      assert.deepEqual(host.sent, [{ type: 'roll-all' }]);
+      // an older shell without api.confirm: the action goes ahead, still no native dialog
+      const bare = mountFor(ui, sim, 'p1');
+      bare.handle.update(sim.view('p1'), {});
+      button(bare.root, '🏁 結束遊戲').click();
+      assert.deepEqual(bare.sent, [{ type: 'end' }]);
+    } finally {
+      globalThis.confirm = native;
+    }
+  });
+});
+
+test('custom: result() says the app keeps no score (noScore), so the shell can say 「邊個贏由你哋講」', () => {
+  const sim = mk(4, { seed: 2 });
+  assert.equal(sim.result(), null);
+  sim.act(sim.state.hostPid ?? 'p1', { type: 'end' });
+  const res = sim.result();
+  assert.ok(res, 'ended');
+  assert.equal(res.noScore, true);
+  assert.deepEqual(res.winners, []);
+  assert.equal(res.points, undefined, 'no points either');
+});
+
 test('custom ui: U1 — long-pressing a role name on the roster explains it; a tap or a scroll does not', async () => {
   await withCustomUi(async (ui) => {
     const sim = mk(5, { seed: 6, patch: { preset: 'killer', hostPlays: false, modSees: true } });
@@ -1334,4 +1386,75 @@ test('custom ui: U1 — long-pressing a role name on the roster explains it; a t
     assert.deepEqual(toasts, [tag.attrs.title], 'only the held press explains');
     ph.handle.destroy();
   });
+});
+
+test('custom: the roster counts this round\'s rolls (🎲 已搖 ×3), so rolling until a number fits shows before a lock', () => {
+  const sim = mk(4, { seed: 3 });
+  const rollsOf = (pid) => sim.view('p3').seats.find((s) => s.id === pid).rolls;
+  assert.equal(rollsOf('p2'), 0);
+  for (let i = 1; i <= 3; i++) changed(sim, 'p2', { type: 'roll' });
+  assert.equal(rollsOf('p2'), 3, 'public: everybody sees the count (the log says each roll anyway)');
+  assert.equal(sim.view(null).seats.find((s) => s.id === 'p2').rolls, 3);
+  changed(sim, 'p2', { type: 'lock-dice' });
+  assert.equal(rollsOf('p2'), 3, 'the lock keeps the count');
+  changed(sim, 'p1', { type: 'unlock-dice', pid: 'p2' });
+  changed(sim, 'p2', { type: 'roll' });
+  assert.equal(rollsOf('p2'), 4, 'a roll after an unlock counts too');
+  changed(sim, 'p1', { type: 'redeal' });
+  assert.equal(rollsOf('p2'), 4, 'a re-deal leaves the dice and the count');
+  changed(sim, 'p1', { type: 'roll-all' });
+  for (const pid of ['p1', 'p2', 'p3', 'p4']) assert.equal(rollsOf(pid), 1, 'the host rolled for everybody: a fresh start');
+  changed(sim, 'p1', { type: 'next-round' });
+  for (const pid of ['p1', 'p2', 'p3', 'p4']) assert.equal(rollsOf(pid), 0, 'a new round starts from nothing');
+  assert.equal(sim.view('p3').seats[1].rolled, false);
+  checkLeaks(sim);
+});
+
+test('custom ui: 已搖 ×N, the 開盅 status line, the locked-cup badge and the showdown under the cup', async () => {
+  await withCustomUi(async (ui) => {
+    const sim = mk(4, { seed: 9 });
+    const host = mountFor(ui, sim, 'p1');
+    const p2 = mountFor(ui, sim, 'p2');
+    const p3 = mountFor(ui, sim, 'p3');
+    const sync = () => { for (const ph of [host, p2, p3]) ph.handle.update(sim.view(ph.pid), {}); };
+    sync();
+    for (const pid of ['p2', 'p3']) changed(sim, pid, { type: 'seen' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p2', { type: 'roll' });
+    changed(sim, 'p3', { type: 'roll' });
+    sync();
+    const tagsOf = (ph, pid) => findEls(ph.root, (x) => x.cls.has('cu-row'))[sim.state.order.indexOf(pid)].textContent;
+    assert.ok(tagsOf(p3, 'p2').includes('🎲 已搖 ×3'), tagsOf(p3, 'p2'));
+    assert.ok(tagsOf(p3, 'p3').includes('🎲 已搖') && !tagsOf(p3, 'p3').includes('×'), 'one roll: no count');
+    // a locked cup: no roll / lock buttons on the cup, a badge says why
+    changed(sim, 'p2', { type: 'lock-dice' });
+    sync();
+    const cup = p2.stub.made.cups.at(-1).props;
+    assert.equal(cup.lockedRoll, true);
+    assert.equal(cup.canRoll, false, 'no greyed-out roll button');
+    assert.equal(cup.onLock, undefined, 'no greyed-out lock button');
+    const badge = findEls(p2.root, (x) => x.cls.has('cu-badge'))[0];
+    assert.ok(badge && shown(badge) && badge.textContent.includes('鎖定咗點數') && badge.textContent.includes('主持'));
+    const free = findEls(p3.root, (x) => x.cls.has('cu-badge'))[0];
+    assert.ok(!shown(free), 'an unlocked cup has no badge');
+    assert.equal(p3.stub.made.cups.at(-1).props.canRoll, true);
+    assert.equal(typeof p3.stub.made.cups.at(-1).props.onLock, 'function');
+    // the host opens the dice: a status line says so, and 開盅 sits right under the cup (above the role card)
+    changed(sim, 'p1', { type: 'reveal-dice' });
+    sync();
+    const status = findEls(p3.root, (x) => x.cls.has('cu-status'))[0];
+    assert.ok(status.textContent.includes('開咗盅'), status.textContent);
+    const cards = findEls(p3.root, (x) => x.cls.has('cu-card') && shown(x)).map((x) => x.textContent);
+    const at = (s) => cards.findIndex((t) => t.includes(s));
+    assert.ok(at('骰盅') < at('開盅 🎲') && at('開盅 🎲') < at('我嘅角色牌'), 'cup → 開盅 → role card');
+    assert.ok(!shown(badge), 'the badge goes once the dice are open');
+    for (const ph of [host, p2, p3]) ph.handle.destroy();
+  });
+});
+
+test('custom: the rules call the dice lock by the button\'s name (鎖定點數)', () => {
+  const text = rules.sections.map((s) => s.body).join('\n');
+  assert.ok(text.includes('㩒「鎖定點數」'));
+  assert.ok(!text.includes('鎖定骰盅'));
 });

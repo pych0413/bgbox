@@ -26,20 +26,24 @@
 //  - Games come from `app.games` (the registry). Batch-2 games (meta.batch === 2)
 //    are probed once with app.game(id): if the module loads they are playable,
 //    if it is missing they stay greyed out as 「即將推出」.
+//  - No native dialogs (playtest #3): on the host phone a confirm() stops the room's server. sh.confirm /
+//    sh.leave are the in-page arm-then-confirm (dom.js confirmTap); window.confirm itself is replaced by
+//    the same thing as a safety net. The connection bar pushes the page down (body.has-netbar, #4).
 // ============================================================
 
-import { el, toast } from './dom.js?v=20261003171423';
-import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=20261003171423';
-import * as sfxMod from '../core/sfx.js?v=20261003171423';
-import { createTableTimer } from './timer.js?v=20261003171423';
-import { createStatus } from './status.js?v=20261003171423';
-import { openSettings, applyTextSize } from './settings.js?v=20261003171423';
-import { openPreflight } from './preflight.js?v=20261003171423';
-import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=20261003171423';
-import { mountJoin } from './screens/join.js?v=20261003171423';
-import { mountLobby } from './screens/lobby.js?v=20261003171423';
-import { mountPlay } from './screens/play.js?v=20261003171423';
-import { mountResults } from './screens/results.js?v=20261003171423';
+import { el, toast, confirmTap, installConfirmShim } from './dom.js?v=1';
+import { lsGet, lsSet, keepAwake, isRoomCode } from '../core/util.js?v=1';
+import * as sfxMod from '../core/sfx.js?v=1';
+import { createTableTimer } from './timer.js?v=1';
+import { createNightDim } from './night.js?v=1';
+import { createStatus } from './status.js?v=1';
+import { openSettings, applyTextSize } from './settings.js?v=1';
+import { openPreflight } from './preflight.js?v=1';
+import { mountHome, mountLocalSetup, mountConnecting } from './screens/home.js?v=1';
+import { mountJoin } from './screens/join.js?v=1';
+import { mountLobby } from './screens/lobby.js?v=1';
+import { mountPlay } from './screens/play.js?v=1';
+import { mountResults } from './screens/results.js?v=1';
 
 const MUTE_KEY = 'ct:muted';             // v1 key, so the preference survives the upgrade
 const NARR_KEY = 'bgb:narr';
@@ -64,7 +68,7 @@ const silentNarrator = () => ({
 async function loadRegistry(app) {
   if (Array.isArray(app.games)) return app.games;
   try {
-    const m = await import('../games/registry.js?v=20261003171423');
+    const m = await import('../games/registry.js?v=1');
     return Array.isArray(m.GAMES) ? m.GAMES : [];
   } catch (err) {
     console.warn('[shell] games/registry.js not available', err);
@@ -80,10 +84,8 @@ export async function startShell(app, root, opts = {}) {
   const loading = new Map();    // game id → Promise
   const soundButtons = new Set();
   const host = el('main', { class: 'screen-host' });
-  // Eyes-closed screen (BACKLOG #4): near-black, fades only, never a white flash.
-  const nightDim = el('div', { class: 'night-dim', 'aria-hidden': 'true' },
-    el('span', { class: 'nd-title', text: '閉 眼' }),
-    el('span', { class: 'nd-hint', text: '🌙 可以將螢幕調暗啲' }));
+  // The night overlay (BACKLOG #4, D1): near-black / a soft dim / opaque, fades only, never a white flash.
+  const nightDim = createNightDim();
   const netbarEl = document.getElementById('netbar') ?? el('div', { class: 'netbar hidden', id: 'netbar', role: 'alert' });
 
   // ---------- sound: the user's toggle, plus the night-time silence on top ----------
@@ -154,17 +156,18 @@ export async function startShell(app, root, opts = {}) {
         paintSoundButtons();
         if (!userMuted) { primeAudio(); sfx('tap'); }   // the tap itself unlocks iOS audio
       },
-      /** A step that must be silent on this phone (eyes-closed night). */
       /**
-       * `opaque`: a shared phone (several seats) — nobody taps a decoy through the dark there, and the
-       * view underneath belongs to whoever held the phone last, so it is covered completely.
+       * Night on this phone: dimmed and silent (logic.nightChrome decides, play.js calls). `level`: 'dark'
+       * (eyes-closed, between this seat's steps) · 'soft' (靜音, D1: the same readable dim on every phone, the
+       * awake seat included) · 'opaque' (a shared phone — the view underneath belongs to whoever held it last, so
+       * it is covered completely and swallows taps). `words`: the overlay's title + hint (one per mode, never
+       * per seat). `opaque: true` is the old spelling of level 'opaque'.
        */
-      night(on, { opaque = false } = {}) {
-        nightDim.classList.toggle('opaque', !!on && !!opaque);
+      night(on, { level, words = null, opaque = false } = {}) {
+        nightDim.set({ on: !!on, level: level ?? (opaque ? 'opaque' : 'dark'), words });
         if (nightMuted === !!on) return;
         nightMuted = !!on;
         applyMute();
-        nightDim.classList.toggle('on', nightMuted);
         document.body.classList.toggle('is-night', nightMuted);
       },
     },
@@ -178,11 +181,17 @@ export async function startShell(app, root, opts = {}) {
     saveNarration() { lsSet(NARR_KEY, narrator.settings); },
     saveName(name) { sh.drafts.name = name; if (name) prefSet(NAME_KEY, name); },
 
-    /** Native confirm: blocking on purpose, so it cannot be tapped through. */
-    confirm: (text) => window.confirm(text),
+    /**
+     * Arm-then-confirm (#3), never a native dialog: on the host's phone that would freeze the room's server.
+     * `if (!sh.confirm(text, btn)) return;` — the first tap arms `btn` (「再㩒一次：…」 for ~3 s) and returns
+     * false; the same tap again in time returns true. `node` may be omitted (a toast says it then); opts go to
+     * dom.js confirmTap ({ key, inline, onDisarm }).
+     */
+    confirm: (text, node = null, opts = {}) => confirmTap(text, { node, ...opts }),
 
-    leave() {
-      if (!window.confirm('真係要離開？')) return false;
+    /** 🚪 — two taps (sh.confirm) on `node`, then leave the room. Returns true once it left. */
+    leave(node = null, opts = {}) {
+      if (!sh.confirm('真係要離開？', node, { key: 'leave-room', ...opts })) return false;
       narrator.cancel();                            // app.leave() forgets the room's resume data itself
       try { app.leave(); } catch (err) { console.error(err); }
       sh.route = 'home';
@@ -306,12 +315,40 @@ export async function startShell(app, root, opts = {}) {
     if (inRoom !== awake) { awake = inRoom; keepAwake(inRoom); }
   }
 
+  // #4: the bar pushes the page (and the sticky play header with its ⋯ → 🚪) down instead of covering it;
+  // body.has-netbar + --netbar-h (its measured height, safe area included) drive the CSS. A guest stuck
+  // behind it for NETBAR_LEAVE_MS (the host has gone) also gets a 🚪 離開 inside the bar.
+  const NETBAR_LEAVE_MS = 30_000;
+  const netText = el('span', { class: 'netbar-text' });
+  const netLeave = el('button', {
+    class: 'btn btn-sm netbar-leave', type: 'button',
+    onclick: () => sh.leave(netLeave, { onDisarm: () => schedule() }),
+  }, '🚪 離開');
+  netLeave.hidden = true;
+  let netSince = null;
+  let netTimer = null;
+
   function netbar(st) {
     const msg = st.mode ? connectionMessage(st) : null;
     netbarEl.classList.toggle('hidden', !msg);
-    if (!msg) return;
+    document.body.classList.toggle('has-netbar', !!msg);
+    if (!msg) {
+      netSince = null;
+      clearTimeout(netTimer);
+      netLeave.hidden = true;
+      return;
+    }
+    if (netText.parentNode !== netbarEl) netbarEl.replaceChildren(netText, netLeave);
     netbarEl.classList.toggle('warn', msg.kind === 'warn');
-    netbarEl.textContent = msg.text;
+    if (netText.textContent !== msg.text) netText.textContent = msg.text;
+    const now = Date.now();
+    netSince ??= now;
+    const stuck = st.mode === 'client' && now - netSince >= NETBAR_LEAVE_MS;
+    netLeave.hidden = !stuck;
+    clearTimeout(netTimer);
+    if (st.mode === 'client' && !stuck) netTimer = setTimeout(schedule, NETBAR_LEAVE_MS - (now - netSince) + 50);
+    const h = netbarEl.offsetHeight;
+    if (h > 0) document.body.style.setProperty('--netbar-h', `${h}px`);
   }
 
   const CONN_DEFAULT = {
@@ -337,9 +374,13 @@ export async function startShell(app, root, opts = {}) {
   }
 
   // ---------- boot ----------
+  // #3 safety net: a window.confirm() anywhere (a game UI) must not freeze the host phone, which is the room's
+  // server. It becomes the same arm-then-confirm on the button just tapped: false now, true on the second tap.
+  installConfirmShim(window, document);
+
   applyTextSize();
   root.replaceChildren(host);
-  document.body.append(nightDim, status.el);
+  document.body.append(nightDim.el, status.el);
   if (!netbarEl.isConnected) document.body.append(netbarEl);
 
   // deep link ?r=1352 → join screen with the code filled in

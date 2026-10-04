@@ -24,7 +24,7 @@
 //                   ping   { c, hb? }   (`c`, not `t`: that is the message type; hb: 1 = on the 4 s heartbeat,
 //                          so the host may close it after 15 s of silence — net.js)      bye {}
 //   host → client   welcome { v, build, device, seats: [{ id, name, token }], room, views }   (re-sent when the seat list changes)
-//                   room    { room }                              public room view; `stalled`, `claims`, `versionMismatch` only for the host
+//                   room    { room }                              public room view; `stalled`, `idle`, `claims`, `versionMismatch` only for the host
 //                   views   { rev, hostNow, bySeat, table, focus, canInk }   this device's seats only (canInk: those
 //                           of its seats engine.canInk allows to draw now); `cue` and `hostActions`
 //                           ([{ i, label }] from engine.hostActions) for the host device
@@ -40,6 +40,9 @@
 //
 // The table timer (T1) lives here too: a host-clock countdown in every phase (room view `timer`),
 // paused with the game's 暫停, kept in the snapshot.
+//
+// Absent seats (D4): markAbsent / markPresent send `@absent` / `@present` (§4) as the host; the session keeps the
+// seats the engine accepted it for, the public room view lists them (`absent`), and stall detection skips them.
 // ============================================================
 
 import { HOST, ACT, clone, cryptoRng } from './engine-kit.js?v=20261003171423';
@@ -88,6 +91,10 @@ export function filterFocus(focus, seatIds) {
   if (!mine.length && !(anonymous && seatIds.length)) return null;
   const out = { pids: mine };
   if (anonymous) out.anonymous = anonymous;
+  // #14: a NAMED step that calls more than one seat (a deal, a vote) is everybody's at once, not this seat's
+  // turn — the header shows no 輪到你 for it. Never on an anonymous step: there it would say "you are not
+  // the only one awake".
+  else if (new Set(focus.pids).size > 1) out.together = true;
   return out;
 }
 
@@ -206,7 +213,7 @@ export class Room {
       }
     }
     this.loading = null;
-    this.waiting = new Map();   // pid → { since, rev } seats the engine is waiting on while their phone is away
+    this.waiting = new Map();   // pid → { since, rev, idle } seats the engine is waiting on (idle = phone still connected, #9)
     this.lobbySince = this.nowFn();
     this.#armTimer();
     this.#refreshLobbyGc();
@@ -341,6 +348,8 @@ export class Room {
       lastResult: this.lastResult ? clone(this.lastResult) : null,
       loading: this.loading,
       timer: this.#timerView(),
+      // D4: seats the host marked absent this game (public: views may show 💤 next to the name)
+      absent: this.session && this.phase === 'playing' ? this.session.absent.slice() : [],
     };
   }
 
@@ -349,6 +358,7 @@ export class Room {
     return {
       ...base,
       stalled: isHost ? this.#stalledList() : [],
+      idle: isHost ? this.#idleList() : [],     // #9: connected, but the table has waited on it for stallMs
       claims: isHost ? this.#claimList() : [],
       versionMismatch: isHost ? this.#mismatchedSeats() : [],
     };
@@ -389,6 +399,10 @@ export class Room {
     if (isHost) {
       const cue = s && this.phase === 'playing' ? s.cue() : null;
       out.cue = cue ? { id: cue.id, text: cue.text } : null;
+      // #13: is the engine waiting on ANY seat (its whole focus, not just this device's)? The host's
+      // ⏭ 跳過呢步 then takes two taps. The host device only, and only a yes / no.
+      const f = s && this.phase === 'playing' ? (cache.focus ??= s.focus()) : null;
+      out.waiting = isObj(f) && ((Array.isArray(f.pids) && f.pids.length > 0) || !!f.anonymous);
       // the game's own host buttons (engine.hostActions) — the host device only; labels for the ⋯ menu
       out.hostActions = s && this.phase === 'playing' ? s.hostActions().map((a, i) => ({ i, label: a.label })) : [];
     }
@@ -1029,6 +1043,12 @@ export class Room {
     if (!isObj(action)) return false;
     if (typeof action.type === 'string' && action.type.startsWith('@')) return false;
     try { if (JSON.stringify(action).length > ACTION_MAX_BYTES) return false; } catch { return false; }
+    // `seats: [pid…]` lets one shared phone tick several of its own seats in one tap (開始投票, 睇完…).
+    // Only this device's own playing seats survive, so no phone can tick for someone else's.
+    if (Array.isArray(action.seats)) {
+      const own = action.seats.filter((id) => { const q = typeof id === 'string' ? this.#byId(id) : null; return !!q && !q.spectator && q.deviceId === deviceId; });
+      action = { ...action, seats: [...new Set(own)] };
+    }
     return this.#batch(() => this.session.dispatch(pid, action));
   }
 
@@ -1093,12 +1113,21 @@ export class Room {
         sb.points += Number(points[p.id]) || 0;
       }
     }
+    // #39: `noScore` — a tool that does not judge (通用派牌): the results say 「邊個贏由你哋講」, not 冇人贏;
+    // `linesTitle` — the recap's own heading where 「點解會咁」 does not fit (a scoring game's 分數點嚟)
+    const noScore = !voided && res.noScore === true;
+    const linesTitle = typeof res.linesTitle === 'string' && res.linesTitle.trim() ? res.linesTitle.trim().slice(0, 24) : null;
     this.lastResult = {
       gameId: this.gameId, winners, summary: String(res.summary ?? ''),
       lines: Array.isArray(res.lines) ? clone(res.lines) : [], points: clone(points),
       ...(voided ? { void: true } : {}),
+      ...(noScore ? { noScore: true } : {}),
+      ...(linesTitle ? { linesTitle } : {}),
     };
-    this.history.push({ gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary, ...(voided ? { void: true } : {}) });
+    this.history.push({
+      gameId: this.gameId, winners: [...winners], summary: this.lastResult.summary,
+      ...(voided ? { void: true } : {}), ...(noScore ? { noScore: true } : {}),
+    });
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
     this.waiting.clear();
     this.#mark();
@@ -1206,6 +1235,39 @@ export class Room {
     const a = this.session.hostActions()[Number(index)];
     if (!a || (label !== undefined && a.label !== label)) return false;
     return this.#batch(() => this.session.dispatch(HOST, a.action));
+  }
+
+  /**
+   * Would 呢鋪唔計 do anything now? `engine.canVoid` → { ok, message } (a scored round says why), or null when the
+   * game does not say. Read-only.
+   */
+  canVoid() {
+    if (this.phase !== 'playing' || !this.session) return { ok: false, message: '而家唔係玩緊遊戲' };
+    return this.session.canVoid();
+  }
+
+  /**
+   * D4 💤 當佢缺席: the table stops waiting on this seat for the rest of the game (`@absent`, §4). False — and
+   * nothing changes — when the engine does not support it, the seat is already absent, or the game is paused.
+   * The seat leaves the stall list at once; `room.absent` (public) names it.
+   */
+  markAbsent(pid) { return this.#setAbsent(pid, true); }
+
+  /** D4: the absent seat is back (`@present`; optional for engines — false if this one ignores it). */
+  markPresent(pid) { return this.#setAbsent(pid, false); }
+
+  #setAbsent(pid, away) {
+    const p = this.#byId(pid);
+    if (this.phase !== 'playing' || !this.session || !p || p.spectator) return false;
+    return this.#batch(() => {
+      const ok = this.session.setAbsent(pid, away);
+      if (ok) {
+        this.#mark();
+        // its stall clock starts afresh when it comes back
+        if (this.phase === 'playing') { this.waiting.delete(pid); this.#refreshStalls(); }
+      }
+      return ok;
+    });
   }
 
   /** 代佢做: act for a seat that is not answering. */
@@ -1412,10 +1474,18 @@ export class Room {
   // ============================================================
 
   /**
-   * A seat is "waited on" when its phone is away AND the engine is blocked on it (Session.blocking:
-   * engine.blocking → focus → legalActions — night decoys give every seat a legal action, so legality
-   * alone would cry wolf) AND there is something to auto-act. The clock restarts whenever the game
-   * state changes, so only a table that is genuinely idle on that seat gets flagged, after stallMs.
+   * A seat is "waited on" when the engine is blocked on it (Session.blocking: engine.blocking → focus →
+   * legalActions — night decoys give every seat a legal action, so legality alone would cry wolf) AND there is
+   * something to auto-act AND it is not absent (D4). The clock restarts whenever the game state changes, so only
+   * a table that is genuinely idle on that seat gets flagged:
+   *  - its phone is away → `stalled` after stallMs (「斷咗線」: the host gets a banner);
+   *  - its phone is still connected (#9: put down, taken to the bathroom — iOS keeps the link up) → `idle` after
+   *    stallMs (「冇反應」, listed quietly in the host's ⋯ menu — a long table talk before a pick looks the same), and
+   *    only while the rest of the table waits for it: some present seat is NOT blocked and no game clock
+   *    (state.deadline) will move the step on by itself. A step everybody is in at once (a discussion, a vote
+   *    nobody has cast) is the table's own pace, never one seat's. Never on a secret step (focus.anonymous, e.g.
+   *    the Assassin's pick): there the host device may learn only THAT the table waits (`waiting`, §4), not on
+   *    whom — a dead phone is still named, because nothing else would unfreeze the table.
    */
   #refreshStalls() {
     if (this.#stallTimer !== null) { this.timers.clearTimeout(this.#stallTimer); this.#stallTimer = null; }
@@ -1423,17 +1493,23 @@ export class Room {
     const now = this.nowFn();
     const live = new Set();
     if (s && this.phase === 'playing' && !s.paused) {
-      for (const p of this.#seated()) {
-        if (p.connected) continue;
-        if (!s.blocking(p.id) || !s.legal(p.id).length) continue;
+      const present = this.#seated().filter((p) => !s.isAbsent(p.id));
+      const blocked = new Set(present.filter((p) => s.blocking(p.id)).map((p) => p.id));
+      const secret = !!s.focus()?.anonymous;
+      const othersWait = !secret && present.some((p) => !blocked.has(p.id)) && s.deadline() === null;
+      for (const p of present) {
+        if (!blocked.has(p.id) || (p.connected && !othersWait)) continue;
+        if (!s.legal(p.id).length) continue;
         live.add(p.id);
+        const idle = !!p.connected;
         const w = this.waiting.get(p.id);
-        if (!w || w.rev !== s.rev) this.waiting.set(p.id, { since: now, rev: s.rev });
+        if (!w || w.rev !== s.rev) this.waiting.set(p.id, { since: now, rev: s.rev, idle });
+        else w.idle = idle;
       }
     }
     for (const pid of [...this.waiting.keys()]) if (!live.has(pid)) this.waiting.delete(pid);
 
-    const sig = JSON.stringify(this.#stalledList());
+    const sig = JSON.stringify([this.#stalledList(), this.#idleList()]);
     if (sig !== this.#stallSig) { this.#stallSig = sig; this.#mark(); }
 
     const limit = this.#stallLimit();
@@ -1452,11 +1528,17 @@ export class Room {
     return Number.isFinite(v) && v > 0 ? v : this.stallMs;
   }
 
-  #stalledList() {
+  /** [{ pid, since }] the table waits on while their phone is away (斷咗線). */
+  #stalledList() { return this.#waitList(false); }
+
+  /** [{ pid, since }] the table waits on while their phone is connected but nobody answers (冇反應, #9). */
+  #idleList() { return this.#waitList(true); }
+
+  #waitList(idle) {
     const now = this.nowFn();
     const limit = this.#stallLimit();
     const out = [];
-    for (const [pid, w] of this.waiting) if (now - w.since >= limit) out.push({ pid, since: w.since });
+    for (const [pid, w] of this.waiting) if (!!w.idle === idle && now - w.since >= limit) out.push({ pid, since: w.since });
     return out;
   }
 

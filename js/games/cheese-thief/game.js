@@ -225,12 +225,18 @@ const DAWN_MS = 1500;
 const REVEAL_MS = 9000;    // the tally on screen before the result
 
 const nowOf = (ctx) => (typeof ctx.now === 'function' ? ctx.now() : ctx.now);
+/** Host actions for a seat that stopped responding (engine-kit ACT.ABSENT / ACT.PRESENT, D4). */
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
+/** The host marked this seat 💤: the roll, the 夠鐘投票 check and the vote do not wait for it (public). */
+const isAbsent = (s, pid) => !!s.absent?.[pid];
+/** Every seat the table still waits for has done it (absent seats are not waited for). */
+const allPresent = (s, done) => s.order.every((p) => done(p) || isAbsent(s, p));
 const thiefOf = (s) => s.order.find((p) => s.role[p] === THIEF);
 const fmouseOf = (s) => s.order.find((p) => s.role[p] === FMOUSE) ?? null;
 const othersOf = (s, pid) => s.order.filter((p) => p !== pid);
 const hasDice = (s, pid) => Array.isArray(s.dice[pid]);
 const nm = (s, pid) => s.names[pid] ?? '?';
-const count = (obj) => Object.values(obj).filter(Boolean).length;
 const isStr = (x) => typeof x === 'string';
 /** Seats that finished their awake turn in this window (a shared phone walks on to the next one). */
 const doneOf = (s) => s.done ?? [];
@@ -346,6 +352,7 @@ export const engine = {
       peeked: {},                   // PRIVATE: pid → { target, dice, h }
       notes: per(() => []),         // PRIVATE per seat: what that seat learned (recap)
       dayReady: per(false),
+      absent: {},                   // public: seats the host marked 💤 (not waited for, cast no vote)
       votes: {},
       voteCue: true,
       deadline: null, timerLabel: null,
@@ -370,7 +377,7 @@ export const engine = {
   advance(s, ctx = {}) {
     switch (s.phase) {
       case 'night': return s.stage === 'window' ? finishWindow(s, ctx) : s;
-      case 'day': return startVote(s);
+      case 'day': return startVote(s, ctx);
       case 'reveal': return toOver(s);
       default: return s;
     }
@@ -392,7 +399,7 @@ export const engine = {
   focus(s) {
     switch (s.phase) {
       case 'roll': {
-        const pids = s.order.filter((p) => !s.ready[p]);
+        const pids = s.order.filter((p) => !s.ready[p] && !isAbsent(s, p));
         return pids.length ? { pids } : null;
       }
       case 'night': {
@@ -407,10 +414,26 @@ export const engine = {
         return { pids: awakeNow(s).filter((p) => !done.includes(p)), anonymous: anonymousPrompt(st, scriptN(s)) };
       }
       case 'vote': {
-        const pids = s.order.filter((p) => s.votes[p] === undefined);
+        const pids = s.order.filter((p) => s.votes[p] === undefined && !isAbsent(s, p));
         return pids.length ? { pids } : null;
       }
       default: return null;
+    }
+  },
+
+  /**
+   * Is the game WAITING on this seat (the room's stall detector asks this first)? Only the roll (every seat must be
+   * ready), the 夠鐘投票 check and the vote, and never for a seat the host marked 💤. Never at night: every hour runs
+   * on its own fixed clock and an owed follower pick is made for the thief when the window closes, so naming the
+   * awake seats (which focus holds) as stalled would point the host at exactly who is awake.
+   */
+  blocking(s, pid) {
+    if (!isStr(pid) || !s.order.includes(pid) || isAbsent(s, pid)) return false;
+    switch (s.phase) {
+      case 'roll': return !s.ready[pid];
+      case 'day': return !s.dayReady[pid];
+      case 'vote': return s.votes[pid] === undefined;
+      default: return false;
     }
   },
 
@@ -425,7 +448,7 @@ export const engine = {
         return null;
       }
       case 'day': return s.dayReady[pid] ? null : { type: 'day-ready', on: true };
-      case 'vote': return s.votes[pid] === undefined ? { type: 'vote', target: pick(ctx.rng, othersOf(s, pid)) } : null;
+      case 'vote': return s.votes[pid] === undefined && !isAbsent(s, pid) ? { type: 'vote', target: pick(ctx.rng, othersOf(s, pid)) } : null;
       default: return null;
     }
   },
@@ -457,6 +480,7 @@ export const engine = {
         if (!s.dayReady[pid]) out.push({ type: 'day-ready', on: true });
         break;
       case 'vote':
+        if (isAbsent(s, pid)) break;    // 💤 casts no vote
         for (const t of othersOf(s, pid)) if (s.votes[pid] !== t) out.push({ type: 'vote', target: t });
         break;
       default: break;
@@ -484,12 +508,39 @@ function hostAct(s, a, ctx) {
       return s;
     case ACT.NEXT:
       if (s.phase === 'night') return s.stage === 'cue' ? enterWindow(s, ctx) : finishWindow(s, ctx);
-      if (s.phase === 'day') return startVote(s);
+      if (s.phase === 'day') return startVote(s, ctx);
       if (s.phase === 'reveal') return toOver(s);
       return s;
+    case ABSENT: return absentAct(s, a.pid, ctx);
+    case PRESENT: return presentAct(s, a.pid);
     default:
       return s;   // ACT.AUTO is resolved by the session through autoAct()
   }
+}
+
+/**
+ * 💤 The host marks a seat absent (D4): for the rest of this game nothing waits for it. At the roll its die is rolled
+ * for it (the same fill-in as 代佢做) once everyone else is ready; it never holds up 夠鐘投票; it casts no vote (a vote
+ * it cast before it left still counts) and the vote closes when every present seat has voted. It is still a player:
+ * it wakes at its hour, can be voted for, and wins or loses with its side. The night never waited on anybody, so
+ * absence changes nothing there. Public: every view lists it.
+ */
+function absentAct(s, pid, ctx) {
+  if (s.phase === 'over' || !isStr(pid) || !s.order.includes(pid) || isAbsent(s, pid)) return s;
+  (s.absent ||= {})[pid] = true;
+  switch (s.phase) {
+    case 'roll': return maybeStartNight(s, ctx);
+    case 'day': return allPresent(s, (p) => s.dayReady[p]) ? startVote(s, ctx) : s;
+    case 'vote': return allPresent(s, (p) => s.votes[p] !== undefined) ? toReveal(s, ctx) : s;
+    default: return s;
+  }
+}
+
+/** The seat is back: the 夠鐘投票 check and an open vote wait for it again. */
+function presentAct(s, pid) {
+  if (s.phase === 'over' || !isStr(pid) || !isAbsent(s, pid)) return s;
+  delete s.absent[pid];
+  return s;
 }
 
 // ---------- phase: roll ----------
@@ -520,15 +571,30 @@ function rollAct(s, pid, a, ctx) {
     case 'ready': {
       if (s.ready[pid]) return s;
       // "ready" fills in whatever is missing, so 代佢做 on a dead phone is one tap.
-      if (!hasDice(s, pid)) doRoll(s, pid, ctx);
-      s.locked[pid] = true;
-      if (s.n === 4 && s.role[pid] !== THIEF && s.pick4[pid] == null) s.pick4[pid] = pick(ctx.rng, s.dice[pid]);
+      fillIn(s, pid, ctx);
       s.ready[pid] = true;
-      if (s.order.every((p) => s.ready[p])) startNight(s);
-      return s;
+      return maybeStartNight(s, ctx);
     }
     default: return s;
   }
+}
+
+/** Roll, lock and (4p) choose the hour for a seat that has not: 代佢做 and a 💤 seat at the roll. */
+function fillIn(s, pid, ctx) {
+  if (!hasDice(s, pid)) doRoll(s, pid, ctx);
+  s.locked[pid] = true;
+  if (s.n === 4 && s.role[pid] !== THIEF && s.pick4[pid] == null) s.pick4[pid] = pick(ctx.rng, s.dice[pid]);
+}
+
+/** The night starts once every present seat is ready; an absent seat that never got there is filled in now. */
+function maybeStartNight(s, ctx) {
+  if (!allPresent(s, (p) => s.ready[p])) return s;
+  for (const p of s.order) {
+    if (s.ready[p]) continue;
+    fillIn(s, p, ctx);
+    s.ready[p] = true;
+  }
+  return startNight(s);
 }
 
 function startNight(s) {
@@ -739,27 +805,29 @@ function startDay(s, ctx) {
   return s;
 }
 
-function dayAct(s, pid, a) {
+function dayAct(s, pid, a, ctx) {
   if (a.type !== 'day-ready') return s;
   s.dayReady[pid] = a.on !== false;
-  if (s.order.every((p) => s.dayReady[p])) return startVote(s);
+  if (allPresent(s, (p) => s.dayReady[p])) return startVote(s, ctx);
   return s;
 }
 
-function startVote(s) {
+function startVote(s, ctx = {}) {
   s.phase = 'vote';
   s.deadline = null;
   s.timerLabel = null;
   s.votes = {};
   s.voteCue = true;
+  // every seat marked 💤: nobody is left to vote, so the (empty) tally is revealed at once instead of waiting forever
+  if (allPresent(s, () => false)) return toReveal(s, ctx);
   return s;
 }
 
 function voteAct(s, pid, a, ctx) {
-  if (a.type !== 'vote') return s;
+  if (a.type !== 'vote' || isAbsent(s, pid)) return s;   // 💤 casts no vote
   if (!isStr(a.target) || a.target === pid || !s.order.includes(a.target)) return s;
   s.votes[pid] = a.target;
-  if (s.order.every((p) => s.votes[p] !== undefined)) return toReveal(s, ctx);
+  if (allPresent(s, (p) => s.votes[p] !== undefined)) return toReveal(s, ctx);
   return s;
 }
 
@@ -912,8 +980,11 @@ function buildView(s, pid) {
   v.subtitle = subtitle;
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
 
+  // public: the seats the host marked 💤 (the counts below are of the seats the table still waits for)
+  v.absent = s.order.filter((p) => isAbsent(s, p));
+  const present = s.order.filter((p) => !isAbsent(s, p));
   switch (s.phase) {
-    case 'roll': v.ready = progress(count(s.ready), s.n); break;
+    case 'roll': v.ready = progress(present.filter((p) => s.ready[p]).length, present.length); break;
     case 'night': {
       const st = stepOf(s);
       v.night = true;
@@ -921,8 +992,13 @@ function buildView(s, pid) {
       v.acks = progress(s.acked.length, s.n);
       break;
     }
-    case 'day': v.dayReady = progress(count(s.dayReady), s.n); break;
-    case 'vote': v.progress = progress(Object.keys(s.votes).length, s.n); break;
+    case 'day': v.dayReady = progress(present.filter((p) => s.dayReady[p]).length, present.length); break;
+    case 'vote': {
+      // a vote cast before its seat left still counts, so it stays in the total
+      const voters = s.order.filter((p) => !isAbsent(s, p) || s.votes[p] !== undefined);
+      v.progress = progress(Object.keys(s.votes).length, voters.length);
+      break;
+    }
     case 'reveal': case 'over': publicReveal(s, v); break;
     default: break;
   }
@@ -977,7 +1053,9 @@ function hintFor(s, pid, v) {
       // role-specific line ("幫大盜…") would tell a neighbour who is a follower.
       // What each role should do is on its role card, behind hold-to-peek.
       return HINT.day.all;
-    case 'vote': return v.myVote !== undefined ? HINT.voted : HINT.vote;
+    case 'vote':
+      if (v.myVote === undefined && my.absent) return HINT.absent;
+      return v.myVote !== undefined ? HINT.voted : HINT.vote;
     case 'reveal': return HINT.reveal;
     case 'over': return HINT.over;
     default: return '';
@@ -998,6 +1076,7 @@ function seatView(s, pid, v) {
     rollSeq: s.rollSeq[pid],
     locked: s.locked[pid],
   };
+  if (isAbsent(s, pid)) mine.absent = true;
 
   if (s.phase === 'roll') {
     mine.needsChoice = needsChoice(s, pid);

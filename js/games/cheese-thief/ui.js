@@ -80,6 +80,14 @@ export function roleFor(my, n, opts, nameOf = (p) => p) {
 export const RECHECK = '🔁 天光喇：再㩒住睇一次你張身份牌 — 夜晚可能有人畀大盜拉咗做共犯。';
 export const RECHECK_DONE = '✓ 睇咗。記住：身份牌嘅嘢唔好畀人睇到。';
 
+/** Under every peek (the same for every peeker, so it says nothing): a missed result is kept for the day. */
+export const PEEK_LATER = '睇唔切唔緊要：天光喺 📓 夜晚記錄睇得返。';
+
+/** 💤 seats the host marked absent (D4): public, the same on every phone. */
+export const ABSENT_MARK = '💤';
+export const ABSENT_SELF = '💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。';
+export const absentLine = (names) => `💤 暫時離開（唔使等）：${names}`;
+
 function readyLead(my, view) {
   if (my.ready) return '好喇。等其他人準備好，夜晚就會開始 — 部手機放喺面前，唔好鎖機（一鎖就斷線，到你醒都冇嘢睇）。';
   if (!my.locked) return '① 㩒住張牌睇你身份　② 搖你嘅骰（搖部機或者㩒掣）';
@@ -96,7 +104,14 @@ function makeEnv(api, local, refresh) {
   const nameOf = (pid) => players().find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => players().find((p) => p.id === pid)?.color ?? 'var(--cheese)';
   const names = (pids) => (pids ?? []).map(nameOf).join('、');
-  return { api, C: api.components, local, refresh, players, nameOf, colorOf, names };
+  /** The players for a VotePanel: an absent seat's name carries the public 💤. */
+  const markedPlayers = (view) => {
+    const away = new Set(view?.absent ?? []);
+    return players().map((p) => (away.has(p.id) ? { ...p, name: `${p.name} ${ABSENT_MARK}` } : p));
+  };
+  /** One public line naming the 💤 seats, or '' when nobody is away. */
+  const awayText = (view) => (view?.absent?.length ? absentLine(names(view.absent)) : '');
+  return { api, C: api.components, local, refresh, players, nameOf, colorOf, names, markedPlayers, awayText };
 }
 
 /** The role card, shared by the roll and day screens. `onOpen(open)` fires when its owner lifts it. */
@@ -147,6 +162,7 @@ function buildRoll(E) {
 
   const readyBtn = el('button', { class: 'btn btn-primary btn-lg ct-ready', type: 'button', onclick: () => api.send({ type: 'ready' }) });
   const count = el('p', { class: 'ct-count' });
+  const away = el('p', { class: 'ct-count ct-away', hidden: true });
   const tip = el('details', { class: 'ct-tip' },
     el('summary', { text: '夜晚點玩？' }),
     el('p', { text: '手機會逐個點鐘報時。擲到幾點，就喺嗰個點鐘睜眼 — 到時你部機會自動亮起，話你知邊個同你一齊醒、芝士仲喺唔喺度。' }),
@@ -154,7 +170,7 @@ function buildRoll(E) {
     el('p', { text: '每個點鐘（連你瞓緊嗰陣）都喺手機下半部大掣㩒一下，咁就冇人聽得出邊個醒。' }));
 
   // your dice sit ABOVE your card (as in v1): the number is what you need again and again
-  const node = el('div', { class: 'ct-screen ct-roll' }, lead, cup.el, choose, roleCard.el, readyBtn, count, tip);
+  const node = el('div', { class: 'ct-screen ct-roll' }, lead, cup.el, choose, roleCard.el, readyBtn, count, away, tip);
 
   return {
     el: node,
@@ -184,6 +200,8 @@ function buildRoll(E) {
       readyBtn.disabled = my.ready || !can;
       setText(readyBtn, my.ready ? '✓ 準備好 — 等緊其他人' : can ? '✅ 準備好' : '搖咗骰先㩒得');
       setText(count, `已準備 ${view.ready.done} / ${view.ready.total}`);
+      setText(away, E.awayText(view));
+      setHidden(away, !away.textContent);
     },
     destroy() { roleCard.destroy(); cup.destroy(); node.remove(); },
   };
@@ -286,6 +304,8 @@ function awakeLines(E, view) {
 
     const pk = night.peek;
     if (pk.mode === 'can') L.push(['role', '👁 你可以偷睇一粒骰（得一次）：㩒個名，再㩒大掣。唔想睇就直接㩒大掣。']);
+    // a peeker whose hour runs out before it holds the cover: the die is in the day's 📓 (only when the table keeps one)
+    if ((pk.mode === 'can' || pk.done) && view.opts?.recap !== false) L.push(['note', PEEK_LATER]);
     else if (pk.mode === 'together') L.push(['note', '有人同你一齊醒，今次唔可以偷睇。']);
     else if (pk.mode === 'off' && my.role !== 'thief') L.push(['note', '4 人局唔可以偷睇（官方規則）。']);
 
@@ -603,9 +623,10 @@ function buildDay(E) {
   let mine = false;
   const readyBtn = el('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'day-ready', on: !mine }) });
   const count = el('p', { class: 'ct-count' });
+  const away = el('p', { class: 'ct-count ct-away', hidden: true });
 
   // dice above the card (as in v1), the card, then the re-check line under it
-  const node = el('div', { class: 'ct-screen ct-day' }, banner, timerSlot, cup.el, roleCard.el, recheck, readyBtn, count, lead, recapWrap);
+  const node = el('div', { class: 'ct-screen ct-day' }, banner, timerSlot, cup.el, roleCard.el, recheck, readyBtn, count, away, lead, recapWrap);
 
   return {
     el: node,
@@ -640,6 +661,8 @@ function buildDay(E) {
       readyBtn.classList.toggle('btn-locked', mine);
       setText(readyBtn, mine ? '✓ 我夠鐘投票 — 等緊其他人（㩒一下取消）' : '🗳️ 我哋夠鐘投票');
       setText(count, `想投票：${view.dayReady.done} / ${view.dayReady.total}（全部人都想先會開始${view.deadline != null ? '，或者時間到' : ''}）`);
+      setText(away, E.awayText(view));
+      setHidden(away, !away.textContent);
     },
     destroy() { timer?.destroy(); roleCard.destroy(); cup.destroy(); recapCover.destroy(); node.remove(); },
   };
@@ -652,18 +675,28 @@ function buildDay(E) {
 function buildVote(E) {
   const { api, C } = E;
   // (no follower banner here: the top of a phone is the easiest part for a neighbour to read)
-  const lead = el('p', { class: 'ct-lead', text: '邊個係芝士大盜？揀一個（唔可以投自己），確定。全部人投晒就同時公開。' });
+  const LEAD = '邊個係芝士大盜？揀一個（唔可以投自己），確定。全部人投晒就同時公開。';
+  const lead = el('p', { class: 'ct-lead', text: LEAD });
   const panel = C.VotePanel({ players: [], candidates: [], me: api.me, progress: { done: 0, total: 0 }, reveal: null, onVote: () => {} });
-  const node = el('div', { class: 'ct-screen ct-vote' }, lead, panel.el);
+  const away = el('p', { class: 'ct-count ct-away', hidden: true });
+  const node = el('div', { class: 'ct-screen ct-vote' }, lead, panel.el, away);
   return {
     el: node,
     update(view) {
+      // 💤 an absent seat casts no vote (D4): its phone says so instead of offering a ballot (one already cast stays shown)
+      const benched = !!view.my?.absent && view.myVote === undefined;
+      setText(lead, benched ? ABSENT_SELF : LEAD);
+      setHidden(panel.el, benched);
       panel.update({
-        players: E.players(), candidates: view.candidates, me: api.me,
+        players: E.markedPlayers(view), candidates: view.candidates, me: api.me,
         myVote: view.myVote, allowAbstain: false, allowChange: true,
+        // your own phone never prints whom you picked (D6): 「已投 ✓」 until the reveal
+        secretChoice: true,
         progress: view.progress, reveal: null, title: '投票',
         onVote: (pid) => { if (pid) api.send({ type: 'vote', target: pid }); },
       });
+      setText(away, E.awayText(view));
+      setHidden(away, !away.textContent);
     },
     destroy() { panel.destroy(); node.remove(); },
   };
@@ -757,10 +790,11 @@ function buildTable(E) {
   const fill = el('i');
   const bar = el('div', { class: 'ct-bar', hidden: true }, fill);
   const count = el('p', { class: 'ct-count' });
+  const away = el('p', { class: 'ct-count ct-away', hidden: true });
   const timerSlot = el('div', { class: 'ct-timer', hidden: true });
   let timer = null;
   let total = 1, dlSeen = null;
-  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar, timerSlot, count);
+  const node = el('div', { class: 'ct-screen ct-table' }, title, body, bar, timerSlot, count, away);
   let current = null;
 
   function tick() {
@@ -803,6 +837,8 @@ function buildTable(E) {
           break;
         default: break;
       }
+      setText(away, view.phase === 'night' ? '' : E.awayText(view));
+      setHidden(away, !away.textContent);
       if (view.deadline != null && view.phase === 'day') {
         const props = { deadline: view.deadline, now: api.now, label: view.timerLabel ?? '', paused: !!ctx?.paused, warnAt: [60, 10] };
         if (!timer) { timer = C.Timer(props); timerSlot.replaceChildren(timer.el); } else timer.update(props);

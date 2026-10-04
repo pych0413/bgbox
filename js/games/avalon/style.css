@@ -165,10 +165,10 @@
 .av-tile-emoji { font-size: 2.5rem; line-height: 1; }
 .av-tile-label { font-size: 1.25rem; font-weight: 800; }
 .av-tile-sub { font-size: .75rem; color: var(--text-dim); }
-.av-tile.success { border-color: color-mix(in srgb, var(--av-good) 45%, var(--line)); }
-.av-tile.fail { border-color: color-mix(in srgb, var(--av-evil) 45%, var(--line)); }
-.av-tile.success.on { border-color: var(--av-good); background: color-mix(in srgb, var(--av-good) 26%, var(--surface-2)); box-shadow: 0 0 1.25rem rgba(74, 163, 255, .3); }
-.av-tile.fail.on { border-color: var(--av-evil); background: color-mix(in srgb, var(--av-evil) 26%, var(--surface-2)); box-shadow: 0 0 1.25rem rgba(228, 87, 61, .3); }
+/* ONE look for both tiles, picked or not (playtest #17): no team colour anywhere on a tile. A red glow can only ever
+   appear on an evil phone, and once one tile is picked a tinted border on the OTHER one would say which it was. The
+   emoji and the words inside the tile tell the player what they picked; nothing else differs. */
+.av-tile.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: 0 0 1.25rem color-mix(in srgb, var(--accent) 30%, transparent); }
 .av-tile.spent { opacity: .45; cursor: default; }
 .av-done { text-align: center; font-weight: 700; padding: .5rem 0; line-height: 1.6; }
 

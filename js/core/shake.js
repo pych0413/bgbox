@@ -16,9 +16,43 @@ export function motionSupported() {
   return typeof window !== 'undefined' && typeof window.DeviceMotionEvent !== 'undefined';
 }
 
-/** iOS 13+ gates the accelerometer behind a prompt. */
+/** iOS 13+ gates the accelerometer behind a prompt. (A feature test: other browsers may have it too.) */
 export function needsMotionPermission() {
   return motionSupported() && typeof DeviceMotionEvent.requestPermission === 'function';
+}
+
+/**
+ * Is this really an iPhone / iPad (iPadOS reports a Mac with a touch screen)? Only then may the wording say
+ * 「iPhone」 (#38): an Android guest must not be told about iPhone permissions.
+ */
+export function isIOS(nav = typeof navigator !== 'undefined' ? navigator : null) {
+  const ua = String(nav?.userAgent ?? '');
+  if (/\b(iPhone|iPod|iPad)\b/.test(ua)) return true;
+  return /\bMacintosh\b/.test(ua) && Number(nav?.maxTouchPoints) > 1;
+}
+
+/** What to call this phone in the motion-permission lines: 「iPhone」 / 「iPad」 on Apple devices, else 「部機」. */
+export function motionDeviceName(nav = typeof navigator !== 'undefined' ? navigator : null) {
+  if (!isIOS(nav)) return '部機';
+  return /\biPad\b/.test(String(nav?.userAgent ?? '')) || /\bMacintosh\b/.test(String(nav?.userAgent ?? '')) ? 'iPad' : 'iPhone';
+}
+
+/**
+ * The DiceCup's motion-permission lines (#38): Apple wording (iPhone, Safari's 「ㄅA」 menu) only on a real
+ * iPhone / iPad, neutral wording everywhere else.
+ */
+export function motionWords(nav = typeof navigator !== 'undefined' ? navigator : null) {
+  const dev = motionDeviceName(nav);
+  const ios = dev !== '部機';
+  const who = ios ? `${dev} ` : dev;   // a space after 「iPhone」, none after 「部機」
+  return {
+    denied: `📳 ${who}拒絕咗動作權限`,
+    deniedHow: ios
+      ? 'Safari 記住咗個「唔准」。喺網址列㩒「ㄅA」→ 網站設定 開返「動作與方向」，或者清除本站資料再 refresh。'
+      : '瀏覽器記住咗個「唔准」。去瀏覽器嘅網站設定開返「動作感應」，或者清除本站資料再 refresh。',
+    noData: `${who}未送緊動作數據 — 㩒一下重新批准。`,
+    ask: ios ? `㩒一下，${dev} 會問你畀唔畀動作權限` : '㩒一下，部機可能會問你畀唔畀動作權限',
+  };
 }
 
 /** Call this synchronously from a tap handler, or iOS rejects it. */

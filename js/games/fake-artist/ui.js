@@ -23,8 +23,10 @@
 // Flow and wording: docs/games/fake-artist.md.
 // ============================================================
 
-import * as S from './script.js?v=20261003171423';
-import { MIN_STROKE_LEN, checkEntry, penColor, strokeLength, textLen } from './game.js?v=20261003171423';
+import * as S from './script.js?v=1';
+import { MIN_STROKE_LEN, TALLY_MS, checkEntry, penColor, strokeLength, textLen } from './game.js?v=1';
+
+const AWAY = '💤 房主當咗你唔喺度。返咗嚟就叫房主加返你。';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -60,6 +62,19 @@ export function mount(root, api) {
   const noScore = (v) => v?.mode?.scoring === 'none';
   const seatName = (pid, me) => nameOf(pid) + (pid === me ? '（你）' : '');
   const dot = (pid, cls = '') => h('span', { class: `fk-dot ${cls}`.trim(), style: `--seat:${pen(pid)}` });
+  /**
+   * The players for a VotePanel, each carrying their PEN colour: a stroke's colour is how the table ties it to a
+   * person, so the ballot and the tally must use the same colours as the picture (not the lobby colours).
+   * `colorOf: pen` goes along too, for a VotePanel that reads it.
+   */
+  const penPlayers = () => api.players.map((p) => ({ ...p, color: pen(p.id) }));
+  /** 💤 = the host marked the seat absent (public, D4): its turns are skipped and nobody waits on it. */
+  const away = (pid) => !!view?.absent?.includes(pid);
+  /** The other seats this same phone holds (a passed-round phone): one 睇完 counts for all of them. */
+  const deviceMates = () => {
+    const dev = api.players.find((p) => p.id === view?.me)?.deviceId;
+    return dev ? api.players.filter((p) => p.deviceId === dev && p.id !== view.me).map((p) => p.id) : [];
+  };
 
   let view = null;
   let ctx = {};
@@ -139,7 +154,7 @@ export function mount(root, api) {
           role: 'listitem', style: `--seat:${pen(p.id)}`,
         },
         h('span', { class: 'fk-score-dot' }),
-        h('span', { class: 'fk-score-name', text: (p.id === v.qm ? '🧑‍🎨 ' : '') + p.name }),
+        h('span', { class: 'fk-score-name', text: (p.id === v.qm ? '🧑‍🎨 ' : '') + p.name + (v.absent?.includes(p.id) ? ' 💤' : '') }),
         h('span', { class: 'fk-score-n', text: noScore(v) ? `${t[p.id] ?? 0}勝` : String(t[p.id]) }),
         d ? h('span', { class: 'fk-score-d up', text: d }) : null);
       });
@@ -277,11 +292,11 @@ export function mount(root, api) {
    * The shared board. `interactive` = this seat may draw when view.draw.canDraw. Viewers get the same
    * Canvas with no pointer handling. The drawer's accepted stroke is turned into { type: 'stroke', length }.
    */
-  function makeBoard({ interactive, compact = false }) {
+  function makeBoard({ interactive }) {
     const tag = h('div', { class: 'fk-board-tag' });
     const retry = h('button', { class: 'btn btn-ghost btn-sm fk-retry', type: 'button', hidden: true, text: '冇反應？再送一次' });
     const holder = h('div', { class: 'fk-board-holder' });
-    const wrapEl = h('div', { class: 'fk-board' + (compact ? ' compact' : '') }, holder, tag, retry);
+    const wrapEl = h('div', { class: 'fk-board' }, holder, tag, retry);
     let canvas = null;
     let sentTurn = -1;
     let lastLen = 0;
@@ -431,10 +446,12 @@ export function mount(root, api) {
         card?.set(faceFor(v));
         prog.set(v.ready.done, v.ready.total);
         if (btn) {
+          btn.hidden = away(v.me);
           btn.textContent = v.ready.mine ? '✓ 睇完喇 · 等緊其他人' : '睇完喇';
           btn.disabled = v.ready.mine || guard.busy;
         }
-        note.textContent = role === 'qm' ? '你知題目同假畫家係邊個。等大家睇完卡，就開始畫。'
+        note.textContent = away(v.me) ? AWAY
+          : role === 'qm' ? '你知題目同假畫家係邊個。等大家睇完卡，就開始畫。'
           : role === 'table' ? '大家睇緊自己張卡…'
             : v.ready.mine ? '之後都可以隨時㩒住張卡再睇。' : '㩒住張卡睇，放手就冚返。睇卡嗰陣唔好露出表情。';
       },
@@ -473,7 +490,7 @@ export function mount(root, api) {
       el,
       update(v) {
         const d = v.draw;
-        const k = JSON.stringify([d.order, d.current, d.counts, d.laps, v.me]);
+        const k = JSON.stringify([d.order, d.current, d.counts, d.laps, v.me, v.absent]);
         if (k === key) return;
         key = k;
         el.replaceChildren(...d.order.map((pid, i) => {
@@ -482,7 +499,8 @@ export function mount(root, api) {
             h('span', { class: 'fk-order-n', text: String(i + 1) }),
             dot(pid),
             h('span', { class: 'fk-order-name', text: nameOf(pid) }),
-            h('span', { class: 'fk-order-strokes', text: '●'.repeat(done) + '○'.repeat(Math.max(0, d.laps - done)) }));
+            // an absent artist's turns are skipped (D4)
+            h('span', { class: 'fk-order-strokes', text: away(pid) ? '💤' : '●'.repeat(done) + '○'.repeat(Math.max(0, d.laps - done)) }));
         }));
       },
     };
@@ -532,10 +550,13 @@ export function mount(root, api) {
     };
   }
 
-  /** vote / revote: look at the picture, pick the fake, lock it in. */
+  /**
+   * vote / revote: look at the picture, pick the fake, lock it in. The picture stays full size (this is when the
+   * table matches small strokes to people); the ballot is a dense two-column grid under it instead.
+   */
   function voteBody(role, sub) {
     const phone = view.mode.draw === 'phone';
-    const board = phone ? makeBoard({ interactive: false, compact: true }) : null;
+    const board = phone ? makeBoard({ interactive: false }) : null;
     const paperNote = !phone ? h('p', { class: 'fk-note', text: '望住張紙，諗吓邊個畫得唔似。' }) : null;
     const guard = sendGuard(rerender);
     const panel = sub === 'voter'
@@ -558,8 +579,9 @@ export function mount(root, api) {
         prog.set(vt.done, vt.total);
         if (panel) {
           const props = {
-            players: api.players, candidates: vt.candidates.filter((id) => id !== v.me), me: v.me,
+            players: penPlayers(), colorOf: pen, candidates: vt.candidates.filter((id) => id !== v.me), me: v.me,
             myVote: vt.myVote, allowAbstain: false, allowChange: false,
+            secretChoice: true,                // D6: your phone says 已投 ✓, never whom — a glance learns nothing
             progress: { done: vt.done, total: vt.total },
             title: second ? '只可以喺平票嘅人入面揀' : '揀你覺得係假畫家嘅人',
             onVote(target) { guard.fire(() => api.send({ type: 'vote', target })); },
@@ -570,6 +592,7 @@ export function mount(root, api) {
         }
         wait?.set(role === 'qm'
           ? '你知邊個係假畫家，靜靜哋等大家投票。'
+          : away(v.me) ? AWAY
           : second && !vt.voters.length ? '等緊…'
             : second ? '平票嘅人唔使再投，等其他人揀。'
               : '大家揀緊邊個係假畫家…');
@@ -582,7 +605,7 @@ export function mount(root, api) {
   /** tally: the simultaneous reveal, then the verdict. Lingers a few seconds (the engine moves on by itself). */
   function tallyBody() {
     const verdict = h('div', { class: 'fk-verdict' });
-    const bar = h('div', { class: 'fk-linger' }, h('i'));
+    const bar = h('div', { class: 'fk-linger' }, h('i', { style: `animation-duration:${TALLY_MS / 1000}s` }));
     const panel = VotePanel({ players: [], candidates: [], me: null, onVote() {} });
     const note = h('p', { class: 'fk-note' });
     const el = h('div', { class: 'fk-stack fk-tally' }, h('h2', { class: 'fk-h' }), panel.el, verdict, note, bar);
@@ -600,7 +623,7 @@ export function mount(root, api) {
         if (k !== key) {
           key = k;
           const ids = second ? t.round1.top : v.artists;
-          panel.update({ players: api.players, candidates: ids, me: v.me, reveal: { counts: r.counts, top: r.top, votes: r.votes } });
+          panel.update({ players: penPlayers(), colorOf: pen, candidates: ids, me: v.me, reveal: { counts: r.counts, top: r.top, votes: r.votes } });
         }
         verdict.classList.toggle('caught', t.caught === true);
         verdict.classList.toggle('escaped', t.caught === false);
@@ -621,7 +644,7 @@ export function mount(root, api) {
   /** guess / judge: the caught fake's one guess, and who rules on it. */
   function guessBody(role, sub) {
     const banner = h('div', { class: 'fk-verdict caught' });
-    const board = view.mode.draw === 'phone' ? makeBoard({ interactive: false, compact: true }) : null;
+    const board = view.mode.draw === 'phone' ? makeBoard({ interactive: false }) : null;   // full size: the fake reads it to guess
     const guard = sendGuard(rerender);
     const wrapEl = h('div', { class: 'fk-stack' }, h('h2', { class: 'fk-h', text: '估題目' }), banner);
     const parts = { destroy: [] };
@@ -643,6 +666,13 @@ export function mount(root, api) {
     } else if (sub === 'judge') {                            // I rule on it
       const wordEl = h('div', { class: 'fk-judge-word' });
       const saidEl = h('p', { class: 'fk-note' });
+      const face = h('div', { class: 'fk-judge' }, h('div', { class: 'fk-judge-label', text: '答案係' }), wordEl);
+      // Spoken guess: the caught fake is still thinking, and this phone may lie in the middle of the table (in app-QM
+      // mode it is the host's). So the answer hides behind the same hold-to-peek as every other secret, and 啱 / 錯
+      // stay outside it. Typed guess: the guess is already locked, so the answer can simply be shown.
+      const peek = view.mode.guess !== 'typed';
+      const cover = peek ? Cover({ front: face, backArt: '🎴', backLabel: '㩒住睇答案', lockMode: 'none', locked: false }) : null;
+      if (cover) parts.destroy.push(() => cover.destroy());
       let armed = null;
       let handle = null;
       const mk = (correct, label, cls) => {
@@ -671,8 +701,8 @@ export function mount(root, api) {
         yes.classList.toggle('armed', armed === true);
         no.classList.toggle('armed', armed === false);
       };
-      wrapEl.append(h('p', { class: 'fk-note', text: '你係判斷嗰個人：只有你睇到答案。' }),
-        h('div', { class: 'fk-judge' }, h('div', { class: 'fk-judge-label', text: '答案係' }), wordEl), saidEl,
+      wrapEl.append(h('p', { class: 'fk-note', text: peek ? '你係判斷嗰個人：㩒住張卡睇答案，唔好俾人望到。' : '你係判斷嗰個人：只有你睇到答案。' }),
+        cover ? h('div', { class: 'fk-judge-peek' }, cover.el) : face, saidEl,
         h('div', { class: 'fk-judgebtns' }, yes, no));
       paint = (v) => {
         wordEl.textContent = v.guess?.word ?? '';
@@ -712,11 +742,15 @@ export function mount(root, api) {
     const legend = h('div', { class: 'fk-legend' });
     const replayBtn = h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '▶ 重播' });
     const turnsEl = !phone ? h('div', { class: 'fk-turns' }) : null;
+    const votesEl = h('div', { class: 'fk-votes' });
+    let votesKey = '';
     const lines = h('div', { class: 'fk-reveal-lines' });
     const pts = h('div', { class: 'fk-deltas' });
     const guard = sendGuard(rerender);
+    // D3: the table moves on once every present seat of the round has tapped 睇完 (the host's 下一步 can force it)
     const nextBtn = role !== 'table' ? h('button', { class: 'btn btn-primary btn-lg', type: 'button', disabled: true }) : null;
     const waitTxt = role === 'table' ? h('p', { class: 'fk-note', text: '睇緊結果…' }) : null;
+    const seenTxt = h('p', { class: 'fk-note fk-seen' });
 
     let hl = null;                   // pid highlighted in the legend
     let replayK = null;              // null = the full picture, n = the first n strokes
@@ -757,11 +791,49 @@ export function mount(root, api) {
       replayTimer = later(() => stepReplay(total), 350);
     });
 
-    nextBtn?.addEventListener('click', () => guard.fire(() => { nextBtn.disabled = true; api.send({ type: 'next' }); }));
+    nextBtn?.addEventListener('click', () => guard.fire(() => {
+      nextBtn.disabled = true;
+      const mates = deviceMates();
+      api.send(mates.length ? { type: 'next', seats: mates } : { type: 'next' });
+    }));
+
+    /**
+     * Who pointed at whom stays on the result screen (the tally only lingers a few seconds), in pen colours, so the
+     * table can still argue 「你點解投阿明？」 after it. Public: every ballot was revealed at the tally.
+     */
+    function paintVotes(rv, artists) {
+      const k = JSON.stringify([rv.round1, rv.round2, rv.fake]);
+      if (k === votesKey) return;
+      votesKey = k;
+      const seatIdx = (pid) => { const i = artists.indexOf(pid); return i < 0 ? 99 : i; };
+      const block = (t, title) => {
+        if (!t) return null;
+        const by = new Map();
+        for (const [voter, target] of Object.entries(t.votes ?? {})) {
+          if (target == null) continue;
+          if (!by.has(target)) by.set(target, []);
+          by.get(target).push(voter);
+        }
+        const rows = [...by.entries()].sort((a, b) => b[1].length - a[1].length || seatIdx(a[0]) - seatIdx(b[0]));
+        return h('div', { class: 'fk-votes-round' },
+          h('div', { class: 'fk-votes-title', text: title }),
+          rows.length ? null : h('div', { class: 'fk-votes-row dim', text: '冇人投票' }),
+          ...rows.map(([target, voters]) => h('div', { class: 'fk-votes-row' + ((t.top ?? []).includes(target) ? ' top' : '') },
+            h('span', { class: 'fk-votes-who' }, dot(target), h('strong', { text: nameOf(target) + (target === rv.fake ? ' 🕶️' : '') })),
+            h('span', { class: 'fk-votes-n', text: `${voters.length} 票` }),
+            h('span', { class: 'fk-votes-by' }, '← ', ...voters.flatMap((p, i) => [i ? '、' : null, dot(p), ` ${nameOf(p)}`])))),
+          t.abstained?.length ? h('div', { class: 'fk-votes-row dim', text: `冇投：${t.abstained.map(nameOf).join('、')}` }) : null);
+      };
+      votesEl.replaceChildren(...[
+        block(rv.round1, rv.round2 ? '🗳️ 第一次投票：邊個投邊個' : '🗳️ 邊個投邊個'),
+        block(rv.round2, '🗳️ 再投：邊個投邊個'),
+      ].filter(Boolean));
+      votesEl.hidden = !rv.round1;
+    }
 
     const el = h('div', { class: 'fk-stack fk-result' },
       head, facts, phone ? h('div', { class: 'fk-legend-row' }, legend, replayBtn) : null, board?.el,
-      turnsEl, lines, pts, nextBtn ?? waitTxt);
+      turnsEl, votesEl, lines, pts, nextBtn ?? waitTxt, seenTxt);
 
     return {
       el,
@@ -794,9 +866,10 @@ export function mount(root, api) {
           turnsEl.replaceChildren(h('div', { class: 'fk-turns-title', text: '畫畫次序' }),
             ...laps.map((list, i) => h('div', { class: 'fk-turns-lap' },
               h('span', { class: 'fk-turns-lapn', text: `第 ${i + 1} 圈` }),
-              ...list.map((t) => h('span', { class: 'fk-turns-chip' + (t.kind === 'forfeit' ? ' skipped' : ''), style: `--seat:${pen(t.pid)}` },
-                dot(t.pid), nameOf(t.pid) + (t.kind === 'forfeit' ? '（放棄）' : ''))))));
+              ...list.map((t) => h('span', { class: 'fk-turns-chip' + (t.kind === 'forfeit' || t.kind === 'away' ? ' skipped' : ''), style: `--seat:${pen(t.pid)}` },
+                dot(t.pid), nameOf(t.pid) + (t.kind === 'forfeit' ? '（放棄）' : t.kind === 'away' ? '（唔喺度）' : ''))))));
         }
+        paintVotes(rv, artists);
         lines.replaceChildren(...rv.lines.slice(2).map((l) => h('div', { class: 'fk-reveal-line', text: l })));
         pts.replaceChildren(...v.artists.concat(v.qm ? [v.qm] : []).map((pid) => {
           const pts1 = rv.deltas.find((x) => x.pid === pid)?.delta ?? 0;
@@ -806,10 +879,18 @@ export function mount(root, api) {
             h('span', { class: 'fk-delta-d', text: d || '·' }),
             h('span', { class: 'fk-delta-t', text: totalText(v, pid) }));
         }));
+        const seen = v.seen ?? { who: [], total: 0 };
+        const mine = !!v.me && seen.who.includes(v.me);
         if (nextBtn) {
-          nextBtn.textContent = v.last ? '睇總結' : '下一輪';
-          nextBtn.disabled = !unlocked || guard.busy;
+          const out = away(v.me) || !(v.artists.includes(v.me) || v.me === v.qm);
+          nextBtn.hidden = out;
+          nextBtn.textContent = mine ? '✓ 睇完 · 等緊其他人' : '睇完 ✓';
+          nextBtn.disabled = !unlocked || guard.busy || mine;
         }
+        // the same on every phone: 「睇完 3 / 5 · 等緊：阿明、小美 · 齊人就開下一輪」
+        const left = [...v.artists, ...(v.qm ? [v.qm] : [])].filter((p) => !seen.who.includes(p) && !away(p));
+        seenTxt.textContent = `睇完 ${seen.who.length} / ${seen.total}${left.length ? ` · 等緊：${left.map(nameOf).join('、')}` : ''}`
+          + ` · ${v.last ? '齊人就睇總結' : '齊人就開下一輪'}`;
       },
       destroy() { cancel(replayTimer); board?.destroy(); },
     };

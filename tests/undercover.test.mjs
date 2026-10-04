@@ -63,13 +63,31 @@ function speakAll(sim) {
   }
 }
 
+/** Discussion → vote: the alive seats tap 開始投票 in seat order until a majority opens it (D2). */
+function openVote(sim) {
+  for (const p of sim.players) {
+    if (sim.state.phase !== 'discuss') break;
+    if (sim.state.alive.includes(p.id) && !sim.state.absent?.[p.id]) sim.act(p.id, { type: 'start-vote' });
+  }
+}
+
 /** ready → speak → discuss → vote */
 function toVote(sim) {
   if (sim.state.phase === 'deal') ready(sim);
   speakAll(sim);
   assert.equal(sim.state.phase, 'discuss');
-  assert.ok(sim.act('p1', { type: 'start-vote' }));
+  openVote(sim);
   assert.equal(sim.state.phase, 'vote');
+}
+
+/** The result screen: every present seat taps 睇完 (D3). True if the game moved on. */
+function goOn(sim) {
+  const before = sim.state.phase === 'elim' ? sim.state.elim.seq : null;
+  for (const p of sim.players) {
+    if (sim.state.phase !== 'elim' || sim.state.elim.seq !== before || sim.state.elim.guess?.pending) break;
+    if (!sim.state.absent?.[p.id]) sim.act(p.id, { type: 'continue' });
+  }
+  return sim.state.phase !== 'elim' || sim.state.elim.seq !== before;
 }
 
 /** `map` voter → target | null; missing voters vote for the first candidate that is not themselves. */
@@ -95,7 +113,7 @@ function roundOut(sim, target, { proceed = true } = {}) {
   voteOut(sim, target);
   assert.equal(sim.state.phase, 'elim');
   assert.equal(sim.state.elim.out, target);
-  if (proceed && !sim.state.elim.guess?.pending) sim.act('p1', { type: 'continue' });
+  if (proceed && !sim.state.elim.guess?.pending) goOn(sim);
 }
 
 const view = (sim, pid) => sim.view(pid);
@@ -655,7 +673,7 @@ test('undercover: speaking timer skips a slow speaker; no timer means no deadlin
   assert.equal(sim.state.deadline, null, 'discussion is untimed by default');
 });
 
-test('undercover: discussion ends when any seat opens the vote, or when its timer runs out', () => {
+test('undercover: discussion ends when a majority of the alive seats opens the vote, or when its timer runs out', () => {
   const sim = mk(5, { seed: 8, cfg: { discussSec: 60 } });
   rig(sim, 'CCCCU');
   ready(sim);
@@ -670,8 +688,15 @@ test('undercover: discussion ends when any seat opens the vote, or when its time
   rig(manual, 'CCCCU');
   ready(manual);
   speakAll(manual);
+  assert.deepEqual(view(manual, 'p1').discuss, { want: [], need: 3, total: 5 }, '5 alive: 3 is a majority');
   assert.ok(manual.act('p5', { type: 'start-vote' }));
-  assert.equal(phase(manual), 'vote');
+  assert.equal(phase(manual), 'discuss', 'one eager seat does not end the talk for everybody');
+  unchanged(manual, 'p5', { type: 'start-vote' });
+  assert.deepEqual(manual.legal('p5'), [], 'a seat that asked has nothing more to do');
+  assert.ok(manual.act('p2', { type: 'start-vote' }));
+  assert.deepEqual(view(manual, 'p3').discuss.want, ['p2', 'p5']);
+  assert.ok(manual.act('p1', { type: 'start-vote' }));
+  assert.equal(phase(manual), 'vote', 'the third of five opens the vote');
   unchanged(manual, 'p1', { type: 'start-vote' });
 });
 
@@ -763,7 +788,7 @@ test('undercover: nobody voting means nobody leaves', () => {
   assert.equal(sim.state.elim.reason, 'nobody');
   assert.equal(sim.state.alive.length, 5);
   assert.match(sim.cue().text, /冇人投票/);
-  sim.act('p2', { type: 'continue' });
+  goOn(sim);
   assert.equal(sim.state.round, 2);
   assert.equal(phase(sim), 'speak');
 });
@@ -796,7 +821,7 @@ test('undercover: a tie goes to PK — the tied speak again, then everybody re-v
   assert.equal(e.out, null);
   assert.equal(sim.state.alive.length, 8, 'nobody left yet');
   assert.match(sim.cue().text, /平票/);
-  sim.act('p2', { type: 'continue' });
+  goOn(sim);
   assert.equal(phase(sim), 'speak');
   assert.equal(sim.state.speakKind, 'pk');
   assert.deepEqual(sim.state.order, ['p7', 'p8'], 'only the tied, in the round order');
@@ -823,7 +848,7 @@ test('undercover: PK voters — NON_TIED lets only the others vote; with a 2-way
   toVote(sim);
   tieMain(sim, 'p7', 'p8');
   assert.match(sim.cue().text, /其他人再投一次/);
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   speakAll(sim);
   assert.equal(sim.state.voteKind, 'pk');
   assert.deepEqual(sim.state.voters, ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], 'the tied do not vote');
@@ -842,7 +867,7 @@ test('undercover: PK voters — NON_TIED lets only the others vote; with a 2-way
       rig(r, 'CCCCCCUU');
       toVote(r);
       tieMain(r, 'p7', 'p8');
-      r.act('p1', { type: 'continue' });
+      goOn(r);
       speakAll(r);
       const rng = mulberry32(seed);
       const map = {};
@@ -864,7 +889,7 @@ test('undercover: PK in a 3-way tie — everybody alive votes, the tied only for
   castVotes(sim, { p1: 'p2', p2: 'p3', p3: 'p1', p4: 'p1', p5: 'p1', p6: 'p2', p7: 'p2', p8: 'p3', p9: 'p3' });
   assert.equal(sim.state.elim.kind, 'pk');
   assert.deepEqual(sim.state.elim.cands.slice().sort(), ['p1', 'p2', 'p3']);
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   speakAll(sim);
   assert.equal(sim.state.voters.length, 9);
   assert.deepEqual(view(sim, 'p1').me.targets, ['p2', 'p3']);
@@ -882,7 +907,7 @@ test('undercover: no-majority rule (optional) — without more than half the vot
   assert.equal(sim.state.noElimStreak, 1);
   assert.match(sim.cue().text, /冇人過半數，今輪冇人出局/);
   assert.match(view(sim, 'p1').hint, /今輪冇人出局/);
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   toVote(sim);
   castVotes(sim, { p1: 'p6', p2: 'p6', p3: 'p6', p4: 'p6', p5: 'p1', p6: 'p2' });
   assert.equal(sim.state.elim.out, 'p6', '4 of 6 is a majority');
@@ -913,7 +938,7 @@ test('undercover: a second tie ends the round with nobody out (pk), or picks at 
     rig(sim, 'CCCCCCUU');
     toVote(sim);
     tieMain(sim, 'p7', 'p8');
-    sim.act('p1', { type: 'continue' });
+    goOn(sim);
     speakAll(sim);
     castVotes(sim, { p1: 'p7', p2: 'p7', p3: 'p7', p4: 'p8', p5: 'p8', p6: 'p8', p7: 'p8', p8: 'p7' });
     return sim;
@@ -924,7 +949,7 @@ test('undercover: a second tie ends the round with nobody out (pk), or picks at 
   assert.equal(pk.state.noElimStreak, 1);
   assert.equal(pk.state.elim.reason, 'pktie');
   assert.match(pk.cue().text, /PK 再平票，今輪冇人出局/);
-  pk.act('p1', { type: 'continue' });
+  goOn(pk);
   assert.equal(pk.state.round, 2);
 
   const outs = new Set();
@@ -947,7 +972,7 @@ test('undercover: tie = skip means no PK, nobody leaves', () => {
   assert.equal(sim.state.elim.kind, 'none');
   assert.equal(sim.state.elim.reason, 'tie');
   assert.match(sim.cue().text, /平票，今輪冇人出局/);
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   assert.equal(sim.state.round, 2);
   assert.equal(sim.state.speakKind, 'round');
 });
@@ -974,7 +999,7 @@ test('undercover: after two rounds without an elimination the third must elimina
     castVotes(sim, cycle);
     assert.equal(sim.state.elim.kind, 'none');
     assert.equal(sim.state.noElimStreak, r);
-    sim.act('p1', { type: 'continue' });
+    goOn(sim);
     assert.equal(sim.state.round, r + 1);
   }
   toVote(sim);
@@ -1022,7 +1047,7 @@ test('undercover: with reveal off nothing is said about the role, except a white
   assert.deepEqual(v.outs, [{ pid: 'p2', round: 1, role: null }]);
   assert.equal(/"(civilian|undercover|blank)"/.test(JSON.stringify(v)), false);
   assert.doesNotMatch(sim.cue().text, /平民|臥底|白板/);
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   roundOut(sim, 'p7', { proceed: false });
   assert.equal(view(sim, 'p3').elim.role, 'blank', 'the guess announces the white card');
   assert.equal(view(sim, 'p3').outs[1].role, 'blank');
@@ -1087,7 +1112,7 @@ test('undercover: a correct guess wins for the infiltrators at once, even with c
   assert.equal(sim.state.elim.next, 'over');
   assert.match(sim.cue().text, /估「蘋果」，估中喇/);
   assert.equal(sim.result(), null, 'the table sees the guess before the result');
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   assert.equal(phase(sim), 'over');
   const r = sim.result();
   assert.deepEqual(r.winners.sort(), ['p5', 'p6']);
@@ -1099,7 +1124,7 @@ test('undercover: a correct guess wins for the infiltrators at once, even with c
 test('undercover: Mr. White guess — the whole infiltrator side wins by default, the white card alone with guessWinner = blank', () => {
   const team = blankOut({}, { spec: 'CCCCUUB', seed: 48 });
   team.act('p7', { type: 'guess', word: '蘋果' });
-  team.act('p1', { type: 'continue' });
+  goOn(team);
   assert.deepEqual(team.result().winners.sort(), ['p5', 'p6', 'p7'], 'all impostors win (mrwhiteonline, louisvrd)');
   assert.deepEqual(team.result().points, { p5: 4, p6: 4, p7: 3 }, 'undercovers round(2 * 4 / 2) each, white card 3');
 
@@ -1107,7 +1132,7 @@ test('undercover: Mr. White guess — the whole infiltrator side wins by default
   assert.equal(view(solo, 'p7').flags.guessWinner, 'blank', 'the guess screen can say who wins');
   solo.act('p7', { type: 'guess', word: '蘋果' });
   assert.equal(solo.state.elim.next, 'over');
-  solo.act('p1', { type: 'continue' });
+  goOn(solo);
   const r = solo.result();
   assert.deepEqual(r.winners, ['p7'], 'Mr. White alone wins (Yanstar, bestpartygames, MASJV)');
   assert.deepEqual(r.points, { p7: 3 });
@@ -1129,7 +1154,7 @@ test('undercover: a wrong guess changes nothing else — and may hand the civili
   sim.act('p6', { type: 'guess', word: '雪梨' });          // the undercover word is wrong too
   assert.equal(sim.state.elim.guess.correct, false);
   assert.equal(sim.state.elim.next, 'over');
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   assert.deepEqual(sim.result().winners, ['p1', 'p2', 'p3', 'p4', 'p5']);
   assert.match(sim.result().lines[0], /白板被投出局，平民贏/);
 
@@ -1138,7 +1163,7 @@ test('undercover: a wrong guess changes nothing else — and may hand the civili
   on.act('p6', { type: 'guess', word: '西瓜' });
   assert.equal(on.state.elim.next, 'round');
   assert.match(on.cue().text, /估「西瓜」，唔啱/);
-  on.act('p2', { type: 'continue' });
+  goOn(on);
   assert.equal(phase(on), 'speak');
   assert.equal(on.state.round, 2);
   assert.equal(on.state.alive.length, 5);
@@ -1190,7 +1215,7 @@ test('undercover: with guessing off the white card just leaves', () => {
   assert.equal(sim.state.elim.guess, null);
   assert.equal(sim.focus(), null);
   assert.equal(sim.state.elim.next, 'round');
-  assert.ok(sim.act('p1', { type: 'continue' }));
+  assert.ok(goOn(sim));
 });
 
 test('undercover: the host can skip a white card that will not answer', () => {
@@ -1211,7 +1236,7 @@ test('undercover: voting out the last undercover wins for the civilians', () => 
   roundOut(sim, 'p6', { proceed: false });
   assert.equal(sim.state.elim.next, 'over');
   assert.equal(sim.result(), null);
-  sim.act('p3', { type: 'continue' });
+  goOn(sim);
   assert.equal(phase(sim), 'over');
   const r = sim.result();
   assert.deepEqual(r.winners, ['p1', 'p2', 'p3', 'p4', 'p5']);
@@ -1226,7 +1251,7 @@ test('undercover: civilians must remove the undercover AND the white card', () =
   assert.equal(phase(sim), 'speak');
   roundOut(sim, 'p7', { proceed: false });
   sim.act('p7', { type: 'guess', word: 'x' });
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   assert.equal(phase(sim), 'over');
   assert.match(sim.result().lines[0], /所有臥底同白板都被投出局/);
 });
@@ -1239,7 +1264,7 @@ test('undercover: parity — infiltrators win when they are as many as the civil
   assert.equal(phase(sim), 'speak');
   roundOut(sim, 'p3', { proceed: false });                // 1 v 1
   assert.equal(sim.state.elim.next, 'over');
-  sim.act('p4', { type: 'continue' });
+  goOn(sim);
   const r = sim.result();
   assert.deepEqual(r.winners, ['p5']);
   assert.match(r.lines[0], /剩低 1 個平民、1 個臥底方，臥底方人數追上平民/);
@@ -1253,7 +1278,7 @@ test('undercover: last3 — infiltrators win as soon as 3 are left, parity is no
   assert.equal(phase(sim), 'speak');
   roundOut(sim, 'p2', { proceed: false });                // 3 left, undercover still in
   assert.equal(sim.state.elim.next, 'over');
-  sim.act('p3', { type: 'continue' });
+  goOn(sim);
   assert.match(sim.result().lines[0], /淨係剩 3 個人/);
   assert.deepEqual(sim.result().winners, ['p5']);
 
@@ -1281,7 +1306,7 @@ test('undercover: C == 0 safety net — pure last3 with 4 infiltrators alive end
   }
   roundOut(sim, 'p8', { proceed: false });
   assert.equal(sim.state.elim.next, 'over');
-  sim.act('p9', { type: 'continue' });
+  goOn(sim);
   assert.equal(sim.state.win.why, 'wipe');
   assert.match(sim.result().lines[0], /平民全部出局，臥底方贏/);
 });
@@ -1292,7 +1317,7 @@ test('undercover: last3OrParity ends a multi-undercover game at parity, a 1-unde
   for (const p of ['p1', 'p2', 'p3']) roundOut(multi, p);
   roundOut(multi, 'p4', { proceed: false });                                   // 2 v 2
   assert.equal(multi.state.elim.next, 'over');
-  multi.act('p5', { type: 'continue' });
+  goOn(multi);
   assert.equal(multi.state.win.why, 'parity');
   const pure = mk(8, { seed: 50, cfg: { win: 'last3' } });
   rig(pure, 'CCCCCCUU');
@@ -1303,7 +1328,7 @@ test('undercover: last3OrParity ends a multi-undercover game at parity, a 1-unde
   roundOut(one, 'p1');
   roundOut(one, 'p2', { proceed: false });                                      // 2 v 1, 3 left
   assert.equal(one.state.elim.next, 'over');
-  one.act('p3', { type: 'continue' });
+  goOn(one);
   assert.match(one.result().lines[0], /場上淨係剩 3 個人/);
 });
 
@@ -1314,7 +1339,7 @@ test('undercover: civ_le_2, one_civ and size_based end the game where the resear
     for (const p of outs.slice(0, -1)) { roundOut(sim, p); assert.equal(phase(sim), 'speak', `${win}: ${p}`); }
     roundOut(sim, outs[outs.length - 1], { proceed: false });
     assert.equal(sim.state.elim.next, 'over', win);
-    sim.act('p1', { type: 'continue' });
+    goOn(sim);
     return sim;
   };
   assert.match(play(7, 'CCCCCUU', 'civ_le_2', ['p1', 'p2', 'p3']).result().lines[0], /平民淨係剩 2 個/);
@@ -1329,7 +1354,7 @@ test('undercover: a game with only a white card (no undercover) works', () => {
   assert.equal(sim.state.counts0.undercovers, 0);
   roundOut(sim, 'p6', { proceed: false });
   sim.act('p6', { type: 'guess', word: '蘋果' });
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   const r = sim.result();
   assert.deepEqual(r.winners, ['p6']);
   assert.equal(r.points.p6, 10, 'a lone white card is paid like an undercover');
@@ -1348,7 +1373,7 @@ test('undercover: the result explains both words, who held what and what happene
   roundOut(sim, 'p1');
   roundOut(sim, 'p7', { proceed: false });
   sim.act('p7', { type: 'guess', word: '壽司' });
-  sim.act('p2', { type: 'continue' });
+  goOn(sim);
   assert.equal(phase(sim), 'over');
   const r = sim.result();
   const text = r.lines.join('\n');
@@ -1376,15 +1401,15 @@ test('undercover: #10 — result lines explain why: mis-votes, roles hidden duri
   toVote(sim);
   castVotes(sim, { p2: 'p7', p3: 'p7', p4: 'p8', p5: 'p8', p6: 'p2', p7: 'p8', p8: 'p7' });   // 3 v 3 v 1
   assert.equal(sim.state.elim.kind, 'pk');
-  sim.act('p1', { type: 'continue' });
+  goOn(sim);
   speakAll(sim);
   castVotes(sim, { p2: 'p7', p3: 'p7', p4: 'p7', p5: 'p8', p6: 'p8', p7: 'p8', p8: 'p7' });   // 4 v 3: p7 out
   assert.equal(sim.state.elim.out, 'p7');
-  sim.act('p2', { type: 'continue' });
+  goOn(sim);
   roundOut(sim, 'p2');
   roundOut(sim, 'p3');
   roundOut(sim, 'p8', { proceed: false });
-  sim.act('p4', { type: 'continue' });
+  goOn(sim);
   const r = sim.result();
   const text = r.lines.join('\n');
   assert.match(r.lines[0], /所有臥底都被投出局，平民贏/);
@@ -1399,20 +1424,23 @@ test('undercover: #10 — result lines explain why: mis-votes, roles hidden duri
   rig(clean, 'CCCCCU');
   toVote(clean);
   castVotes(clean, { p1: 'p2', p2: 'p3', p3: 'p4', p4: 'p5', p5: 'p6', p6: 'p1' });   // everybody tied
-  clean.act('p1', { type: 'continue' });
+  goOn(clean);
   roundOut(clean, 'p6', { proceed: false });
-  clean.act('p1', { type: 'continue' });
+  goOn(clean);
   const lines = clean.result().lines.join('\n');
   assert.ok(lines.includes('平民一個自己人都冇投錯！'), lines);
   assert.ok(lines.includes('第 1 輪：全部人同票，冇人出局'), lines);
   assert.ok(!lines.includes('冇公開身份'));
+  // one undercover is 「佢」, two or more 「佢哋」
+  assert.ok(lines.includes('（佢一開始都唔知自己係臥底）'), lines);
+  assert.ok(!lines.includes('佢哋一開始'), lines);
 });
 
 test('undercover: points — civilians 2 each, undercovers share the table, a white card gets 3', () => {
   const civWin = mk(6, { seed: 31 });
   rig(civWin, 'CCCCCU');
   roundOut(civWin, 'p6', { proceed: false });
-  civWin.act('p1', { type: 'continue' });
+  goOn(civWin);
   assert.deepEqual(civWin.result().points, { p1: 2, p2: 2, p3: 2, p4: 2, p5: 2 });
 
   const infWin = mk(8, { seed: 31, cfg: { undercovers: 2 } });
@@ -1420,7 +1448,7 @@ test('undercover: points — civilians 2 each, undercovers share the table, a wh
   for (const p of ['p1', 'p2', 'p3']) roundOut(infWin, p);
   assert.equal(phase(infWin), 'speak');
   roundOut(infWin, 'p4', { proceed: false });
-  infWin.act('p5', { type: 'continue' });
+  goOn(infWin);
   assert.equal(phase(infWin), 'over', '2 v 2');
   assert.deepEqual(infWin.result().points, { p7: 6, p8: 6 }, 'round(2 * 6 / 2)');
 
@@ -1428,7 +1456,7 @@ test('undercover: points — civilians 2 each, undercovers share the table, a wh
   rig(mixed, 'CCCCCUB');
   roundOut(mixed, 'p7', { proceed: false });
   mixed.act('p7', { type: 'guess', word: '蘋果' });
-  mixed.act('p1', { type: 'continue' });
+  goOn(mixed);
   assert.deepEqual(mixed.result().points, { p6: 10, p7: 3 });
 });
 
@@ -1531,7 +1559,7 @@ test('undercover: focus names exactly the seats that must look at their phone', 
   assert.equal(sim.focus(), null, 'speaking is public');
   speakAll(sim);
   assert.equal(sim.focus(), null, 'discussion is public');
-  sim.act('p1', { type: 'start-vote' });
+  openVote(sim);
   assert.deepEqual(sim.focus(), { pids: ['p1', 'p2', 'p3', 'p4', 'p5'] });
   sim.act('p2', { type: 'vote', target: 'p5' });
   assert.deepEqual(sim.focus().pids, ['p1', 'p3', 'p4', 'p5']);
@@ -1556,6 +1584,10 @@ test('undercover: autoAct gives a stalled seat a sensible move in every phase', 
   assert.equal(phase(sim), 'discuss');
   assert.equal(auto('p4').type, 'start-vote');
   sim.host({ type: ACT.AUTO, pid: 'p4' });
+  assert.equal(phase(sim), 'discuss', 'one seat is not a majority');
+  assert.equal(auto('p4'), null, 'nothing more to do for a seat that asked');
+  sim.host({ type: ACT.AUTO, pid: 'p5' });
+  sim.host({ type: ACT.AUTO, pid: 'p1' });
   assert.equal(phase(sim), 'vote');
   const v = auto('p4');
   assert.equal(v.type, 'vote');
@@ -1593,6 +1625,7 @@ function hintFacts(s, pid) {
   return JSON.stringify([
     s.phase, s.alive.includes(pid), !!s.ready[pid], s.order?.[s.turn] === pid, s.speakKind,
     s.voters.includes(pid), pid in (s.ballots ?? {}), s.voteKind, s.elim?.out === pid, s.elim?.kind, !!s.elim?.guess?.pending,
+    !!s.want?.[pid], !!s.seen?.[pid], !!s.absent?.[pid],
   ]);
 }
 
@@ -1680,6 +1713,8 @@ test('undercover: U1 — every phase has a one-line 「而家要做咩」 hint f
   speakAll(sim);
   assert.match(hint('p3'), /自由傾/);
   sim.act('p1', { type: 'start-vote' });
+  assert.match(hint('p1'), /等過半數/, 'a seat that asked is told it waits for the majority');
+  openVote(sim);
   assert.match(hint('p3'), /揀一個你覺得係臥底嘅人/);
   sim.act('p3', { type: 'vote', target: 'p6' });
   assert.match(hint('p3'), /投咗喇，等其他人/);
@@ -1689,8 +1724,10 @@ test('undercover: U1 — every phase has a one-line 「而家要做咩」 hint f
   assert.equal(hint('p1'), '等白板估平民個詞。');
   sim.act('p6', { type: 'guess', word: '西瓜' });
   assert.match(hint('p6'), /你出局喇/);
-  assert.match(hint('p2'), /㩒「繼續」/);
-  sim.act('p1', { type: 'continue' });
+  assert.match(hint('p2'), /㩒「睇完」/);
+  sim.act('p2', { type: 'continue' });
+  assert.match(hint('p2'), /等其他人睇完/);
+  goOn(sim);
   assert.match(hint('p6'), /你出咗局，靜靜聽/);
   assert.ok(sim.view('p1').hint, 'the hint is in the view, the game UI never shows it by itself');
 });
@@ -1875,4 +1912,417 @@ test('undercover: act returns the state it was given (the session clones before 
   const out = E.act(s, { pid: 'p1', action: { type: 'ready' } }, sim.ctx());
   assert.equal(out, s);
   assert.equal(E.act(s, { pid: 'p1', action: { type: 'nope' } }, sim.ctx()), s);
+});
+
+// ============================================================
+// ui.js on a minimal fake DOM, with the real RoleCard (playtest: the word card is a 詞語卡, not a 角色牌)
+// ============================================================
+
+class UNode {}
+class UText extends UNode {
+  constructor(t) { super(); this.data = String(t); this.parentNode = null; }
+  get textContent() { return this.data; }
+}
+class UEl extends UNode {
+  constructor(tag) {
+    super();
+    this.tag = tag; this.parentNode = null; this.children = []; this.attrs = {}; this.listeners = {};
+    this.cls = new Set(); this.styleMap = {}; this.hidden = false; this.disabled = false; this.dataset = {}; this.value = '';
+    const self = this;
+    this.style = new Proxy({}, {
+      get: (_, k) => (k === 'setProperty' ? (n, v) => { self.styleMap[n] = String(v); }
+        : k === 'removeProperty' ? (n) => { delete self.styleMap[n]; } : self.styleMap[k]),
+      set: (_, k, v) => { self.styleMap[k] = String(v); return true; },
+    });
+    this.classList = {
+      add: (...c) => c.forEach((x) => self.cls.add(x)),
+      remove: (...c) => c.forEach((x) => self.cls.delete(x)),
+      toggle: (c, on) => { const want = on === undefined ? !self.cls.has(c) : !!on; if (want) self.cls.add(c); else self.cls.delete(c); return want; },
+      contains: (c) => self.cls.has(c),
+    };
+  }
+  get className() { return [...this.cls].join(' '); }
+  set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(String(v) === '' ? [] : [new UText(v)])); }
+  get offsetWidth() { return 0; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k]; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(t, fn, capture) { (this.listeners[t] ||= []).push({ fn, capture: !!capture }); }
+  append(...kids) { for (const k of kids) this.appendChild(k instanceof UNode ? k : new UText(k)); }
+  appendChild(k) { k.parentNode?.removeChild(k); k.parentNode = this; this.children.push(k); return k; }
+  removeChild(k) { const i = this.children.indexOf(k); if (i >= 0) { this.children.splice(i, 1); k.parentNode = null; } return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  remove() { this.parentNode?.removeChild(this); }
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+  focus() {}
+  blur() {}
+}
+/** Dispatch like a browser: capture listeners root → target, then the target, then bubbling, honouring stopPropagation. */
+function uDispatch(target, type, extra = {}) {
+  let stopped = false;
+  const ev = { type, target, pointerId: 1, preventDefault() {}, stopPropagation() { stopped = true; }, ...extra };
+  const path = [];
+  for (let x = target; x; x = x.parentNode) path.unshift(x);
+  const above = path.slice(0, -1);
+  for (const n of above) {
+    for (const l of n.listeners[type] ?? []) if (l.capture) l.fn(ev);
+    if (stopped) return ev;
+  }
+  for (const l of target.listeners[type] ?? []) l.fn(ev);
+  if (stopped) return ev;
+  for (const n of above.reverse()) {
+    for (const l of n.listeners[type] ?? []) if (!l.capture) l.fn(ev);
+    if (stopped) return ev;
+  }
+  return ev;
+}
+const uClick = (n) => { for (const l of n.listeners.click ?? []) l.fn({}); };
+const uWalk = (n, fn) => { fn(n); for (const c of n.children ?? []) uWalk(c, fn); };
+const uFind = (root, pred) => { const out = []; uWalk(root, (n) => { if (n instanceof UEl && pred(n)) out.push(n); }); return out; };
+const uShown = (n) => { for (let x = n; x; x = x.parentNode) if (x.hidden) return false; return true; };
+/** Every word a player can see or hear: text, aria-labels and titles of everything not hidden (a hidden node is neither shown nor read out). */
+const uWords = (root) => {
+  const out = [];
+  const go = (n) => {
+    if (n instanceof UText) { out.push(n.data); return; }
+    if (n.hidden) return;
+    out.push(n.attrs['aria-label'] ?? '', n.attrs.title ?? '');
+    for (const c of n.children) go(c);
+  };
+  go(root);
+  return out.join('\n');
+};
+
+async function withUndercoverUi(fn) {
+  const saved = { document: globalThis.document, window: globalThis.window, Node: globalThis.Node };
+  globalThis.document = { createElement: (t) => new UEl(t), createTextNode: (t) => new UText(t), addEventListener() {}, hidden: false };
+  globalThis.window = { addEventListener() {}, AudioContext: undefined };
+  globalThis.Node = UNode;
+  try {
+    const { RoleCard } = await import('../js/ui/components/RoleCard.js');
+    const ui = await import('../js/games/undercover/ui.js');
+    const stub = () => { const el = new UEl('div'); return { el, update() {}, destroy() { el.remove(); } }; };
+    return await fn(ui, { RoleCard, VotePanel: stub, Timer: stub });
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete globalThis[k]; else globalThis[k] = v; }
+  }
+}
+
+test('undercover ui: the word card is a 詞語卡 everywhere (lock, refusal, label) and the lock still works', async () => {
+  await withUndercoverUi(async (ui, comps) => {
+    const sim = mk(5, { seed: 61 });
+    rig(sim, 'CCCCU');
+    const toasts = [];
+    const sent = [];
+    const root = new UEl('div');
+    const handle = ui.mount(root, {
+      me: 'p2', players: sim.players, isHost: false, meta, config: sim.state.cfg,
+      send: (a) => { sent.push(a); sim.act('p2', a); }, now: () => sim.now, sfx() {}, toast: (t) => toasts.push(t), components: comps,
+    });
+    const show = () => handle.update(sim.view('p2'), { focus: sim.focus(), paused: false });
+    show();
+    const lockBtns = () => uFind(root, (n) => n.tag === 'button' && uShown(n) && n.textContent.includes('鎖'));
+    const cover = () => uFind(root, (n) => n.cls.has('c-cover'))[0];
+
+    assert.ok(!uWords(root).includes('角色牌'), `no 角色牌 on the deal screen: ${uWords(root)}`);
+    assert.equal(cover().attrs['aria-label'], '㩒住睇詞語');
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔓 鎖定詞語卡'], 'exactly one lock button, worded for a word card');
+    const lead = uFind(root, (n) => n.cls.has('uc-lead'))[0].textContent;
+    assert.ok(!lead.includes('放手即刻冚返'), 'the peek instruction is said once (the card hint), not twice');
+
+    // peeking works while unlocked
+    uDispatch(cover(), 'pointerdown');
+    assert.ok(cover().cls.has('open'), 'the card opens while held');
+    uDispatch(cover(), 'pointerup');
+    assert.ok(!cover().cls.has('open'));
+
+    // lock it with the game's own button
+    uClick(lockBtns()[0]);
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔒 已鎖 — 㩒一下解鎖']);
+    assert.ok(cover().cls.has('locked'), 'the cover shows as locked');
+    // a press on the locked card is refused with the word-card message, and the card stays shut
+    uDispatch(cover(), 'pointerdown');
+    assert.ok(!cover().cls.has('open'), 'a locked card does not open');
+    assert.deepEqual(toasts, ['詞語卡鎖咗，要自己解鎖']);
+    // unlock, then 記住喇 locks it again and sends ready
+    uClick(lockBtns()[0]);
+    assert.ok(!cover().cls.has('locked'));
+    uClick(uFind(root, (n) => n.tag === 'button' && n.textContent.includes('記住喇'))[0]);
+    assert.deepEqual(sent, [{ type: 'ready' }]);
+    show();
+    assert.ok(cover().cls.has('locked'), '記住喇 locks the card');
+    assert.deepEqual(lockBtns().map((b) => b.textContent), ['🔒 已鎖 — 㩒一下解鎖']);
+
+    // later, 睇返我個詞: the same card, the same words
+    for (const p of sim.players) if (p.id !== 'p2') sim.act(p.id, { type: 'ready' });
+    assert.equal(sim.state.phase, 'speak');
+    show();
+    uClick(uFind(root, (n) => n.cls.has('uc-wordtoggle'))[0]);
+    assert.ok(uShown(cover()), 'the card is in the 睇返我個詞 panel');
+    assert.ok(!uWords(root).includes('角色牌'), 'no 角色牌 in the word panel either');
+    assert.equal(cover().attrs['aria-label'], '㩒住睇詞語');
+    handle.destroy();
+  });
+});
+
+// ============================================================
+// decisions 2026-10-04: D2 開始投票 by majority, D3 睇完 n / m, D4 absent seats, D6 secret own vote
+// ============================================================
+
+const ABSENT = (pid) => ({ type: '@absent', pid });
+const PRESENT = (pid) => ({ type: '@present', pid });
+
+test('undercover D2: dead seats cannot open the vote; a majority of the ALIVE seats is needed; the host and the timer still force it', () => {
+  const sim = mk(6, { seed: 401 });
+  rig(sim, 'CCCCCU');
+  roundOut(sim, 'p1');                                   // p1 is out, five alive
+  speakAll(sim);
+  assert.equal(phase(sim), 'discuss');
+  assert.deepEqual(view(sim, 'p2').discuss, { want: [], need: 3, total: 5 });
+  unchanged(sim, 'p1', { type: 'start-vote' });          // the eliminated seat has no say
+  assert.deepEqual(sim.legal('p1'), []);
+  assert.equal(E.autoAct(clone(sim.state), 'p1', {}), null);
+  assert.equal(E.blocking(sim.state, 'p2'), false, 'nobody is waited on during the talk');
+  sim.act('p2', { type: 'start-vote' });
+  sim.act('p3', { type: 'start-vote' });
+  assert.equal(phase(sim), 'discuss');
+  for (const p of sim.players) assert.deepEqual(view(sim, p.id).discuss, { want: ['p2', 'p3'], need: 3, total: 5 }, 'the same count on every phone');
+  sim.act('p6', { type: 'start-vote' });
+  assert.equal(phase(sim), 'vote');
+  // the host forces it: first 下一步 finishes the line, the second opens the vote
+  const h = mk(5, { seed: 402 });
+  rig(h, 'CCCCU');
+  ready(h);
+  speakAll(h);
+  h.act('p1', { type: 'start-vote' });
+  h.host({ type: ACT.CUE_DONE, id: h.cue().id });
+  assert.ok(h.host({ type: ACT.NEXT }));
+  assert.equal(phase(h), 'vote');
+  // a passed-round phone taps once for its seats; dead or unknown ones are ignored
+  const sh = mk(4, { seed: 403 });
+  rig(sh, 'CCCU');
+  ready(sh);
+  speakAll(sh);
+  assert.ok(sh.act('p1', { type: 'start-vote', seats: ['ghost', 9] }));
+  assert.equal(phase(sh), 'discuss', 'one of four is not a majority');
+  assert.ok(sh.act('p2', { type: 'start-vote', seats: ['p3'] }));
+  assert.equal(phase(sh), 'vote', 'three of four (p1, p2 and the p3 that shares p2’s phone)');
+});
+
+test('undercover D3: the result stays until every present seat has tapped 睇完 — no 20 s clock; the host can force it', () => {
+  const sim = mk(5, { seed: 410 });
+  rig(sim, 'CCCCU');
+  toVote(sim);
+  castVotes(sim, { p1: 'p2', p2: 'p1', p3: 'p1', p4: 'p1', p5: 'p2' });
+  assert.equal(phase(sim), 'elim');
+  assert.equal(sim.state.deadline, null, 'no clock moves the result on');
+  assert.equal(sim.advance(), false);
+  assert.deepEqual(view(sim, 'p3').elim.seen, { who: [], total: 5 });
+  assert.ok(sim.act('p1', { type: 'continue' }), 'the eliminated seat reads it too');
+  assert.ok(sim.act('p3', { type: 'continue' }));
+  unchanged(sim, 'p3', { type: 'continue' });
+  assert.deepEqual(sim.legal('p3'), []);
+  assert.equal(E.blocking(sim.state, 'p3'), false);
+  assert.equal(E.blocking(sim.state, 'p2'), true, 'a reader still to tap is waited on');
+  assert.deepEqual(view(sim, 'p2').elim.seen, { who: ['p1', 'p3'], total: 5 });
+  assert.equal(phase(sim), 'elim');
+  assert.ok(sim.act('p2', { type: 'continue', seats: ['p4'] }), 'a shared phone counts for both its seats');
+  assert.equal(phase(sim), 'elim');
+  assert.ok(sim.act('p5', { type: 'continue' }));
+  assert.equal(phase(sim), 'speak', 'the last reader moves everybody on');
+  assert.equal(sim.state.round, 2);
+  // the host's 下一步 forces it
+  toVote(sim);
+  castVotes(sim, { p2: 'p3', p3: 'p2', p4: 'p3', p5: 'p3' });
+  assert.equal(phase(sim), 'elim');
+  sim.act('p2', { type: 'continue' });
+  sim.host({ type: ACT.CUE_DONE, id: sim.cue().id });
+  assert.ok(sim.host({ type: ACT.NEXT }));
+  assert.notEqual(phase(sim), 'elim');
+});
+
+test('undercover D4: an absent seat skips its clue turn, does not vote, and is not waited on anywhere', () => {
+  const sim = mk(6, { seed: 420 });
+  rig(sim, 'CCCCCU');
+  for (const p of ['p1', 'p2', 'p3', 'p4', 'p5']) sim.act(p, { type: 'ready' });
+  assert.equal(phase(sim), 'deal');
+  assert.ok(sim.host(ABSENT('p6')));
+  assert.equal(phase(sim), 'speak', 'the deal was only waiting on the seat that left');
+  assert.deepEqual(view(sim, 'p1').absent, ['p6']);
+  assert.equal(view(sim, 'p1').deal, undefined);
+  // p6 is skipped when its turn comes; a speaker who leaves mid-turn is skipped at once
+  assert.equal(sim.state.order[sim.state.turn], 'p1');
+  assert.ok(sim.host(ABSENT('p1')));
+  assert.equal(sim.state.order[sim.state.turn], 'p2', 'the speaker who left is passed over');
+  assert.ok(!view(sim, 'p2').speak.spoke.includes('p1'), 'a turn skipped while away is not shown as spoken');
+  for (const p of ['p2', 'p3', 'p4']) sim.act(p, { type: 'done', at: view(sim, null).speak.id });
+  if (sim.state.order.indexOf('p6') < sim.state.order.indexOf('p5')) {
+    assert.ok(!view(sim, 'p2').speak.spoke.includes('p6'), 'nor one passed over when it came round');
+  }
+  assert.ok(sim.host(PRESENT('p1')) && !view(sim, 'p2').speak.spoke.includes('p1'), 'not even once the seat is back');
+  assert.ok(sim.host(ABSENT('p1')));
+  sim.act('p5', { type: 'done', at: view(sim, null).speak.id });
+  assert.deepEqual(sim.state.skipped, ['p1', 'p6'], 'both skipped turns are on record (mid-turn and when it came round)');
+  assert.equal(phase(sim), 'discuss', 'p6 never had to speak');
+  assert.deepEqual(view(sim, 'p2').discuss, { want: [], need: 3, total: 4 }, 'four alive at the table: three is a majority');
+  unchanged(sim, 'p1', { type: 'start-vote' });
+  assert.deepEqual(sim.legal('p1'), []);
+  sim.act('p2', { type: 'start-vote' });
+  sim.act('p3', { type: 'start-vote' });
+  assert.equal(phase(sim), 'discuss');
+  assert.ok(sim.host(ABSENT('p4')), 'a third seat leaves: three alive at the table, two is a majority');
+  assert.equal(phase(sim), 'vote');
+  assert.deepEqual(sim.state.voters, ['p2', 'p3', 'p5']);
+  assert.ok(sim.state.candidates.includes('p6'), 'an absent seat can still be voted out');
+  unchanged(sim, 'p4', { type: 'vote', target: 'p6' });
+  assert.deepEqual(sim.focus(), { pids: ['p2', 'p3', 'p5'] });
+  // back in time for the ballot: it votes too
+  assert.ok(sim.host(PRESENT('p4')));
+  assert.deepEqual(sim.state.voters, ['p2', 'p3', 'p4', 'p5']);
+  sim.act('p2', { type: 'vote', target: 'p6' });
+  sim.act('p3', { type: 'vote', target: 'p6' });
+  sim.act('p4', { type: 'vote', target: 'p6' });
+  assert.equal(phase(sim), 'vote', 'p5 has not voted');
+  assert.ok(sim.host(ABSENT('p5')));
+  assert.equal(phase(sim), 'elim', 'a voter who leaves closes the ballot it was holding up');
+  assert.equal(sim.state.elim.out, 'p6');
+  assert.deepEqual(Object.keys(sim.state.elim.ballots).sort(), ['p2', 'p3', 'p4'], 'no abstention is invented for the absent');
+  assert.equal(phase(sim), 'elim');
+  // the end: civilians win, the absent ones with their side
+  assert.equal(sim.state.elim.next, 'over');
+  goOn(sim);
+  assert.equal(phase(sim), 'over');
+  assert.ok(sim.result().winners.includes('p1') && sim.result().winners.includes('p5'), 'absent civilians win with their side');
+});
+
+test('undercover D4: an absent white card forfeits its guess; @absent is refused below two alive seats; junk is ignored', () => {
+  const sim = blankOut();
+  assert.equal(sim.state.elim.guess.pending, true);
+  assert.ok(sim.host(ABSENT('p6')));
+  assert.equal(sim.state.elim.guess.timeout, true, 'treated as no answer');
+  assert.equal(sim.state.elim.guess.correct, false);
+  // dead seats may always be marked away (only 睇完 is affected); alive ones only while two would stay
+  const small = mk(4, { seed: 430 });
+  rig(small, 'CCCU');
+  assert.ok(small.host(ABSENT('p1')));
+  assert.ok(small.host(ABSENT('p2')));
+  assert.equal(small.host(ABSENT('p3')), false, 'one alive seat at the table cannot play');
+  for (const junk of [null, undefined, 'ghost', 3, {}]) assert.equal(small.host(ABSENT(junk)), false);
+  assert.equal(small.host(PRESENT('p3')), false, 'a seat that is here cannot come back');
+  unchanged(small, 'p1', { type: 'ready' });
+});
+
+test('undercover D4: fuzz — random @absent / @present mid-game keep legalActions honest and every game finishing', () => {
+  for (const n of [4, 6, 9]) {
+    for (let seed = 1; seed <= 30; seed++) {
+      const sim = new Sim(game, { n, seed: 7000 + n * 100 + seed, config: fuzzConfig(n, seed), banks });
+      const rng = mulberry32(seed);
+      let k = 0;
+      sim.runRandom({
+        maxSteps: 40000,
+        onStep(s) {
+          if (++k % 7) return;
+          const pid = s.players[Math.floor(rng() * n)].id;
+          if (rng() < 0.6) s.host(ABSENT(pid)); else s.host(PRESENT(pid));
+          const st = s.state;
+          if (st.phase === 'over') return;
+          for (const p of s.players) {
+            if (st.absent[p.id]) {
+              assert.deepEqual(s.legal(p.id), [], 'an absent seat has nothing to do');
+              assert.equal(E.blocking(st, p.id), false, 'nobody waits on an absent seat');
+            }
+          }
+          const f = s.focus();
+          if (f) assert.ok(!f.pids.some((p) => st.absent[p]), 'focus never names an absent seat');
+          if (st.phase === 'speak') assert.ok(!st.absent[st.order[st.turn]], 'the turn never rests on an absent speaker');
+          if (st.phase === 'vote') assert.ok(st.voters.every((v) => !st.absent[v] || v in st.ballots), 'an absent voter is only kept for a ballot it cast');
+          // (the leak walker reads the config value guessWinner: 'blank' as a role, so those tables skip it)
+          if (k % 49 === 0 && st.cfg.guessWinner !== 'blank') checkViews(s);
+        },
+      });
+      assert.equal(sim.state.phase, 'over');
+    }
+  }
+});
+
+test('undercover ui D2/D3/D6: 開始投票 n / need, 睇完 n / m after a short lock, a secret own vote, 💤 for absent seats', async () => {
+  const saved = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
+  const queue = [];
+  globalThis.setTimeout = (f) => { queue.push(f); return queue.length; };
+  globalThis.clearTimeout = () => {};
+  try {
+    await withUndercoverUi(async (ui, comps) => {
+      let voteProps = null;
+      const VotePanel = (p) => { voteProps = p; const el = new UEl('div'); return { el, update(q) { voteProps = q; }, destroy() { el.remove(); } }; };
+      const sim = mk(5, { seed: 440 });
+      rig(sim, 'CCCCU');
+      sim.players = sim.players.map((p, i) => ({ ...p, deviceId: i >= 3 ? 'shared' : `own${i}` }));
+      const mount = (pid) => {
+        const root = new UEl('div');
+        const sent = [];
+        const handle = ui.mount(root, {
+          me: pid, players: sim.players, isHost: pid === 'p1', meta, config: sim.state.cfg,
+          send: (a) => sent.push(a), now: () => sim.now, sfx() {}, toast() {}, components: { ...comps, VotePanel },
+        });
+        const show = () => handle.update(sim.view(pid), { focus: sim.focus(), paused: false });
+        show();
+        return { root, sent, handle, show };
+      };
+      const btn = (root, text) => uFind(root, (n) => n.tag === 'button' && uShown(n) && n.textContent.includes(text))[0];
+      ready(sim);
+      speakAll(sim);
+      const a = mount('p2');
+      assert.ok(uWords(a.root).includes('想開始投票 0 / 3'), uWords(a.root));
+      uClick(btn(a.root, '開始投票'));
+      assert.deepEqual(a.sent, [{ type: 'start-vote' }], 'a phone of its own sends just its own tap');
+      assert.ok(!btn(a.root, '開始投票'), 'the button is gone once tapped');
+      sim.act('p2', a.sent[0]);
+      a.show();
+      assert.ok(uWords(a.root).includes('✓ 你想開始投票'));
+      assert.ok(uWords(a.root).includes('想開始投票 1 / 3'));
+      const b = mount('p4');
+      uClick(btn(b.root, '開始投票'));
+      assert.deepEqual(b.sent, [{ type: 'start-vote', seats: ['p5'] }], 'a shared phone taps for both its seats');
+      sim.act('p4', b.sent[0]);
+      assert.equal(phase(sim), 'vote');
+      a.show();
+      assert.equal(voteProps.secretChoice, true, 'D6: the ballot never prints whom you picked');
+      castVotes(sim, { p1: 'p5', p2: 'p5', p3: 'p5', p4: 'p5', p5: 'p1' });
+      assert.equal(phase(sim), 'elim');
+      a.show();
+      assert.ok(uWords(a.root).includes('睇完 0 / 5'), uWords(a.root));
+      const seenBtn = () => btn(a.root, '睇完 ✓');
+      assert.ok(seenBtn().disabled, 'locked for a moment so a stray tap cannot skip the result');
+      while (queue.length) queue.shift()();
+      assert.ok(!seenBtn().disabled);
+      uClick(seenBtn());
+      assert.deepEqual(a.sent.pop(), { type: 'continue' });
+      assert.ok(!seenBtn(), 'tapped: the button gives way to 「✓ 睇完 · 等緊其他人」');
+      assert.ok(uWords(a.root).includes('✓ 睇完 · 等緊其他人'));
+      sim.act('p2', { type: 'continue' });
+      a.show();
+      assert.ok(uWords(a.root).includes('睇完 1 / 5 · 等緊：玩家1、玩家3、玩家4、玩家5'), uWords(a.root));
+      a.handle.destroy();
+      b.handle.destroy();
+      // 💤: the seat strip and the absent phone itself
+      const c = mk(5, { seed: 441 });
+      rig(c, 'CCCCU');
+      c.host(ABSENT('p3'));
+      sim.state = c.state;
+      const d = mount('p3');
+      assert.ok(uWords(d.root).includes('房主當咗你唔喺度'), 'the absent phone is told why it has nothing to do');
+      assert.ok(!btn(d.root, '記住喇'));
+      const e = mount('p1');
+      const chip = uFind(e.root, (n) => n.cls.has('uc-seat') && n.textContent.includes('玩家3'))[0];
+      assert.ok(chip.textContent.includes('💤') && chip.cls.has('is-away'));
+      assert.ok(!uWords(e.root).includes('等緊：玩家1、玩家2、玩家3'), 'the deal does not wait on the absent seat');
+      d.handle.destroy();
+      e.handle.destroy();
+    });
+  } finally {
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+  }
 });

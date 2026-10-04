@@ -16,19 +16,20 @@
 //  - shake-to-roll reads the accelerometer. On iOS the permission prompt only
 //    appears from inside a tap, so requestMotionPermission() must be the FIRST
 //    await in the button handler — nothing may be awaited before it.
+//  - its permission lines say 「iPhone」 only on a real iPhone / iPad (shake.motionWords, #38).
 //  - shaking a locked cup says so, but not once per jolt (2.5 s throttle).
 //
 // Several cups can exist at once (shared phone). They share ONE detector, and
 // a shake only rolls the cup that is actually on screen.
 // ============================================================
 
-import { el, dieFace, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
-import { lsGet, lsSet } from '../../core/util.js?v=20261003171423';
+import { el, dieFace, labelDice, fromHTML, restartAnim, toast, uniqueId } from '../dom.js?v=1';
+import { sfx } from '../../core/sfx.js?v=1';
+import { lsGet, lsSet } from '../../core/util.js?v=1';
 import {
-  ShakeDetector, motionSupported, needsMotionPermission, requestMotionPermission,
-} from '../../core/shake.js?v=20261003171423';
-import { Cover } from './Cover.js?v=20261003171423';
+  ShakeDetector, motionSupported, needsMotionPermission, requestMotionPermission, motionWords,
+} from '../../core/shake.js?v=1';
+import { Cover } from './Cover.js?v=1';
 
 // The cup is drawn upside-down: wide rim at the bottom, flat base on top.
 function cupSvg() {
@@ -213,6 +214,7 @@ export function DiceCup(props = {}) {
       row.append(el('div', { class: 'die', text: '–' }));
       sum.textContent = '未搖過';
     }
+    labelDice(row, cover.isOpen());     // #37: a covered die never says 「N 點」 (the Cover re-labels as it opens)
   }
 
   function paintShake() {
@@ -225,10 +227,12 @@ export function DiceCup(props = {}) {
     shakeBtn.classList.remove('btn-locked');
     const warn = (text) => { shakeNote.textContent = text; shakeNote.classList.add('warn-text'); };
 
+    // #38: 「iPhone」 / Safari wording only on a real iPhone / iPad (needsMotionPermission is a feature test)
+    const words = motionWords();
     if (hub.perm === 'denied') {
-      shakeBtn.textContent = '📳 iPhone 拒絕咗動作權限';
+      shakeBtn.textContent = words.denied;
       shakeBtn.disabled = true;
-      warn('Safari 記住咗個「唔准」。喺網址列㩒「ㄅA」→ 網站設定 開返「動作與方向」，或者清除本站資料再 refresh。');
+      warn(words.deniedHow);
       return;
     }
     shakeBtn.disabled = false;
@@ -242,11 +246,11 @@ export function DiceCup(props = {}) {
       shakeBtn.textContent = '📳 開啟搖骰';
       if (hub.stalled) {
         warn(needsMotionPermission()
-          ? 'iPhone 未送緊動作數據 — 㩒一下重新批准。'
+          ? words.noData
           : '部機好似冇動作感應器 — 用上面粒掣搖啦。');
       } else {
         shakeNote.textContent = needsMotionPermission() && hub.perm !== 'granted'
-          ? '㩒一下，iPhone 會問你畀唔畀動作權限'
+          ? words.ask
           : '搖部機擲骰（而家熄咗）';
       }
     }

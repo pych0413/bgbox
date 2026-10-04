@@ -29,6 +29,80 @@ export function hintSpoken(hint) {
 
 export const sc = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0');
 
+// ---------- the card faces: a block of about the same length on every phone (anti-tell) ----------
+//
+// Only the 老實人's card carries the real explanation (17–67 characters, median 36). If every other card held one
+// short line, a glance at a neighbour's card — or at who is still reading heads-down — would name the 老實人. So the
+// 諗樣 and the 9upper get a block of useful text of a similar length, its length varying from round to round like a
+// real explanation's. The pick is stable per (round, seat), so a re-render never changes the card under a finger.
+
+/** A stable index in [0, n) for this round and seat (views carry no randomness). */
+function pickFor(key, n) {
+  let x = 7;
+  for (const c of String(key)) x = (x * 31 + c.codePointAt(0)) >>> 0;
+  return x % n;
+}
+
+/** The 諗樣's card: question ideas. */
+export function judgeDecoy(key) {
+  const pool = [
+    '你唔會見到解釋。諗定問咩：呢個詞點嚟？喺邊度會見到？有冇例子？',
+    '你張卡冇解釋。等陣追問細節：幾時開始有？邊個整出嚟？答得太順或者太虛都可疑。',
+    '冇解釋俾你睇。留意邊個講得太快、太含糊，或者同人講得太似，諗定兩三條問題。',
+    '你睇唔到真正解釋，同大家一齊望住電話。諗定一條佢哋未必答到嘅問題：點解叫呢個名？',
+  ];
+  return pool[pickFor(key, pool.length)];
+}
+
+/** The 9upper's card: bluffing prompts built from the PUBLIC term and hint only. */
+export function bluffDecoy(term, key) {
+  const t = `「${term?.text ?? '呢個詞'}」`;
+  const h = term?.hint;
+  const cat = h?.kind === 'one' ? `，記住佢同「${h.options[0]}」有關` : h?.kind === 'three' ? '，三個類別揀一個跟' : '';
+  const pool = [
+    `作一個似真嘅解釋：${t}係乜嘢、喺邊度會見到、點解叫呢個名${cat}。`,
+    `即場作！${t}點嚟、幾時開始有${cat}；加個人名或者地方，細節愈具體愈似真。`,
+    `${t}：諗定一個來源、一個例子同一個數字${cat}，講得似讀過咁。`,
+    `你要扮識${t}。諗定佢嘅用途同由來${cat}，唔好同其他人講得一模一樣。`,
+  ];
+  return pool[pickFor(key, pool.length)];
+}
+
+// ---------- the source of a term ----------
+
+const SITES = [
+  [/^(zh|zh-yue|yue|zh-classical)\.wikipedia\.org$/, '維基百科'],
+  [/\.wikipedia\.org$/, 'Wikipedia'],
+  [/^(zh|yue)\.wiktionary\.org$/, '維基詞典'],
+  [/\.wiktionary\.org$/, 'Wiktionary'],
+  [/\.wikisource\.org$/, '維基文庫'],
+  [/^(www\.)?moedict\.tw$/, '萌典'],
+  [/^dict\.idioms\.moe\.edu\.tw$/, '教育部成語典'],
+  [/^(www\.)?words\.hk$/, '粵典'],
+];
+
+/**
+ * A readable label for a term's source (the bank keeps URLs, many percent-encoded):
+ *   https://zh.wikipedia.org/wiki/%E6%B7%B1%E6%B0%B4%E5%9F%97 → { text: '維基百科：深水埗', href: <the url> }
+ *   https://en.wikipedia.org/wiki/Blazar                       → { text: 'Wikipedia：Blazar', … }
+ *   any other site → its host name; a non-URL source (the emergency cards) → its own text, no link.
+ */
+export function srcLabel(src) {
+  const raw = String(src ?? '').trim();
+  if (!/^https?:\/\//i.test(raw)) return { text: raw, href: null };
+  let u;
+  try { u = new URL(raw); } catch { return { text: raw, href: null }; }
+  const host = u.hostname.toLowerCase();
+  const site = SITES.find(([re]) => re.test(host))?.[1];
+  if (!site) return { text: host.replace(/^www\./, ''), href: u.href };
+  let path = u.pathname.replace(/^\/(wiki|zidin|zi)\//, '/').replace(/^\/+|\/+$/g, '');
+  try { path = decodeURIComponent(path); } catch { /* keep it encoded */ }
+  // a script page (…/idiomView.jsp?ID=…) has no readable title: the site's name says enough
+  const title = /\.(jsp|php|aspx?|html?)$/i.test(path) ? '' : path.replace(/^['~:!]/, '').replace(/_/g, ' ').trim();
+  const short = Array.from(title).length > 32 ? `${Array.from(title).slice(0, 30).join('')}…` : title;   // the link keeps the rest
+  return { text: short ? `${site}：${short}` : site, href: u.href };
+}
+
 // ---------- narration cues ----------
 
 export function cueLevel(n, judge) {
@@ -104,7 +178,7 @@ export function hintFor(c) {
     case 'term':
       if (c.role === 'judge') return '大家睇吓題目：有人已經識就㩒「換題」，冇人識就㩒「開始睇卡」。';
       if (c.role === 'table') return '大家睇題目；有人已經識就換題。';
-      return '睇吓題目。你已經識呢個詞？即刻出聲，諗樣會換題。';
+      return '睇吓題目。已經識呢個詞？出聲或者㩒「我識呢條」，諗樣決定換唔換。';
     case 'read':
       if (c.role === 'table') return c.pass ? '部手機逐個傳，每人睇卡時間一樣。' : '大家望住自己部電話睇卡。';
       if (c.role === 'judge') {
@@ -147,6 +221,9 @@ function explainHint(c, honest) {
       ? '輪到你：照張卡講，唔記得可以話「張卡冇寫」。講完㩒「我講完」。'
       : '輪到你：自信咁作一個解釋，講完㩒「我講完」。';
   }
+  if (c.skippedMe) {
+    return free || system ? '你俾人跳過咗：其他人講完會再輪到你。' : '你俾人跳過咗：諗樣可以叫返你，或者最尾再輪到你。';
+  }
   if (free && !c.spokenMe) {
     return honest
       ? '自己傾好次序先講：照張卡講，講完㩒「我講完」。'
@@ -168,6 +245,8 @@ export function revealLines(rv, nameOf) {
   const H = nameOf(rv.honest);
   const P = nameOf(rv.pick);
   const out = [`老實人係 ${H} 🙋`];
+  // the rulebook turns every card face up: name the 9uppers too
+  if (rv.bluffers?.length) out.push(`🤥 9upper：${rv.bluffers.map(nameOf).join('、')}`);
   out.push(rv.correct
     ? `✅ ${J} 揀中老實人：${J} 同 ${H} 各 +${rv.d}`
     : `❌ ${J} 揀咗 ${P}，但 ${P} 係 9upper：${P} 呃到諗樣 +${rv.d}，${J} 同 ${H} 冇分`);
@@ -223,10 +302,36 @@ export function roundBlock(h, nameOf, total) {
     out.push(c.hit === 'honest' ? `　🛑 收皮啦 → ${t}：係老實人 → ${J} −3` : `　🛑 收皮啦 → ${t}：係 9upper → ${t} −1、${J} +1`);
   }
   out.push(`　真正解釋：${h.explain}`);
-  if (h.src) out.push(`　來源：${h.src}`);
+  if (h.src) out.push(`　來源：${srcLabel(h.src).text}`);
   const clipped = (h.changes ?? []).filter((c) => c.delta !== c.nominal).map((c) => nameOf(c.pid));
   if (clipped.length) out.push(`　（分數唔會低過 0：${clipped.join('、')} 實際扣少咗）`);
   return out;
+}
+
+// ---------- 呢輪作廢 / 💤 唔喺度 (public) ----------
+
+/** Above a fresh deal: why it is a fresh deal. `redo` = { how, judge, kept }; `judgeNow` = this deal's 諗樣. */
+export function redoLine(redo, nameOf, judgeNow) {
+  if (!redo) return '';
+  const J = nameOf(redo.judge);
+  const N = nameOf(judgeNow);
+  switch (redo.how) {
+    case 'absent': return `💤 ${J} 唔喺度：呢鋪由 ${N} 做諗樣`;
+    case 'stuck': return redo.kept ? `🗑️ 上一鋪作廢：${J} 遲啲先做諗樣，呢鋪由 ${N} 做` : `🗑️ 上一鋪作廢：呢鋪由 ${N} 做諗樣`;
+    default: return '🗑️ 上一鋪作廢：新題目、重新派身份';
+  }
+}
+
+/** One results line per round thrown away (`x` = a state.voids entry). */
+export function voidLine(x, nameOf) {
+  const J = nameOf(x.judge);
+  const t = x.term ? `（「${x.term}」）` : '';
+  switch (x.how) {
+    case 'skip': return `💤 第 ${x.n} 輪：${J} 唔喺度，冇做諗樣`;
+    case 'absent': return `💤 第 ${x.n} 輪作廢${t}：${J} 唔喺度，換人做諗樣`;
+    case 'stuck': return `🗑️ 第 ${x.n} 輪作廢${t}：${J} ${x.kept ? '遲啲先做諗樣' : '今個圈冇做到諗樣'}`;
+    default: return `🗑️ 第 ${x.n} 輪作廢${t}，重新派過（諗樣 ${J}）`;
+  }
 }
 
 export function summaryLine(winners, score, nameOf) {

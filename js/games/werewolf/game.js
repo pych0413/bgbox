@@ -75,8 +75,12 @@ const DEFAULTS = Object.freeze({
   moderator: 'app', board: 'auto', winRule: 'auto', witchSelfSave: 'auto',
   guardStack: 'die', idiotIs: 'god', wolfVote: 'plurality', nightOrder: 'official', pace: 'normal',
   lastWords: 'night1', hunterOrder: 'words', speakOrder: 'dead', selfExplode: 'on', openCard: 'auto',
-  spectate: false, speakSecs: 60, wordsSecs: 45, voteSecs: 20,
+  spectate: false, speakSecs: 60, wordsSecs: 60, voteSecs: 20,   // 遺言 60 s: the research's (and the official) default
 });
+
+/** Host actions for a seat that has stopped responding (engine-kit ACT.ABSENT / ACT.PRESENT; literals until the core has them). */
+const ABSENT = ACT.ABSENT ?? '@absent';
+const PRESENT = ACT.PRESENT ?? '@present';
 
 // ---------- meta & rules ----------
 
@@ -392,6 +396,8 @@ const bySeat = (s) => (a, b) => seatIx(s, a) - seatIx(s, b);
 const paceOf = (s) => PACE[s.cfg.pace] ?? PACE.normal;
 const selfSaveAllowed = (s) => s.cfg.save === 'always' || (s.cfg.save === 'first' && s.nt.n === 1);
 const revealRole = (s, pid) => (s.cfg.open ? S.roleName(s.role[pid]) : null);
+/** The host marked this seat 💤 absent: nothing waits on it (deal, votes, speech turns) until it is marked present. */
+const isAbsent = (s, pid) => !!s.absent?.[pid];
 
 // ---------- setup ----------
 
@@ -437,7 +443,9 @@ function setup({ players, config: cfg, rng, hostPid }) {
     nt: null,
     dirCw: rng() < 0.5, anchor: null,
     quiet: 0, roundDeaths: 0,
-    win: null, winWhy: null, outcome: null,
+    lastNight: null,                         // public: { n, deaths } of the last dawn (kept on the day screens)
+    absent: {},                              // public: seats the host marked 💤 (not waited on, no vote, no speech turn)
+    win: null, winWhy: null, winBoth: false, outcome: null,
   };
   return s;
 }
@@ -463,7 +471,8 @@ function checkWin(s) {
     wolvesWin = godsGone || villGone;
     why = godsGone ? 'gods' : 'villagers';
   }
-  if (wolvesWin) { s.winWhy = why; return 'wolves'; }   // wolves first when both sides qualify
+  // wolves first when both sides qualify (狼刀優先); winBoth = the last wolf went down with them (the results explain it)
+  if (wolvesWin) { s.winWhy = why; s.winBoth = w === 0; return 'wolves'; }
   if (w === 0) { s.winWhy = 'wolves-dead'; return 'good'; }
   return null;
 }
@@ -488,6 +497,7 @@ function cueText(s) {
       return S.cueSpeech({
         who: spk(s, c.pid), idx: c.idx, total: c.total, pk: c.pk, secs: c.secs, dirUp: c.dirUp,
         tied: (c.tied ?? []).map((p) => spk(s, p)),
+        next: c.pk ? [] : s.speechOrder.slice(c.idx + 1, c.idx + 3).map((p) => spk(s, p)),
       });
     case 'vote': return S.cueVote({ round: c.round, tied: (c.tied ?? []).map((p) => spk(s, p)) });
     case 'say':
@@ -514,7 +524,8 @@ function prepare(s, step) {
     const alive = aliveOf(s);
     step.votes = {};
     step.cands = step.round === 1 ? alive : (step.tied ?? []).slice();
-    step.voters = alive.filter((p) => !s.flipped[p] && !(step.round === 2 && (step.tied ?? []).includes(p)));
+    // an absent seat stays a candidate (it is still in the game) but casts no ballot and is never waited on
+    step.voters = alive.filter((p) => !s.flipped[p] && !isAbsent(s, p) && !(step.round === 2 && (step.tied ?? []).includes(p)));
   }
   if (step.k === 'final') step.sel = {};
 }
@@ -612,6 +623,7 @@ function next(s, ctx) {
     // Once the game is decided only the announcements still play (the dawn list, the shot, the vote
     // result); every death trigger, speech and vote behind them is dropped — the win check came first.
     if (s.win && item.k !== 'dawn' && item.k !== 'say') continue;
+    if ((item.k === 'speech' || item.k === 'words') && isAbsent(s, item.pid)) continue;   // 💤: nobody to hold the floor
     if (item.k === 'plan') {
       if (item.what === 'night') return startNight(s, ctx);
       if (item.what === 'discuss') planDiscuss(s, ctx);
@@ -729,20 +741,43 @@ function panel(s, pid) {
     case 'witch': {
       if (!isMe('witch')) { decoy(S.PANEL.decoy); break; }
       if (!alive(pid)) { decoy(S.PANEL.dead); break; }
-      if (!s.potion.save && !s.potion.poison) { decoy([S.PANEL.witch.empty, S.PANEL.decoy[1]]); break; }
+      const W = S.PANEL.witch;
+      const did = c.stage === 'tail' ? s.nt.rec.witch : null;   // commit() has settled her window
+      if (did) {
+        // the closing line says what she actually did — 「今晚你冇用藥」 when a lapsed window spent nothing
+        P.real = true;
+        const who = did.target ? nm(s, did.target) : '';
+        P.info = [did.act === 'save' ? W.didSave(who) : did.act === 'poison' ? W.didPoison(who) : W.didNone, W.potions(s.potion.save, s.potion.poison)];
+        P.skip = W.skip;
+        break;
+      }
+      if (!s.potion.save && !s.potion.poison) { decoy([W.empty, S.PANEL.decoy[1]]); break; }
       P.real = true;
       const atk = s.nt.attacked;
       const saveOk = s.potion.save && !!atk && (atk !== pid || selfSaveAllowed(s));
       const lines = [];
       if (s.potion.save) {
-        lines.push(atk ? S.PANEL.witch.victim(nm(s, atk), atk === pid) : S.PANEL.witch.victimNone);
-        if (atk === pid && !selfSaveAllowed(s)) lines.push(S.PANEL.witch.noSelfSave);
+        lines.push(atk ? W.victim(nm(s, atk), atk === pid) : W.victimNone);
+        if (atk === pid && !selfSaveAllowed(s)) lines.push(W.noSelfSave);
         if (atk) P.tags[atk] = '💊';
-      } else lines.push(S.PANEL.witch.victimHidden);
-      lines.push(S.PANEL.witch.potions(s.potion.save, s.potion.poison));
+      } else lines.push(W.victimHidden);
+      // Her pick names the potion it spends, on her button and on a line of her own panel (a tentative pick is
+      // spent when the window closes, so the line also says how to take it back). Nobody else's panel changes.
+      // The line takes the potions line's PLACE, so her panel keeps its height when she taps: a panel that grew a
+      // line on a tap would show across a 靜音 table which phone tapped for real.
+      const pk = sel?.pick ?? null;
+      let status = W.potions(s.potion.save, s.potion.poison);
+      if (pk) {
+        const isSave = saveOk && pk === atk;
+        const who = nm(s, pk);
+        P.ok = isSave ? W.okSave(who) : W.okPoison(who);
+        if (sel.lock) status = isSave ? W.lockedSave(who) : W.lockedPoison(who);
+        else status = isSave ? W.pickedSave(who) : W.pickedPoison(who);
+      } else if (sel?.lock) status = W.lockedNone;
+      lines.push(status);
       P.info = lines;
-      P.hint = S.PANEL.witch.hint;
-      P.skip = S.PANEL.witch.skip;
+      P.hint = saveOk && s.potion.poison ? W.hint : saveOk ? W.hintSave : s.potion.poison ? W.hintPoison : W.hintNone;
+      P.skip = W.skip;
       P.on = (t) => open && alive(t) && ((saveOk && t === atk) || (s.potion.poison && t !== pid && !(saveOk && t === atk)));
       break;
     }
@@ -773,18 +808,13 @@ function panel(s, pid) {
     }
 
     case 'final': {
+      // By day, so one panel for every dead player — a hunter, a poisoned hunter or anybody else — word for word.
+      // Only a hunter who can shoot has an effect (resolveFinal reads c.canShoot); his 💡 says which he is.
       if (pid !== c.pid) break;
-      const hunter = isMe('hunter');
-      if (c.canShoot) {
-        P.real = true;
-        P.info = S.PANEL.final.hunter.slice();
-        P.skip = S.PANEL.final.skip;
-        P.on = (t) => open && alive(t);
-      } else {
-        P.info = (hunter ? S.PANEL.final.poisoned : S.PANEL.final.other).slice();
-        P.skip = S.PANEL.final.skipDecoy;
-        P.on = (t) => open && alive(t);
-      }
+      P.real = c.canShoot;
+      P.info = S.PANEL.final.info.slice();
+      P.skip = S.PANEL.final.skip;
+      P.on = (t) => open && alive(t);
       P.hint = '';
       break;
     }
@@ -792,6 +822,9 @@ function panel(s, pid) {
     default: break;
   }
   if (sel?.lock && !P.retarget) P.on = () => false;
+  // Every seat, during a step's opening line: the chips are grey until the narrator is done, and the screen says so
+  // (a tap in the cue used to vanish without a word — playtest p3). Same words on every phone.
+  if (c.stage === 'cue' && step !== 'begin') P.hint = S.PANEL.cueWait;
   return P;
 }
 
@@ -937,6 +970,7 @@ function resolveNight(s, ctx) {
   s.d = s.n;
   s.dirCw = !s.dirCw;
   s.anchor = dead.length === 1 ? dead[0] : null;
+  s.lastNight = { n: s.n, deaths: dead.slice() };
   s.q = [];
   const steps = applyDeaths(s, dead.map((pid) => ({ pid, how: how.get(pid), time: 'night', wordsOk })));
   s.q = [{ k: 'dawn', deaths: dead }, ...steps, { k: 'plan', what: 'discuss' }];
@@ -960,7 +994,8 @@ function applyDeaths(s, list) {
 
 /** Order per research default: 遺言 then the shot; config can flip it. */
 function deathSteps(s, d) {
-  const words = d.wordsOk ? { k: 'words', pid: d.pid, secs: d.wordsSecs ?? s.cfg.wordsSecs } : null;
+  // an absent seat (💤) has nobody to give its 遺言; its final-action window stays (same length for everybody)
+  const words = d.wordsOk && !isAbsent(s, d.pid) ? { k: 'words', pid: d.pid, secs: d.wordsSecs ?? s.cfg.wordsSecs } : null;
   // With a hunter on the board EVERY dead player gets the same final-action window (decoy for everyone
   // who cannot shoot) so nobody can tell the hunter from how long the table waits.
   const fin = hasRole(s, 'hunter')
@@ -1009,7 +1044,8 @@ function speakingOrder(s, ctx) {
 }
 
 function planDiscuss(s, ctx) {
-  const order = speakingOrder(s, ctx);
+  // an absent seat keeps its place for the start of the order (the rotation does not change) but has no turn
+  const order = speakingOrder(s, ctx).filter((p) => !isAbsent(s, p));
   s.speechOrder = order.slice();
   const steps = order.map((pid, idx) => ({
     k: 'speech', pid, idx, total: order.length, pk: false, secs: s.cfg.speakSecs, dirUp: s.dirCw,
@@ -1054,13 +1090,16 @@ function resolveVote(s, ctx) {
   } else if (top.length > 1) {
     if (c.round === 1) {
       const alive = aliveOf(s);
-      const voters2 = alive.filter((p) => !s.flipped[p] && !top.includes(p));
+      const voters2 = alive.filter((p) => !s.flipped[p] && !isAbsent(s, p) && !top.includes(p));
       if (voters2.length) {
         say.outcome = 'tie';
         say.tied = top.slice();
         steps.push(say);
-        top.forEach((pid, idx) => steps.push({
-          k: 'speech', pid, idx, total: top.length, pk: true, tied: top.slice(), secs: s.cfg.speakSecs, dirUp: true,
+        // a 💤 absent tied seat stays a PK candidate but has no PK speech: number the speeches over the present ones,
+        // so the first speaker still gets the 「…平票，要 PK 發言」 opening and the last one is n/n
+        const pkSpeakers = top.filter((p) => !isAbsent(s, p));
+        pkSpeakers.forEach((pid, idx) => steps.push({
+          k: 'speech', pid, idx, total: pkSpeakers.length, pk: true, tied: top.slice(), secs: s.cfg.speakSecs, dirUp: true,
         }));
         steps.push({ k: 'vote', round: 2, tied: top.slice() });
       } else {
@@ -1119,16 +1158,77 @@ function hostAct(s, a, ctx) {
     return cueFinished(s, ctx);
   }
   if (a.type === ACT.NEXT) return skip(s, ctx);
+  if (a.type === ABSENT) return absentAct(s, a.pid, ctx);
+  if (a.type === PRESENT) return presentAct(s, a.pid);
   // ACT.VOID_ROUND (呢鋪唔計) is deliberately unsupported: a werewolf game has no round that can be undone
   // (deaths and potions are permanent, and replaying a vote would let the host overturn an exile). A dead
   // phone is handled by the clocks, autoAct and 下一步 instead. ACT.AUTO is resolved by the session.
   return s;
 }
 
+/** The deal ends when every PRESENT seat has looked (an absent seat reads its card whenever it is back). */
+const dealDone = (s) => s.pl.every((p) => s.ready[p] || isAbsent(s, p));
+
 function readyAct(s, pid, ctx) {
   if (s.phase !== 'deal' || s.ready[pid]) return s;
   s.ready[pid] = true;
-  if (s.pl.every((p) => s.ready[p])) return startNight(s, ctx);
+  if (dealDone(s)) return startNight(s, ctx);
+  return s;
+}
+
+/**
+ * 💤 The host marks a seat absent (a friend left the table with the phone still connected, D4). For the rest of this game
+ * nothing waits on it: the deal does not wait for its 睇完喇, it casts no ballot (a ballot already cast before it left still
+ * counts), and its speech / 遺言 turns are dropped. It stays a player in every other way: it can be killed, voted out and
+ * counted for the win, and every night step runs on its fixed clock exactly as before (no step ever waited on anyone,
+ * so absence changes nothing a sleeping table could notice). Public: every view marks the seat 💤.
+ */
+function absentAct(s, pid, ctx) {
+  if (s.phase === 'over' || !isStr(pid) || !s.pl.includes(pid) || isAbsent(s, pid)) return s;
+  (s.absent ||= {})[pid] = true;
+  if (s.phase === 'deal') return dealDone(s) ? startNight(s, ctx) : s;
+  dropTurns(s, pid);
+  const c = s.cur;
+  if (c && (c.k === 'speech' || c.k === 'words') && c.pid === pid) return next(s, ctx);   // its own turn: move on now
+  if (c && c.k === 'vote' && c.voters.includes(pid) && !(pid in c.votes)) {
+    c.voters = c.voters.filter((p) => p !== pid);
+    if (c.stage === 'run' && c.voters.every((p) => p in c.votes)) return finishRun(s, ctx);
+  }
+  return s;
+}
+
+/** Drop the absent seat's queued speech and 遺言 turns, and renumber the turns that are left (「發言 3/5」, 最後一位). */
+function dropTurns(s, pid) {
+  const c = s.cur;
+  const turn = (x) => (x.k === 'speech' || x.k === 'words') && x.pid === pid;
+  const hadDay = s.q.some((x) => x.k === 'speech' && !x.pk && x.pid === pid) || (c?.k === 'speech' && !c.pk && c.pid === pid);
+  s.q = s.q.filter((x) => !turn(x));
+  if (hadDay) {
+    // only a seat that has not spoken yet leaves the order (the list on screen keeps everyone who already spoke)
+    s.speechOrder = s.speechOrder.filter((p) => p !== pid);
+    const total = s.speechOrder.length;
+    for (const x of s.q) if (x.k === 'speech' && !x.pk) { x.idx = s.speechOrder.indexOf(x.pid); x.total = total; }
+    if (c?.k === 'speech' && !c.pk && c.pid !== pid) { c.idx = s.speechOrder.indexOf(c.pid); c.total = total; }
+  }
+  // PK speeches: the next one takes the absent seat's number (the first still gets the 「…平票，要 PK 發言」 opening)
+  const pks = s.q.filter((x) => x.k === 'speech' && x.pk);
+  const inPk = c?.k === 'speech' && c.pk ? c : null;
+  if (pks.length || inPk) {
+    const base = !inPk ? 0 : inPk.pid === pid ? inPk.idx : inPk.idx + 1;
+    pks.forEach((x, i) => { x.idx = base + i; x.total = base + pks.length; });
+    if (inPk && inPk.pid !== pid) inPk.total = base + pks.length;
+  }
+}
+
+/** The seat is back: it is waited on again from now on, and joins a vote that is still open if it may vote in it. */
+function presentAct(s, pid) {
+  if (s.phase === 'over' || !isStr(pid) || !isAbsent(s, pid)) return s;
+  delete s.absent[pid];
+  const c = s.cur;
+  if (c && c.k === 'vote' && !c.voters.includes(pid) && s.alive[pid] && !s.flipped[pid]
+    && !(c.round === 2 && (c.tied ?? []).includes(pid))) {
+    c.voters = s.pl.filter((p) => c.voters.includes(p) || p === pid);
+  }
   return s;
 }
 
@@ -1175,14 +1275,18 @@ function cue(state) {
   if (!c || c.stage === 'run') return null;
   const text = cueText(s);
   if (!text) return null;
-  return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs: S.cueMinMs(text) };
+  // the two public facts the table reads off the screen get a floor: the dawn result, and the 票型 (longer per ballot)
+  const minMs = c.k === 'dawn' ? Math.max(S.DAWN_MIN_MS, S.cueMinMs(text))
+    : c.k === 'say' && c.kind === 'tally' ? Math.max(S.tallyMinMs(c.votes.length), S.cueMinMs(text))
+      : S.cueMinMs(text);
+  return { id: `${s.gid}:${s.seq}:${c.stage}`, text, minMs };
 }
 
 function focus(state) {
   const s = state;
   switch (s.phase) {
     case 'deal': {
-      const pids = s.pl.filter((p) => !s.ready[p]);
+      const pids = s.pl.filter((p) => !s.ready[p] && !isAbsent(s, p));
       return pids.length ? { pids } : null;
     }
     case 'night': {
@@ -1236,11 +1340,12 @@ function autoAct(state, pid) {
  *   vote, no clock          a voter who has not voted
  * Never: a night window or the final-action window (fixed clocks; every seat's decoy tap is optional, and
  * flagging the holders of the called role would point at them), a step with a running deadline, a narration
- * line, an announcement, a self-explode chance, or the human moderator (the game never needs his tap).
+ * line, an announcement, a self-explode chance, the human moderator (the game never needs his tap), or a seat
+ * the host marked 💤 absent.
  */
 function blocking(state, pid) {
   const s = state;
-  if (!s || s.phase === 'over' || !isStr(pid) || !s.pl.includes(pid)) return false;
+  if (!s || s.phase === 'over' || !isStr(pid) || !s.pl.includes(pid) || isAbsent(s, pid)) return false;
   const c = s.cur;
   switch (s.phase) {
     case 'deal': return !s.ready[pid];
@@ -1323,13 +1428,16 @@ function rosterOf(s, seat) {
   const all = seesAllRoles(s, seat);
   return s.pl.map((pid) => {
     const r = { pid, no: seatNo(s, pid), alive: !!s.alive[pid], flipped: !!s.flipped[pid] };
+    if (isAbsent(s, pid)) r.absent = true;   // public: the host marked it 💤
     if (!s.alive[pid]) {
       // Only causes that happened in public: a wolf kill and a poisoning stay secret until the end.
       const how = s.died[pid]?.how;
       r.how = s.phase === 'over' || how === 'exile' || how === 'shot' || how === 'explode' ? (how ?? null) : null;
       r.at = s.died[pid] ? { n: s.died[pid].n, time: s.died[pid].time } : null;
     }
-    if (all || pid === seat || (s.cfg.open && !s.alive[pid])) r.role = s.role[pid];
+    // Only roles that are public to this seat: never the viewer's own (it is in `my`, and a role on your own chip is
+    // readable from the next seat all day — playtest #2).
+    if (all || (s.cfg.open && !s.alive[pid])) r.role = s.role[pid];
     return r;
   });
 }
@@ -1361,6 +1469,7 @@ function myBlock(s, pid) {
     role, alive: !!s.alive[pid], flipped: !!s.flipped[pid],
     ready: !!s.ready[pid], notes: JSON.parse(JSON.stringify(s.notes[pid] ?? [])),
   };
+  if (isAbsent(s, pid)) my.absent = true;
   if (role === 'werewolf' && s.matesKnown) my.mates = wolvesOf(s).filter((w) => w !== pid);
   if (role === 'witch') my.potion = { save: s.potion.save, poison: s.potion.poison };
   my.canVote = !!s.alive[pid] && !s.flipped[pid];
@@ -1390,6 +1499,8 @@ function godBlock(s) {
   return g;
 }
 
+const DAY_PHASES = new Set(['dawn', 'words', 'final', 'say', 'speech', 'vote']);
+
 function view(state, pid) {
   const s = state;
   const seat = isStr(pid) && s.order.includes(pid) ? pid : null;
@@ -1415,19 +1526,40 @@ function view(state, pid) {
     stage: c ? c.stage : null,
   };
   if (s.cfg.preset) v.opts.reasonId = s.cfg.preset;
+  // Public records the day screens keep (the dawn card and the tally are only up for a few seconds):
+  // who left last night (seat order, no cause) and every vote so far with its 票型.
+  if (s.lastNight && s.lastNight.n === s.d && DAY_PHASES.has(s.phase)) v.lastNight = { n: s.lastNight.n, deaths: s.lastNight.deaths.slice() };
+  v.voteLog = s.rec.filter((r) => r.k === 'vote').map((r) => ({
+    d: r.d, round: r.round, votes: r.votes.map((x) => ({ by: x.by, to: x.to })), outcome: r.outcome, pid: r.pid, tied: r.tied.slice(),
+  }));
+  // …and the same 票型 as the shell's public fold (RecentFold under the game, closed until tapped), newest first, by day
+  if (v.voteLog.length && DAY_PHASES.has(s.phase)) {
+    const who = (p) => nm(s, p);
+    v.recent = [{
+      id: 'ww-votes',
+      title: S.UI.day.voteLogHead,
+      entries: v.voteLog.slice().reverse().map((r) => ({
+        title: S.UI.day.voteLogRound(r.d, r.round),
+        lines: [...S.voteParts(r, who), `➜ ${S.voteOutcome(r, who)}`],
+      })),
+    }];
+  }
   if (s.deadline != null) { v.deadline = s.deadline; if (s.timerLabel) v.timerLabel = s.timerLabel; }
   if (s.span) v.span = s.span;
 
   if (me) {
     v.my = myBlock(s, me);
     v.roleId = s.role[me];   // the seat's own card (the shell's 💡 sheet reads it); never anybody else's
+    // …and the 💡 role box says THIS table's rule (屠邊 or 屠城), the same words for every seat holding that card
+    v.hintRoleText = S.roleHintText(s.role[me], { hasWitch: hasRole(s, 'witch'), hasGuard: hasRole(s, 'guard'), win: s.cfg.win });
   }
   if (isMod) v.god = godBlock(s);
   if (seesAllRoles(s, seat) && s.phase !== 'over') v.all = Object.fromEntries(s.pl.map((p) => [p, s.role[p]]));
 
   switch (s.phase) {
     case 'deal':
-      v.ready = { done: s.pl.filter((p) => s.ready[p]).length, total: s.pl.length };
+      // counts the seats the night waits for (an absent one is not)
+      v.ready = { done: s.pl.filter((p) => s.ready[p] && !isAbsent(s, p)).length, total: s.pl.filter((p) => !isAbsent(s, p)).length };
       break;
     case 'night':
       v.step = { k: c.step, stage: c.stage, ix: s.nt.ix, total: s.nt.steps.length };
@@ -1514,10 +1646,9 @@ function hintFor(s, seat, v) {
   }
   // the day: the moderator and a dead seat have their own line, except for a dead player's own turn
   if (v.isMod) return H.day.mod;
-  if (s.phase === 'final' && me === c.pid) {
-    if (c.canShoot) return H.day.final.hunter;
-    return s.role[me] === 'hunter' ? H.day.final.poisoned : H.day.final.other;
-  }
+  // By day the line never depends on the seat's card: the sheet shows it in plain text on a face-up phone (only its
+  // role box is covered), so a wolf's or a hunter's own line would be readable from the next seat.
+  if (s.phase === 'final' && me === c.pid) return H.day.final.me;
   if (s.phase === 'words' && me === c.pid) return H.day.words.me;
   if (me && !s.alive[me]) return H.day.dead;
   switch (s.phase) {
@@ -1533,7 +1664,7 @@ function hintFor(s, seat, v) {
     case 'vote':
       if (!me) return H.day.watchVote;
       if (s.flipped[me]) return H.day.cannotFlip;
-      if (!c.voters.includes(me)) return H.day.cannotPk;
+      if (!c.voters.includes(me)) return isAbsent(s, me) ? H.day.absent : H.day.cannotPk;
       return me in c.votes ? H.day.voted : H.day.vote;
     default: return '';
   }
@@ -1550,7 +1681,7 @@ function buildResult(s) {
   // Sections (the results screen folds them): the why + a pointer to the recap stay open on top; then the roles;
   // then one section per night and per day. A heading is a plain string 「── 標題 ──」, so a renderer without
   // sections still shows a readable list.
-  const lines = [...S.explainLines(win, s.winWhy, s.cfg.win), S.RECAP.intro];
+  const lines = [...S.explainLines(win, s.winWhy, s.cfg.win, { both: win === 'wolves' && !!s.winBoth }), S.RECAP.intro];
 
   lines.push(S.section(S.RECAP.roles));
   for (const pid of s.pl) {

@@ -29,7 +29,8 @@
 // Only api.components (Cover, Timer, Canvas) and plain DOM are used.
 // ============================================================
 
-import * as S from './script.js?v=20261003171423';
+import * as S from './script.js?v=1';
+import { maskAnswer } from './judge.js?v=1';
 
 function h(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -204,19 +205,25 @@ export function mount(root, api) {
     };
   }
 
-  /** A calm "自動下一輪 · 6 秒" for the reveal and the standings (the shared Timer would pulse red and beep at zero). */
+  /**
+   * A calm "自動下一輪 · 6 秒" for the reveal, the standings and the waiting phones while the drawer picks (the shared
+   * Timer would pulse red and beep at zero). `label` is a string or a function of the seconds left.
+   */
   function makeCountdown(label = '自動下一輪') {
     const el = h('div', { class: 'dg-count' });
     let deadline = null;
     let paused = false;
     let iv = null;
+    let fmt = label;
     const paint = () => {
       if (deadline == null || paused) return;
-      el.textContent = `${label} · ${Math.max(0, Math.ceil((deadline - api.now()) / 1000))} 秒`;
+      const n = Math.max(0, Math.ceil((deadline - api.now()) / 1000));
+      el.textContent = typeof fmt === 'function' ? fmt(n) : `${fmt} · ${n} 秒`;
     };
     return {
       el,
-      update(v, c) {
+      update(v, c, nextLabel) {
+        if (nextLabel) fmt = nextLabel;
         deadline = v.deadline ?? null;
         paused = !!c?.paused;
         el.hidden = deadline == null;
@@ -288,9 +295,12 @@ export function mount(root, api) {
         destroy() { cover.destroy(); },
       };
     }
+    // the slot keeps the closed height; the opened chip grows UP over the mask and hint rows, so a peek mid-stroke
+    // never moves the canvas under the finger
     let shown = false;
     let handle = null;
     const chip = h('button', { class: 'dg-word-chip', type: 'button' });
+    const slot = h('div', { class: 'dg-word-slot' }, chip);
     const paint = () => {
       chip.classList.toggle('open', shown);
       chip.replaceChildren(...(shown
@@ -305,10 +315,10 @@ export function mount(root, api) {
     });
     paint();
     return {
-      el: chip,
+      el: slot,
       set(word) { fillWord(wordEl, altEl, metaEl, word); },
       hide() { shown = false; cancel(handle); paint(); },
-      destroy() { cancel(handle); chip.remove(); },
+      destroy() { cancel(handle); slot.remove(); },
     };
   }
 
@@ -325,12 +335,15 @@ export function mount(root, api) {
   function chooseBody(role) {
     if (role !== 'drawer') {
       const w = waitBlock('✏️');
+      // how long the wait can last: the pick auto-picks when its clock runs out
+      const count = makeCountdown((n) => `最遲 ${n} 秒後開始畫`);
       const queue = h('p', { class: 'dg-note dg-upnext' });
       const mod = modBar();
-      const el = h('div', { class: 'dg-stack' }, w.el, queue, mod.el);
+      const el = h('div', { class: 'dg-stack' }, w.el, count.el, queue, mod.el);
       return {
         el,
         update(v, c) {
+          count.update(v, c);
           mod.update(v, c);
           const who = v.teams ? `${S.teamLabel(v.turn.team)} 嘅 ${nameOf(v.turn.drawer)}` : nameOf(v.turn.drawer);
           w.set(`${who} 揀緊詞…`);
@@ -338,7 +351,7 @@ export function mount(root, api) {
           queue.textContent = v.upNext?.length ? `之後到：${v.upNext.map((pid) => seatName(pid, v.me)).join(' → ')}` : '';
           queue.hidden = !queue.textContent;
         },
-        destroy() { mod.destroy(); },
+        destroy() { count.destroy(); mod.destroy(); },
       };
     }
     const timer = makeTimer();
@@ -353,8 +366,11 @@ export function mount(root, api) {
     });
     let offerSig = '';
     const mod = modBar();
-    const el = h('div', { class: 'dg-stack' },
-      h('h2', { class: 'dg-h', text: '揀一個詞嚟畫' }), note, cards, reroll.el, timer.el, mod.el);
+    // your turn to pick: typed play is silent, so the screen flashes (and an Android phone vibrates; iPhone Safari
+    // has no vibration) — otherwise a drawer chatting at the table misses the 20 s and gets the medium card
+    const el = h('div', { class: 'dg-stack dg-pick-now' },
+      h('h2', { class: 'dg-h', text: '到你畫！揀一個詞' }), note, cards, reroll.el, timer.el, mod.el);
+    try { globalThis.navigator?.vibrate?.([60, 40, 60]); } catch { /* no vibration here */ }
     return {
       el,
       update(v, c) {
@@ -459,25 +475,37 @@ export function mount(root, api) {
     };
   }
 
-  /** Typed guess feed. For the drawer it carries a ✔ per guess (override the checker). */
-  function makeFeed(isDrawer, canAcceptNow) {
+  /**
+   * Typed guess feed. For the drawer it carries a ✔ per guess (override the checker).
+   * The drawer's phone is on the table (or held out while drawing), so while the word is still secret its feed never
+   * spells it: a right guess is 「✅ 估中（已計）」 with no text, and a private near miss has every unrevealed answer
+   * character starred (judge.maskAnswer). Wrong texts stay verbatim: every phone shows them anyway, and starring them
+   * here alone would let a glance compare the two screens. `closeFirst` (the reveal's late ✔) lists the likely misses first.
+   */
+  function makeFeed(isDrawer, canAcceptNow, closeFirst = false) {
     const list = h('div', { class: 'dg-feed' + (isDrawer ? ' drawer' : '') });
     let sig = '';
+    const near = (g) => g.kind === 'close' || g.kind === 'near';
     return {
       el: list,
       update(v) {
         const feed = v.feed ?? [];
         const open = canAcceptNow(v);
-        const s = JSON.stringify([feed, open, v.me]);
+        const secret = isDrawer && v.phase === 'play' && v.play?.word ? v.play.word : null;
+        const shown = secret ? v.play.mask.cells.filter((c) => c && c !== ' ') : [];
+        const s = JSON.stringify([feed, open, v.me, secret && shown]);
         if (s === sig) return;
         sig = s;
-        const rows = feed.slice().reverse().slice(0, isDrawer ? 20 : 12).map((g) => {
+        let latest = feed.slice().reverse();
+        if (closeFirst) latest = [...latest.filter(near), ...latest.filter((g) => !near(g))];
+        const rows = latest.slice(0, isDrawer ? 20 : 12).map((g) => {
           const mine = g.pid === v.me;
           let text;
           let cls = g.kind;
-          if (g.kind === 'right') text = isDrawer && g.text ? `${g.text}（已計）` : '✅ 估中咗！';
-          else if (g.kind === 'close' || g.kind === 'near') {
-            text = g.text ? `${g.text}${g.kind === 'near' ? '  方向啱喎' : '  好接近！'}` : '🔥 好接近！';
+          if (g.kind === 'right') text = isDrawer ? '✅ 估中（已計）' : '✅ 估中咗！';
+          else if (near(g)) {
+            const said = g.text && secret ? maskAnswer(g.text, secret, shown) : g.text;
+            text = said ? `${said}${g.kind === 'near' ? '  方向啱喎' : '  好接近！'}` : '🔥 好接近！';
           } else text = g.text;
           const row = h('div', { class: `dg-feed-row ${cls}${mine ? ' me' : ''}` },
             h('span', { class: 'dg-feed-dot', style: `--seat:${colorOf(g.pid)}` }),
@@ -741,20 +769,32 @@ export function mount(root, api) {
     const paperNote = h('p', { class: 'dg-note', text: '睇返張紙上嘅畫，對吓答案。' });
     const canvas = view?.drawMode === 'canvas' ? makeCanvas('viewer', false, 'reveal') : null;
     const foul = !isDrawer ? foulButton() : null;
-    const feed = isDrawer && view?.guessMode === 'typed' ? makeFeed(true, (v) => !!v.reveal && api.now() < v.reveal.lateUntil && ['solved', 'timeout'].includes(v.reveal.outcome)) : null;
+    // the drawer's late ✔ (typed): its own 5 s clock, and the block goes away when the window closes
+    const lateOpen = (v) => !!v.reveal && api.now() < v.reveal.lateUntil && ['solved', 'timeout'].includes(v.reveal.outcome);
+    const unsolvedGuess = (v) => (v.feed ?? []).some((g) => g.kind !== 'right' && !v.reveal.solvers.some((x) => x.pid === g.pid));
+    const feed = isDrawer && view?.guessMode === 'typed' ? makeFeed(true, lateOpen, true) : null;
+    const lateNote = h('p', { class: 'dg-note dg-late-note' });
+    const lateBox = feed ? h('div', { class: 'dg-late' }, lateNote, feed.el) : null;
+    let lateUntil = 0;
+    let lateIv = null;
+    const paintLate = () => {
+      if (ctx?.paused) return;
+      lateNote.textContent = `有人估啱但冇計到？㩒 ✔ 補返 · 剩 ${Math.max(0, Math.ceil((lateUntil - api.now()) / 1000))} 秒`;
+    };
+    const stopLate = () => { if (lateIv) clearInterval(lateIv); lateIv = null; };
     const mod = modBar();
-    const wait = h('p', { class: 'dg-note' });
+    const next = h('p', { class: 'dg-note dg-next' });
     let lateHandle = null;
     const el = h('div', { class: 'dg-stack dg-reveal' }, headline, ruling.el, h('div', { class: 'dg-reveal-card' }, word, meta),
-      pts, fouled, canvas?.el, view?.drawMode === 'paper' ? paperNote : null, feed ? h('div', { class: 'dg-late' }, h('p', { class: 'dg-note', text: '估中咗但系統漏咗？㩒 ✔ 補返（幾秒內）。' }), feed.el) : null,
-      timer.el, foul?.el, wait, mod.el);
+      pts, fouled, canvas?.el, view?.drawMode === 'paper' ? paperNote : null, lateBox,
+      timer.el, next, foul?.el, mod.el);
     later(() => sound('reveal'), 300);
     return {
       el,
       update(v, c) {
         const rv = v.reveal;
         if (!rv) return;
-        timer.update(v, c);
+        timer.update(v, c, v.last ? '睇成績' : '自動下一輪');
         canvas?.update(v, c);
         ruling.update(rv.ruling);
         headline.textContent = rv.headline;
@@ -771,16 +811,25 @@ export function mount(root, api) {
         const open = api.now() < rv.lateUntil;
         cancel(lateHandle);
         if (open) lateHandle = later(rerender, Math.max(50, rv.lateUntil - api.now() + 50));
-        if (feed) feed.update(v);
+        if (feed) {
+          feed.update(v);
+          const late = lateOpen(v) && unsolvedGuess(v);
+          lateBox.hidden = !late;
+          lateUntil = rv.lateUntil;
+          if (late) { paintLate(); if (!lateIv) lateIv = setInterval(paintLate, 250); } else stopLate();
+        }
         if (foul) {
           foul.update(rv.foul, open && !!rv.foul.can);
           if (!open) foul.el.hidden = true;
         }
-        wait.textContent = rv.ruling ? '' : v.last ? '幾秒後睇成績…' : '幾秒後自動下一位…';
-        wait.hidden = !wait.textContent;
+        // who draws next — in bold on that phone, so nobody laughing at the reveal misses their 20 s pick
+        const nextPid = rv.ruling || v.last ? null : v.upNext?.[0];
+        next.textContent = nextPid ? `下一個畫：${seatName(nextPid, v.me)}` : '';
+        next.hidden = !nextPid;
+        next.classList.toggle('mine', !!nextPid && nextPid === v.me);
         mod.update(v, c);
       },
-      destroy() { cancel(lateHandle); timer.destroy(); canvas?.destroy(); foul?.destroy(); mod.destroy(); },
+      destroy() { cancel(lateHandle); stopLate(); timer.destroy(); canvas?.destroy(); foul?.destroy(); mod.destroy(); },
     };
   }
 

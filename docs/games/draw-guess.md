@@ -109,8 +109,8 @@ A turn is one drawer with one word. `play` has sub-steps `run` · `grace` · `bu
 
 | Seat | Shows |
 |---|---|
-| Drawer | 「揀一個詞嚟畫」, three big cards — tier (⭐ 簡單 / ⭐⭐ 中等 / ⭐⭐⭐ 困難), the word, 「類別 · N 隻字 · 最多 30／45／60 分」 (teams: 「全隊 +1 分」 or 「+n 分」) —, a 「🔄 唔鍾意？換一批（得一次）」 button (two taps) and a 20 s clock. Paper mode adds 「先攞定張白紙同支筆」 |
-| Everyone else | 「✏️ 阿明 揀緊詞…」 (teams: with the team), 「之後到：阿B → 阿C → 阿D」 and the scores |
+| Drawer | 「到你畫！揀一個詞」 (the screen flashes twice — typed play is silent — and an Android phone vibrates; iPhone Safari cannot), three big cards — tier (⭐ 簡單 / ⭐⭐ 中等 / ⭐⭐⭐ 困難), the word, 「類別 · N 隻字 · 最多 30／45／60 分」 (teams: 「全隊 +1 分」 or 「+n 分」) —, a 「🔄 唔鍾意？換一批（得一次）」 button (two taps) and a 20 s clock. Paper mode adds 「先攞定張白紙同支筆」 |
+| Everyone else | 「✏️ 阿明 揀緊詞…」 (teams: with the team), a calm 「最遲 15 秒後開始畫」 (no beeps), 「之後到：阿B → 阿C → 阿D」 and the scores |
 
 20 s (research: 12 s — §9). Time out → the **medium** card is picked. Re-roll: once per turn; burns the three words for
 this game and restarts the 20 s. The canvas clears here (`inkEpoch` bump, canvas mode only).
@@ -136,9 +136,14 @@ only gets the category. Hints never change points themselves — time does.
 (「✅ 阿B」). The drawer's seat shows them because on a single shared phone that seat IS the table's screen.
 
 **Drawer's seat** additionally: the word behind a 「👁 㩒一下睇個詞」 chip (tap → shown for 2.5 s, plus the accepted
-aliases 「都接受：…」); canvas mode: the **canvas with full tools** (8 colours, 3 widths, eraser, undo, clear); then for
+aliases 「都接受：…」; the chip sits in a fixed-height slot and opens UPWARD over the mask and hint rows, so a peek never
+moves the canvas under a drawing finger); canvas mode: the **canvas with full tools** (8 colours, 3 widths, eraser, undo, clear); then for
 - 🗣️ shout: 「邊個估中？㩒佢個名」 — one chip per eligible guesser;
-- ⌨️ typed: the live feed of everybody's guesses (newest first) with a ✔ per guess that the checker did not accept;
+- ⌨️ typed: the live feed of everybody's guesses (newest first) with a ✔ per guess that the checker did not accept.
+  The feed never spells the word: a right guess reads 「✅ 估中（已計）」 with no text, and a private near miss has every
+  answer character the hints have not revealed starred (「＊＊大樓 好接近！」, `judge.maskAnswer`). Wrong texts stay verbatim —
+  every phone shows them, so starring them here alone would let a glance compare two screens. Typed mode gives the
+  drawer's canvas a little more room (no name chips above it), never less than the guessers';
 and a two-tap 「🏳️ 放棄今輪（大家 0 分）」. Paper mode: the word sits behind a hold-to-peek `Cover` (「㩒住睇個詞」) and
 there is **no canvas on any phone**. The prompt line: 「喺畫板上畫，唔准講嘢、寫字同數字。」 / 「用紙筆畫，唔准講嘢、寫字同數字。」
 
@@ -185,13 +190,16 @@ ruling the old hint line does not come back).
 **7 s for every turn**, the last one too (research 2.5). Everyone sees: 「🎉 阿B、阿C 估中」 (or 「⏰ 時間到，冇人估中」 /
 「🏳️ 阿明 放棄咗呢條」 / 「🚩 犯規成立，🔵 藍隊 今輪冇分」 / 「⚠️ 作廢…」), the word big with its tier, category and aliases,
 the points line 「阿B +34 · 阿C +34 · 阿明（畫）+28」 (teams: the team and its point), the final picture (canvas mode;
-paper mode 「睇返張紙上嘅畫，對吓答案。」), 「自動下一輪 · 6 秒」, and the score strip with the deltas.
+paper mode 「睇返張紙上嘅畫，對吓答案。」), 「自動下一輪 · 6 秒」 (last turn: 「睇成績 · 6 秒」), 「下一個畫：阿B」 (bold, with
+「（你）」, on that player's phone) and the score strip with the deltas.
 - Nobody skips it from a seat (the old drawer 「下一位」 is gone: it also cut the 5 s foul window short). The host's ⏭
   (`@next`) skips it.
 - **For 5 s** (the "late window") a guesser may still flag 🚩 (only on a solved turn — there is nothing else to take
   away) and, in typed mode, the drawer may still ✔ a guess it forgot — both re-score the turn (§5.4). In teams a rival's
   late 🚩 freezes the reveal for the host's ruling. After the window the turn is final, except that the host may still
-  作廢 it (a dead phone noticed only when the clock ran out).
+  作廢 it (a dead phone noticed only when the clock ran out). The drawer's late-✔ block (typed) shows its own clock,
+  「有人估啱但冇計到？㩒 ✔ 補返 · 剩 3 秒」, lists the near misses first, and folds away when the window closes (or when
+  there is nothing left to credit).
 **Narration (cue `t{n}:reveal:{outcome}[:foul]`):** 「答案係「老虎」。阿B、阿C估中。」 (+ 「不過犯規成立，畫家冇分。」) ·
 「時間到，冇人估中。答案係「老虎」。」 · 「阿明放棄咗今輪，答案係「老虎」。」 · 「犯規成立，今輪冇分。答案係「老虎」。」 ·
 「今輪作廢，唔計分，之後會補返。」
@@ -205,10 +213,12 @@ the ranked scores (teams: the team totals), 「下一個畫：阿B」, 「下一
 
 ### 3.5 over
 
-`result()` becomes non-null; the shell shows the results screen. `result.lines` come in three foldable sections
+`result()` becomes non-null; the shell shows the results screen. `result.linesTitle` is 「分數點嚟」 (the shell's
+default 「點解會咁」 suits a hidden-role reveal). `result.lines` come in three foldable sections
 (`'── 標題 ──'` lines, which the results screen turns into sections):
 - `── 排名 ──` 🥇 阿明 142 分（估中 5 次 · 畫畫得 61 分） … (teams: 🥇 🔴 紅隊 4 分（阿明、阿B、阿C）);
-- `── 亮點 ──` 「🎨 最勁畫家：…（平均每次畫得 21.5 分）」, 「⚡ 最快反應：阿B（3.2 秒估中「老虎」）」, 「⭐ 最多困難詞估中：…」;
+- `── 亮點 ──` 「🎨 最勁畫家：…（平均每次畫得 21.5 分）」, 「⚡ 最快反應：阿B（3.2 秒估中「老虎」）」, 「⭐ 最多困難詞估中：…」
+  (a highlight shared by more than half the players highlights nobody and is left out);
 - `── 每輪重溫 ──` **one line per turn** (BACKLOG #10 — who drew which word, who got it, the points, fouls):
   「第 3 輪 · 阿明 畫「摩天輪」⭐⭐ — 阿B 估中 ｜ 阿B +34 · 阿明（畫）+28」.
 `result.points`: every winner (all tied winners) gets **1 evening point**, the others 0 (research "How the game ends");
@@ -387,10 +397,16 @@ per call).
 3. **Candidates** = the guess, and the guess with at most one leading filler (係唔係, 是不是, 係咪, 我估, 我猜, 估, 猜, 係, 是)
    and at most one trailing filler (呀 啊 嗎 吗 呢 喇 啦 囉 咯 咩 嘅) removed. Stripping only adds matches.
 4. Any candidate equals an answer → **right**. No tokenising: 「老虎獅子」 never matches.
-5. Else **close** if, against any answer of length L: (i) L ≥ 3 and edit distance 1; (ii) L = 2 and the guess shares a character in
-   the same place or is reversed; (iii) L ≥ 3 and ≥ 60% of its characters are present, length within one (scrambled);
-   (iv) the guess contains the answer, or is a ≥ 2-character piece of it. **near** if it is in the entry's own `near` list
-   (the bank has none today). Else **wrong**.
+5. Else **close** if, against any answer of length L: (i) L ≥ 3 and edit distance 1; (ii) L = 2 and the guess is the answer
+   reversed; (iii) L ≥ 3 and ≥ 60% of its characters are present, length within one (scrambled); (iv) the guess contains the
+   answer, or is a ≥ 2-character piece of it. A hit under (i)–(iii) or the "piece" half of (iv) counts only if the guess shares
+   at least one character with that answer that the hint mask has **not** revealed yet: the engine passes the revealed
+   characters (`maskView(t).cells`) as `analyse(text, entry, strictness, revealed)`. **near** if it is in the entry's own
+   `near` list (the bank has none today). Else **wrong**.
+   *User decision 2026-10-04 (D9, research "Voting & resolution A").* A 2-character guess that shares one character in the same
+   place (恐龍 for 魚龍) is no longer close: hidden, it handed out half the word 14 s before the hint did; revealed (X筆 once 筆
+   shows), it only steered the table wrong. The same "says nothing new" test drops a piece made only of revealed characters
+   (守株 once 守 and 株 show).
 6. Because (iv) catches any message that contains the answer, **a `wrong` guess — the only kind shown to the table as text —
    never contains the answer in any script** (property-tested against the whole bank).
 
@@ -414,7 +430,10 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 - One phone: typed never survives `defaults(…, { singleDevice })` for any n or prev, the warning names it, no typed
   preset; paper / canvas presets; the topics field's `bank` + `matches` (#11).
 - Judge: normalisation; right answers (word, alt, script, width, filler, ambiguous groups); lists of answers never match and never
-  count as wrong; close / near / wrong rules; strictness; the "wrong never contains the answer" property over the bank.
+  count as wrong; close / near / wrong rules; strictness; the "wrong never contains the answer" property over the bank;
+  D9: no 好接近 from a same-place character on 2-character words (before or after the reveal), nor from revealed characters
+  alone at any length, while the reversed answer, a guess containing the answer and `near` still work; the engine passes the
+  revealed cells (typed turn, before and after the 50 % hint).
 - Queue: everybody draws exactly `cycles` times, the first drawer can be any seat; three distinct words per turn (easy/medium/
   hard), never repeated in a game; tier and category filters, nearest-tier borrowing; empty / missing / throwing bank → fallback words.
 - Choose: only the drawer, bad indexes, one re-roll, clock restart, timeout → medium; unpicked offers released.
@@ -449,9 +468,12 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
   ink only from the drawer in canvas mode, never in paper mode; the game reaches the results.
 - UI (fake DOM, stub Cover / Timer / Canvas, every seat + the table, driven by the fuzzer): every phase renders idempotently;
   no screen but the drawer's shows a secret; the drawer's screen hides the word until tapped (canvas chip) or held (paper
-  cover); the mask is on every screen; the canvas gets `tools: 'full'` and `canDraw` = `engine.canInk` for the drawer only,
+  cover), in typed mode too, before and after a solve; the mask is on every screen; the canvas gets `tools: 'full'` and `canDraw` = `engine.canInk` for the drawer only,
   the shared ink, `minStrokeLen 0`; no canvas at all in paper mode; typed play makes no sound; taps send what the engine
-  accepts (pick, name chip, two-tap 🚩, the host's ruling buttons).
+  accepts (pick, name chip, two-tap 🚩, the host's ruling buttons). Typed: the drawer's right rows carry no text, near
+  misses are starred until a hint reveals the character, wrong rows read the same as everybody's; the pick screen
+  flashes and the waiting phones show the pick clock; the late ✔ counts down and folds away; 「下一個畫」 is bold on the
+  next drawer's phone.
 - Fuzz: random legal play (plus the clock-dependent late moves) for n ∈ {3,4,5,6,7,8,12} × {shout, typed} × {paper, canvas} ×
   {FFA, teams} ends with a well-formed result; every view's hint is 1–40 characters; `blocking` matches the contract at every
   step; it asserts that grace, buzzer (and buzzer solves), abandon, void, re-queue, fouls, team rulings (play and reveal),
@@ -465,6 +487,8 @@ it first, the drawer's points, a late foul) is explained after the game; the unp
 - The clock freezes during the grace window, so undoing a mis-tap costs nothing; it also freezes for a team foul ruling.
 - The mask and hints are on the drawer's screen too, so a single phone lying in the middle shows the table everything public.
 - 「之後到：阿B → 阿C」 while someone chooses, so the next drawer can grab paper; a short leaderboard after each cycle.
+- The reveal names the next drawer (bold on their phone), and their pick screen flashes when it opens: typed play is
+  silent, so a drawer laughing at the reveal does not lose the 20 s and get the medium card by default.
 - Hints are announced aloud in shout play (useful when everybody is looking at the paper), and never in typed play.
 - The shell's 💡 explains the current step in one line (`view.hint`), nothing pops up by itself.
 - The results screen keeps every picture of the game (keepsake), so the reveal does not have to linger.

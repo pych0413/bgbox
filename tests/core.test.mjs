@@ -623,6 +623,12 @@ test('room: only the seat\'s own device may act, host-internal actions are refus
   assert.equal(lastTo(sent, 'dev_host', 'views').table.picked.p3, false);
   assert.equal(pick(room, 'dev_a', 'p2', 1), false, 'a second pick is refused');
   assert.equal(sent.some((x) => x.peerId === 'peer_unknown' && x.msg.t === 'reject'), true, 'strangers are told to say hello first');
+  // a shared phone's `seats` list is cut down to that phone's own seats before any engine sees it
+  const seen = [];
+  const dispatch = room.session.dispatch.bind(room.session);
+  room.session.dispatch = (who, act) => { seen.push(act); return dispatch(who, act); };
+  room.act('dev_b', 'p3', { type: 'pick', n: 2, seats: ['p3', 'p2', 'p1', 'nobody', 7, 'p3'] });
+  assert.deepEqual(seen.at(-1).seats, ['p3'], 'dev_b may tick only its own seat');
   room.receive('peer_a', { t: 'act' });
   room.receive('peer_a', 'garbage');
   room.receive('peer_a', { t: 42 });
@@ -793,7 +799,7 @@ test('room: stall detection flags a seat whose phone is away, then autoAct unblo
   assert.deepEqual(room.autoAct('p2'), false, 'nothing to auto-act after the game');
 });
 
-test('room: the stall clock restarts whenever the game moves, and a connected seat is never "stalled"', async () => {
+test('room: the stall clock restarts whenever the game moves, and a seat whose phone is back is no longer "stalled"', async () => {
   const { room, clock, sent } = await lobby3();
   room.setConfig({ pickMs: 10 * 60_000, rounds: 3 });
   room.start();
@@ -2955,4 +2961,278 @@ test('room: meta.narrationDefault picks a quiet game\'s mode while it is selecte
   await back.selectGame('fake');
   assert.equal(back.narration.mode, 'read', 'the preference survives a host refresh');
   back.dispose();
+});
+
+// ============================================================
+// playtest fixes (docs/playtest/multi/SUMMARY.md #13, #14, #39) — what the room tells each device
+// ============================================================
+
+test('room #14: a named step calling several seats is `together` on each named device; a lone turn and an anonymous step never are', async () => {
+  const g = makeCentreGame();
+  let shape = 'two';
+  g.engine.focus = (st) => {
+    if (st.phase !== 'night') return null;
+    if (shape === 'two') return { pids: ['p2', 'p3'] };
+    if (shape === 'one') return { pids: ['p2'] };
+    return { pids: ['p2', 'p3'], anonymous: '狼人請拎起部手機' };
+  };
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  hello(t.room, 'peer_b', 'dev_b', '阿強');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  const focusOf = (dev) => lastTo(t.sent, dev, 'views').focus;
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'], together: true }, 'a deal / a vote: everybody\'s at once');
+  assert.deepEqual(focusOf('dev_b'), { pids: ['p3'], together: true });
+  assert.equal(focusOf('dev_host'), null, 'a device not named still learns nothing');
+  shape = 'one';
+  assert.equal(t.room.act('dev_b', 'p3', { type: 'tap' }), true);
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'] }, 'a lone turn: 輪到你');
+  shape = 'anon';
+  assert.equal(t.room.act('dev_b', 'p3', { type: 'tap' }), true);
+  assert.deepEqual(focusOf('dev_a'), { pids: ['p2'], anonymous: '狼人請拎起部手機' }, 'eyes closed: never "you are not the only one awake"');
+  assert.deepEqual(focusOf('dev_host'), { pids: [], anonymous: '狼人請拎起部手機' });
+});
+
+test('room #13: only the host device learns whether the engine waits on anyone (its ⏭ then takes two taps)', async () => {
+  const g = makeCentreGame();
+  let waitOn = ['p3'];
+  g.engine.focus = (st) => (st.phase === 'night' && waitOn ? { pids: waitOn } : null);
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  hello(t.room, 'peer_b', 'dev_b', '阿強');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  const host = () => lastTo(t.sent, 'dev_host', 'views');
+  assert.equal(host().focus, null, 'the host\'s own focus is filtered to its own seat…');
+  assert.equal(host().waiting, true, '…but it is told the table waits on somebody');
+  assert.equal('waiting' in lastTo(t.sent, 'dev_a', 'views'), false, 'other devices never get it');
+  waitOn = null;
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'tap' }), true);
+  assert.equal(host().waiting, false);
+  waitOn = [];
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'tap' }), true);
+  assert.equal(host().waiting, false, 'an empty named focus waits on nobody');
+});
+
+test('room #39: result.noScore and result.linesTitle reach lastResult; the history line is marked noScore', async () => {
+  const g = makeCentreGame();
+  g.engine.result = (st) => (st.phase === 'day' ? { winners: [], summary: '玩咗 1 回合', lines: ['a'], noScore: true, linesTitle: '  記錄  ' } : null);
+  const t = setup({ games: { night: g } });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');
+  await t.room.selectGame('night');
+  assert.equal(t.room.start().ok, true);
+  assert.equal(t.room.act('dev_a', 'p2', { type: 'see' }), true);
+  assert.equal(t.room.phase, 'results');
+  const snap = t.room.snapshot();
+  assert.equal(snap.lastResult.noScore, true);
+  assert.equal(snap.lastResult.linesTitle, '記錄');
+  assert.equal(snap.history.at(-1).noScore, true);
+  assert.equal(snap.scoreboard.p2.wins, 0, 'nothing changes in how it scores');
+});
+
+test('app #13: state.waiting reaches the host app only, and follows the table', async () => {
+  const f = await hostAndTwo();
+  const { host, a } = f;
+  assert.equal(host.state.waiting, false, 'nothing to wait on in the lobby');
+  await host.lobby.selectGame('fake');
+  host.lobby.start();
+  await settle();
+  assert.equal(host.state.waiting, true, 'the pick step waits on every seat');
+  assert.equal(a.state.waiting, false, 'a guest never learns it');
+  await host.act('p1', { type: 'pick', n: 1 });
+  await a.act('p2', { type: 'pick', n: 2 });
+  await f.b.act('p3', { type: 'pick', n: 3 });
+  await settle();
+  assert.equal(host.state.waiting, false, 'every pick is in: a skip now cuts nobody off');
+});
+
+// ============================================================
+// round 2 (decisions 2026-10-04): absent seats (D4), a connected seat nobody answers on (#9), engine.canVoid
+// ============================================================
+
+/** makeNightGame + `@absent` / `@present`: an absent seer no longer holds the night up (the engine's own rule). */
+function makeAbsentGame({ present = true, focus = true, blocking = false } = {}) {
+  const g = makeNightGame({ focus, blocking });
+  const act = g.engine.act;
+  g.engine.act = (st, a, ctx) => {
+    if (a.pid === HOST && a.action.type === ACT.ABSENT) {
+      if ((st.away ?? []).includes(a.action.pid) || !st.seats.includes(a.action.pid)) return undefined;
+      st.away = [...(st.away ?? []), a.action.pid];
+      return st;
+    }
+    if (a.pid === HOST && a.action.type === ACT.PRESENT) {
+      if (!present || !(st.away ?? []).includes(a.action.pid)) return undefined;
+      st.away = st.away.filter((x) => x !== a.action.pid);
+      return st;
+    }
+    return act(st, a, ctx);
+  };
+  g.engine.view = (st) => ({ phase: st.phase, away: st.away ?? [] });
+  return g;
+}
+
+async function nightRoom(game, opts = {}) {
+  const t = setup({ games: { night: game }, ...opts });
+  hello(t.room, 'peer_a', 'dev_a', '阿花');               // p2 = the seer
+  hello(t.room, 'peer_b', 'dev_b', '阿強');               // p3
+  assert.equal((await t.room.selectGame('night')).ok, true);
+  assert.equal(t.room.start().ok, true);
+  return t;
+}
+
+test('engine-kit D4: ACT.ABSENT is "@absent" and ACT.PRESENT is "@present" (games may use the literals)', () => {
+  assert.equal(ACT.ABSENT, '@absent');
+  assert.equal(ACT.PRESENT, '@present');
+});
+
+test('room D4: 💤 markAbsent — the engine takes @absent as the host, the stall goes, room.absent is public; @present brings it back', async () => {
+  const t = await nightRoom(makeAbsentGame());
+  const { room, clock, sent } = t;
+  const stalled = () => roomOf(sent, 'dev_host').stalled.map((s) => s.pid);
+  room.peerClosed('peer_a');
+  clock.advance(45_000);
+  assert.deepEqual(stalled(), ['p2'], 'the seer\'s dead phone holds the night up');
+
+  assert.equal(room.act('dev_b', 'p3', { type: ACT.ABSENT, pid: 'p2' }), false, 'a seat can never send @absent');
+  assert.equal(room.markAbsent('p2'), true);
+  assert.deepEqual(room.session.state.away, ['p2'], 'the engine got { type: "@absent", pid } from the host');
+  assert.deepEqual(stalled(), [], 'nobody waits on an absent seat');
+  assert.deepEqual(roomOf(sent, 'dev_host').absent, ['p2']);
+  assert.deepEqual(roomOf(sent, 'dev_b').absent, ['p2'], 'public: every phone may show 💤');
+  assert.equal(room.session.blocking('p2'), false);
+  clock.advance(10 * 60_000);
+  assert.deepEqual(stalled(), [], 'and it stays that way');
+  assert.equal(room.markAbsent('p2'), false, 'already absent: nothing to do');
+
+  // a host refresh keeps it
+  const snap = JSON.parse(JSON.stringify(room.snapshot()));
+  assert.deepEqual(snap.session.absent, ['p2']);
+  const room2 = await Room.restore(snap, { ...t.deps, send: () => {} });
+  assert.deepEqual(room2.session.absent, ['p2']);
+
+  assert.equal(room.markPresent('p2'), true, 'back');
+  assert.deepEqual(room.session.state.away, []);
+  assert.deepEqual(roomOf(sent, 'dev_b').absent, []);
+  clock.advance(45_000);
+  assert.deepEqual(stalled(), ['p2'], 'present again: its dead phone is waited on again');
+
+  room.pause();
+  assert.equal(room.markAbsent('p2'), false, 'refused while paused');
+  room.resume();
+  assert.equal(room.markAbsent('p9'), false, 'no such seat');
+  assert.equal(room.autoAct('p2'), true);
+  assert.equal(room.phase, 'results');
+  assert.deepEqual(roomOf(sent, 'dev_host').absent, [], 'a finished game has nobody absent');
+  assert.equal(room.markAbsent('p2'), false, 'not playing');
+});
+
+test('room D4: an engine without @absent changes nothing → false (the shell toasts); one without @present keeps the seat absent', async () => {
+  const t = await nightRoom(makeNightGame({ focus: true }));
+  t.room.peerClosed('peer_a');
+  t.clock.advance(45_000);
+  assert.equal(t.room.markAbsent('p2'), false);
+  assert.deepEqual(roomOf(t.sent, 'dev_host').absent, []);
+  assert.deepEqual(roomOf(t.sent, 'dev_host').stalled.map((s) => s.pid), ['p2'], 'still waited on');
+
+  const u = await nightRoom(makeAbsentGame({ present: false }));
+  assert.equal(u.room.markAbsent('p3'), true);
+  assert.equal(u.room.markPresent('p3'), false, 'this engine ignores @present');
+  assert.deepEqual(roomOf(u.sent, 'dev_host').absent, ['p3'], 'so the seat stays absent');
+});
+
+test('app D4: hostCtl.markAbsent / markPresent on the host (and local); a guest cannot; state.room.absent follows', async () => {
+  const f = appFixture({ game: makeAbsentGame() });
+  f.host.local({ names: ['甲', '乙', '丙'] });
+  await f.host.lobby.selectGame('fake');
+  assert.equal(f.host.lobby.start().ok, true);
+  assert.equal(f.host.hostCtl.markAbsent('p3'), true);
+  await settle();
+  assert.deepEqual(f.host.state.room.absent, ['p3']);
+  assert.equal(f.host.hostCtl.markPresent('p3'), true);
+  await settle();
+  assert.deepEqual(f.host.state.room.absent, []);
+
+  const h = await hostAndTwo();
+  assert.equal(h.a.hostCtl.markAbsent('p3'), false, 'a guest phone has no host controls');
+  assert.deepEqual(h.a.state.room.absent, [], 'the empty room view has the field');
+});
+
+test('room #9: a CONNECTED seat nobody answers on is listed as idle after stallMs — only while the rest of the table waits for it', async () => {
+  // the seer is the only one the game waits on (engine.blocking, a named step), every phone is connected, no clock
+  const t = await nightRoom(makeNightGame({ blocking: true }));
+  const idle = () => roomOf(t.sent, 'dev_host').idle;
+  const stalled = () => roomOf(t.sent, 'dev_host').stalled;
+  const t0 = t.clock.t;
+  t.clock.advance(44_999);
+  assert.deepEqual(idle(), []);
+  t.clock.advance(1);
+  assert.deepEqual(idle(), [{ pid: 'p2', since: t0 }], '「冇反應」: the phone is there, nobody answers');
+  assert.deepEqual(stalled(), [], '`stalled` (the banner) stays for dead phones only');
+  assert.deepEqual(roomOf(t.sent, 'dev_a').idle, [], 'only the host is told');
+  t.room.peerClosed('peer_a');
+  assert.deepEqual(stalled(), [{ pid: 'p2', since: t0 }], 'its phone goes: 斷咗線 (the clock it already ran counts)');
+  assert.deepEqual(idle(), []);
+  assert.equal(t.room.autoAct('p2'), true, '代佢做 works for either');
+  assert.equal(t.room.phase, 'results');
+
+  // a step everybody is in at once (legalActions only: every seat is blocked) is the table's own pace
+  const all = await nightRoom(makeNightGame({}));
+  all.clock.advance(10 * 60_000);
+  assert.deepEqual(roomOf(all.sent, 'dev_host').idle, [], 'nobody is singled out');
+
+  // a game clock will move the step on by itself: nobody is stuck
+  const timed = await lobby3();
+  timed.room.setConfig({ pickMs: 10 * 60_000, rounds: 3 });
+  assert.equal(timed.room.start().ok, true);
+  pick(timed.room, 'dev_host', 'p1', 1);
+  timed.clock.advance(5 * 60_000);
+  assert.equal(timed.room.phase, 'playing', 'still picking, on a 10-minute clock');
+  assert.deepEqual(roomOf(timed.sent, 'dev_host').idle, [], 'the deadline ends the step: nobody is singled out');
+
+  // a secret step (focus.anonymous) never names whom it waits on: opening ⋯ tells the host nothing — but a dead
+  // phone is still named, since nothing else would unfreeze the table
+  const secret = await nightRoom(makeNightGame({ focus: true }));
+  secret.clock.advance(10 * 60_000);
+  assert.deepEqual(roomOf(secret.sent, 'dev_host').idle, [], 'the anonymous seer is never listed as idle');
+  secret.room.peerClosed('peer_a');
+  secret.clock.advance(45_000);
+  assert.deepEqual(roomOf(secret.sent, 'dev_host').stalled.map((x) => x.pid), ['p2'], 'its dead phone still is');
+
+  // an absent seat is never listed, connected or not
+  const away = await nightRoom(makeAbsentGame({ focus: false, blocking: true }));
+  assert.equal(away.room.markAbsent('p2'), true);
+  away.clock.advance(10 * 60_000);
+  assert.deepEqual(roomOf(away.sent, 'dev_host').idle, []);
+  assert.deepEqual(roomOf(away.sent, 'dev_host').stalled, []);
+
+  // the app carries it (host only)
+  const h = await hostAndTwo({ game: makeNightGame({ blocking: true }) });
+  await h.host.lobby.selectGame('fake');
+  h.host.lobby.start();
+  for (let i = 0; i < 12; i++) { h.clock.advance(4_000); await settle(); }   // phones keep pinging: all stay connected
+  assert.deepEqual(h.host.state.room.stalled, []);
+  assert.deepEqual(h.host.state.room.idle.map((x) => x.pid), ['p2']);
+  assert.deepEqual(h.a.state.room.idle, []);
+});
+
+test('room / app: canVoid asks engine.canVoid, so 呢輪作廢 can say why not; null when the game does not say', async () => {
+  const g = makeNightGame({ focus: true });
+  let why = { ok: false, message: '呢輪已經計咗分，㩒「下一輪」就得' };
+  g.engine.canVoid = () => why;
+  const t = await nightRoom(g);
+  assert.deepEqual(t.room.canVoid(), { ok: false, message: '呢輪已經計咗分，㩒「下一輪」就得' });
+  why = { ok: true };
+  assert.deepEqual(t.room.canVoid(), { ok: true, message: '' });
+  g.engine.canVoid = () => { throw new Error('boom'); };
+  assert.equal(await quietly(() => t.room.canVoid()), null, 'an engine that throws is "does not say"');
+  assert.equal((await nightRoom(makeNightGame({ focus: true }))).room.canVoid(), null, 'no hook');
+  assert.equal(setup().room.canVoid().ok, false, 'not playing');
+
+  g.engine.canVoid = () => ({ ok: false, message: '遊戲已經完咗' });
+  const f = appFixture({ game: g });
+  f.host.local({ names: ['甲', '乙'] });
+  await f.host.lobby.selectGame('fake');
+  f.host.lobby.start();
+  assert.deepEqual(f.host.hostCtl.canVoid(), { ok: false, message: '遊戲已經完咗' });
 });

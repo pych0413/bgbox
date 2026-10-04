@@ -126,7 +126,8 @@ export function mount(root, api) {
   let rosterSig = '';
   function paintRoster(v) {
     const team = v.vote?.team ?? v.voted?.team ?? v.quest?.team ?? v.outcome?.team ?? [];
-    const sig = JSON.stringify([v.order, v.leader, v.lady?.holder, team, v.me, api.players.map((p) => [p.id, p.name, p.color])]);
+    const away = v.absent ?? [];
+    const sig = JSON.stringify([v.order, v.leader, v.lady?.holder, team, v.me, away, api.players.map((p) => [p.id, p.name, p.color])]);
     if (sig === rosterSig) return;
     rosterSig = sig;
     roster.replaceChildren(...v.order.map((pid) => h('div', {
@@ -135,6 +136,7 @@ export function mount(root, api) {
     },
     h('span', { class: 'av-seat-dot' }),
     h('span', { class: 'av-seat-name', text: nameOf(pid) }),
+    away.includes(pid) ? h('span', { class: 'av-seat-tag', title: T.board.away, text: '💤' }) : null,
     pid === v.leader ? h('span', { class: 'av-seat-tag', title: T.board.leader, text: '👑' }) : null,
     v.lady && pid === v.lady.holder ? h('span', { class: 'av-seat-tag', title: T.board.lady, text: '🌊' }) : null,
     team.includes(pid) ? h('span', { class: 'av-seat-tag', title: T.board.team, text: '🛡' }) : null)));
@@ -417,7 +419,9 @@ export function mount(root, api) {
         const mine = vo.mine;
         if (mine !== lastMine) { lastMine = mine; changing = false; pending = null; }
         const locked = seat && mine && !changing;
-        const shown = locked ? mine : pending;
+        // a locked vote is never on screen (neither tile lit, no 贊成/反對 in the status): a neighbour who has not voted
+        // yet could read it and follow. Your own choice shows only while you pick it, or after 改票 reopens it.
+        const shown = locked ? null : pending;
         for (const [b, kind] of [[approve, 'approve'], [reject, 'reject']]) {
           b.classList.toggle('on', shown === kind);
           b.setAttribute('aria-pressed', shown === kind ? 'true' : 'false');
@@ -428,7 +432,7 @@ export function mount(root, api) {
         confirm.disabled = !pending || guard.busy;
         confirm.textContent = pending === 'approve' ? T.vote.confirmApprove : pending === 'reject' ? T.vote.confirmReject : T.vote.pick;
         status.hidden = !locked;
-        status.textContent = locked ? `${T.vote.voted(mine)}　${T.vote.waiting}` : '';
+        status.textContent = locked ? `${T.vote.voted}　${T.vote.waiting}` : '';
         changeBtn.hidden = !locked;
         progress.textContent = T.vote.progress(vo.progress.done, vo.progress.total);
       },
@@ -447,7 +451,8 @@ export function mount(root, api) {
     btn.addEventListener('click', () => { guard.fire(() => { btn.disabled = true; api.send({ type: 'continue' }); }); });
     const waitTxt = h('p', { class: 'av-note' });
     later(() => api.sfx('reveal'), 250);
-    const el = h('div', { class: 'av-stack av-voted-screen' }, verdict, tally, grid, needLine, trackLine, isLeader ? btn : waitTxt);
+    const awayLine = h('p', { class: 'av-note' });
+    const el = h('div', { class: 'av-stack av-voted-screen' }, verdict, tally, grid, awayLine, needLine, trackLine, isLeader ? btn : waitTxt);
     return {
       el,
       update(v) {
@@ -459,6 +464,9 @@ export function mount(root, api) {
         grid.replaceChildren(
           h('div', { class: 'av-votecol yes' }, h('div', { class: 'av-votecol-head', text: `👍 ${T.voted.yes} ${r.approves}` }), chipsFor(col('approve'), 'stack')),
           h('div', { class: 'av-votecol no' }, h('div', { class: 'av-votecol-head', text: `👎 ${T.voted.no} ${r.rejects}` }), chipsFor(col('reject'), 'stack')));
+        // a seat marked 💤 did not vote: the majority was over the seats at the table
+        awayLine.hidden = !(r.absent ?? []).length;
+        awayLine.textContent = (r.absent ?? []).length ? T.voted.away(r.absent.map(nameOf).join('、')) : '';
         needLine.textContent = T.voted.needed(r.needed);
         trackLine.textContent = r.approved ? T.voted.track(r.before, 0) : T.voted.track(r.before, r.after);
         btn.textContent = r.ends ? T.voted.nextEnd : T.voted.next;
@@ -632,6 +640,9 @@ export function mount(root, api) {
     const sub = h('p', { class: 'av-note', text: T.assassinate.sub });
     const flipBox = h('div', { class: 'av-flip' });
     const recorded = h('p', { class: 'av-recorded' });
+    // the soft clock ran out (D8): the same line on every phone — nothing picks for the Assassin
+    const overtime = h('p', { class: 'av-note av-overtime', role: 'status', text: T.assassinate.overtime });
+    let wake = null;
     // The same picker on every phone. Only the Assassin's confirm is a real shot; everybody else's is a decoy.
     const picker = makePicker({
       count: 1,
@@ -644,12 +655,16 @@ export function mount(root, api) {
         else api.send({ type: 'decoy' });
       },
     });
-    const el = h('div', { class: 'av-stack' }, head, sub, timer.el, flipBox, picker.el, recorded);
+    const el = h('div', { class: 'av-stack' }, head, sub, timer.el, overtime, flipBox, picker.el, recorded);
     return {
       el,
       update(v, c) {
         const a = v.assassinate;
         timer.update(v, c, [30]);
+        const left = v.deadline != null ? v.deadline - api.now() : null;
+        overtime.hidden = !(left !== null && left <= 0);
+        clearTimeout(wake);
+        wake = left !== null && left > 0 ? later(rerender, left + 50) : null;
         picker.update(v, { disabled: v.me === null || (!a.canShoot && a.tapped) });
         recorded.hidden = !(a.tapped && !a.canShoot);
         recorded.textContent = T.assassinate.recorded;
@@ -659,7 +674,7 @@ export function mount(root, api) {
             ...a.flipped.map((f) => h('div', { class: 'av-flip-row' }, h('b', { text: nameOf(f.pid) }), ` ${S.roleLabel(f.role)}`)));
         }
       },
-      destroy() { picker.destroy(); timer.destroy(); },
+      destroy() { clearTimeout(wake); picker.destroy(); timer.destroy(); },
     };
   }
 
@@ -696,16 +711,21 @@ export function mount(root, api) {
     };
   }
 
+  /** Who taps 繼續 on the public screens: the leader — or anybody at the table while the leader is marked 💤. */
+  const leads = (v) => v.me !== null && (v.me === v.leader
+    || ((v.absent ?? []).includes(v.leader) && !(v.absent ?? []).includes(v.me)));
+
   function keyFor(v) {
     const seat = v.me !== null;
     const isLeader = seat && v.me === v.leader;
+    const cont = leads(v);
     switch (v.phase) {
       case 'reveal': return `reveal|${seat}`;
       case 'pick': return `pick|${v.proposalNo}|${isLeader}`;
       case 'vote': return `vote|${v.proposalNo}`;
-      case 'voted': return `voted|${v.proposalNo}|${isLeader}`;
+      case 'voted': return `voted|${v.proposalNo}|${cont}`;
       case 'quest': return `quest|${v.quest.no}|${!!v.quest.mine}`;
-      case 'quest-result': return `result|${v.outcome.no}|${isLeader}`;
+      case 'quest-result': return `result|${v.outcome.no}|${cont}`;
       case 'lady': return `lady|${v.lady.log.length}|${seat && v.me === v.ladyStep.holder}`;
       case 'lady-peek': return `peek|${v.lady.log.length}|${seat && v.me === v.ladyStep.holder}`;
       case 'assassinate': return 'assassinate';
@@ -721,9 +741,9 @@ export function mount(root, api) {
       case 'reveal': return revealBody(seat);
       case 'pick': return pickBody(isLeader);
       case 'vote': return voteBody();
-      case 'voted': return votedBody(isLeader);
+      case 'voted': return votedBody(leads(v));
       case 'quest': return questBody(!!v.quest.mine);
-      case 'quest-result': return resultBody(isLeader);
+      case 'quest-result': return resultBody(leads(v));
       case 'lady': return ladyPickBody(seat && v.me === v.ladyStep.holder);
       case 'lady-peek': return ladyPeekBody(seat && v.me === v.ladyStep.holder);
       case 'assassinate': return assassinateBody();

@@ -15,15 +15,24 @@
 // so a view should write `myVote: state.votes[pid]` and nothing cleverer.
 //
 // Optional extras: `allowChange` (default true: a 改票 link after voting),
-// `title`, and `reveal.votes` ({ voter: target | null }) to list who voted for
-// whom under each bar.
+// `title`, `reveal.votes` ({ voter: target | null }) to list who voted for
+// whom under each bar, and (#15):
+//   `colorOf(pid)`  the colour for a seat's dot (假畫家 passes its PEN colours, so a dot matches the strokes);
+//                   falls back to player.color
+//   `secretChoice`  (default false) your own phone never prints whom you picked: the button reads 「確定投票」
+//                   and the voted state 「已投 ✓」 with no row lit — a neighbour's glance learns nothing
 //
 // A vote is two taps on purpose — pick, then 確定 — so a stray thumb on a
 // shared table does not lock somebody in.
+//
+// Ballots arrive within a second of each other at a 3-2-1 vote. Only the progress line changes then, and it
+// is updated IN PLACE: the rows and the 確定 button are rebuilt only when what they show changes (candidates,
+// myVote, the local pick, the reveal…), so a friend's press never lands on a button that was swapped out
+// between press and release (#15).
 // ============================================================
 
-import { el } from '../dom.js?v=20261003171423';
-import { sfx } from '../../core/sfx.js?v=20261003171423';
+import { el, sig } from '../dom.js?v=1';
+import { sfx } from '../../core/sfx.js?v=1';
 
 const ABSTAIN = '@abstain';
 
@@ -33,25 +42,40 @@ export function VotePanel(props = {}) {
   let changing = false;      // user pressed 改票 and is choosing again
   let lastMyVote = Symbol('init');
   let lastRevealKey;          // undefined until the first update: a reveal already on screen is history
+  let shownKey = null;        // what the rows were last built from
 
   const root = el('div', { class: 'c-votepanel' });
+  // the progress line lives across rebuilds and is only ever edited in place
+  const progText = el('span');
+  const progPips = el('span', { class: 'c-votepanel-pips' });
+  const progEl = el('div', { class: 'c-votepanel-progress' }, progText, progPips);
+  let pipCount = -1;
 
   const byId = () => new Map((p.players ?? []).map((x) => [x.id, x]));
   const nameOf = (id) => byId().get(id)?.name ?? '?';
   const hasVoted = () => p.myVote !== undefined;
 
-  function dot(player) {
-    return el('span', { class: 'c-votepanel-dot', style: { '--seat': player?.color ?? 'var(--cheese)' } });
+  function colorFor(player) {
+    let c = null;
+    try { c = player && typeof p.colorOf === 'function' ? p.colorOf(player.id) : null; } catch { c = null; }
+    return c ?? player?.color ?? 'var(--cheese)';
   }
 
-  function progressNode() {
+  function dot(player) {
+    return el('span', { class: 'c-votepanel-dot', style: { '--seat': colorFor(player) } });
+  }
+
+  function paintProgress() {
     const { done = 0, total = 0 } = p.progress ?? {};
-    if (!total) return null;
-    const pips = [];
-    for (let i = 0; i < total; i++) pips.push(el('i', { class: i < done ? 'on' : '' }));
-    return el('div', { class: 'c-votepanel-progress' },
-      el('span', { text: `已投 ${done}/${total}` }),
-      el('span', { class: 'c-votepanel-pips' }, pips));
+    progEl.hidden = !total || !!p.reveal;
+    if (!total) return;
+    const text = `已投 ${done}/${total}`;
+    if (progText.textContent !== text) progText.textContent = text;
+    if (pipCount !== total) {
+      pipCount = total;
+      progPips.replaceChildren(...Array.from({ length: total }, () => el('i')));
+    }
+    for (const [i, pip] of [...progPips.children].entries()) pip.classList.toggle('on', i < done);
   }
 
   function candidateList() {
@@ -63,7 +87,9 @@ export function VotePanel(props = {}) {
   // ----- ballot -----
   function ballot() {
     const voted = hasVoted() && !changing;
-    const mine = voted ? p.myVote : pending;
+    const secret = !!p.secretChoice;
+    // secretChoice: once your vote is in, no row stays lit — the highlight would say whom you picked
+    const mine = voted ? (secret ? Symbol('hidden') : p.myVote) : pending;
 
     const rows = candidateList().map((pl) => {
       const on = mine === pl.id;
@@ -78,7 +104,7 @@ export function VotePanel(props = {}) {
     });
 
     if (p.allowAbstain) {
-      const on = mine === ABSTAIN || (voted && p.myVote === null);
+      const on = mine === ABSTAIN || (voted && !secret && p.myVote === null);
       rows.push(el('button', {
         class: 'c-votepanel-opt is-abstain' + (on ? ' on' : ''), type: 'button',
         'aria-pressed': on ? 'true' : 'false',
@@ -90,9 +116,10 @@ export function VotePanel(props = {}) {
 
     let action;
     if (voted) {
-      const what = p.myVote === null ? '棄權' : nameOf(p.myVote);
+      const said = secret ? '已投 ✓'
+        : p.myVote === null ? '你揀咗棄權 ✓' : `你投咗 ${nameOf(p.myVote)} ✓`;
       action = el('div', { class: 'c-votepanel-done' },
-        el('strong', { text: p.myVote === null ? '你揀咗棄權 ✓' : `你投咗 ${what} ✓` }),
+        el('strong', { text: said }),
         el('span', { class: 'hint', text: '等緊其他人…' }),
         p.allowChange !== false
           ? el('button', {
@@ -101,8 +128,9 @@ export function VotePanel(props = {}) {
           }, '改票')
           : null);
     } else {
-      const label = pending === ABSTAIN ? '確定棄權'
-        : pending ? `確定投俾 ${nameOf(pending)}` : '揀一個先';
+      const label = !pending ? '揀一個先'
+        : secret ? '確定投票'
+          : pending === ABSTAIN ? '確定棄權' : `確定投俾 ${nameOf(pending)}`;
       action = el('button', {
         class: 'btn btn-primary', type: 'button', disabled: !pending,
         onclick: () => {
@@ -119,7 +147,7 @@ export function VotePanel(props = {}) {
       p.title ? el('h3', { class: 'c-votepanel-title', text: p.title }) : null,
       el('div', { class: 'c-votepanel-list' }, rows),
       action,
-      progressNode(),
+      progEl,
     ];
   }
 
@@ -161,9 +189,22 @@ export function VotePanel(props = {}) {
     ];
   }
 
+  /** Everything the rows and buttons show — NOT the progress, which is edited in place. */
+  function structureKey() {
+    const players = candidateList().map((pl) => [pl.id, pl.name, colorFor(pl)]);
+    if (p.reveal) {
+      const all = (p.players ?? []).map((pl) => [pl.id, pl.name, colorFor(pl), pl.seat ?? 0]);
+      return sig(['reveal', p.reveal, all, p.candidates ?? null, p.title ?? null]);
+    }
+    return sig(['ballot', players, p.me ?? null, hasVoted() ? (p.myVote ?? '@null') : '@none', pending, changing,
+      !!p.allowAbstain, p.allowChange !== false, p.title ?? null, !!p.secretChoice]);
+  }
+
   function paint() {
+    shownKey = structureKey();
     root.classList.toggle('is-reveal', !!p.reveal);
     root.replaceChildren(...(p.reveal ? revealView() : ballot()).filter(Boolean));
+    paintProgress();
   }
 
   const api = {
@@ -179,7 +220,8 @@ export function VotePanel(props = {}) {
       const rk = p.reveal ? JSON.stringify(p.reveal) : null;
       if (lastRevealKey !== undefined && rk && rk !== lastRevealKey) sfx('reveal');
       lastRevealKey = rk;
-      paint();
+      if (structureKey() !== shownKey) paint();
+      else paintProgress();
     },
     destroy() { root.remove(); },
   };

@@ -84,8 +84,8 @@ function pointsSpoken(rv, nm) {
   if (rv.scoring === 'none') return '';
   const get = (role) => rv.deltas.filter((d) => d.role === role).map((d) => nm(d.pid));
   if (rv.fakeSide) {
-    const q = rv.qm ? `，出題者${nm(rv.qm)}` : '';
-    return `${nm(rv.fake)}${q}各得 2 分。`;
+    // 各 only when there are two of them (with a question master); one fake alone 「得 2 分」
+    return rv.qm ? `${nm(rv.fake)}，出題者${nm(rv.qm)}各得 2 分。` : `${nm(rv.fake)}得 2 分。`;
   }
   const a = get('artist');
   return a.length ? `每個真畫家得 1 分。` : '';
@@ -99,6 +99,7 @@ function pointsSpoken(rv, nm) {
  */
 export function hintFor(c) {
   const qm = c.qmName;
+  if (c.away && c.phase !== 'over') return '房主當咗你唔喺度；返咗嚟就叫房主加返你。';
   switch (c.phase) {
     case 'qm-input':
       if (c.role === 'qm') return '你係出題者：打主題同題目（或㩒🎲），再㩒「出題」。';
@@ -124,7 +125,7 @@ export function hintFor(c) {
     case 'revote':
       return c.canVote ? '平票：喺平票嘅人入面再揀一個。' : '平票：等冇被指嘅人再投一次。';
     case 'tally':
-      return '睇吓投票結果，幾秒後自動繼續。';
+      return '睇吓邊個投邊個，幾秒後自動繼續。';
     case 'guess':
     case 'judge':
       if (c.canGuess) return '你被揪出：打出你估嘅題目，只有一次機會。';
@@ -132,7 +133,8 @@ export function hintFor(c) {
       if (c.isFake) return '你被揪出：大聲講出你估嘅題目，只有一次機會。';
       return '假畫家有一次機會估題目：估中佢贏，估錯真畫家贏。';
     case 'result':
-      return c.last ? '睇吓題目、假畫家同邊個贏，再㩒「睇總結」。' : '睇吓題目、假畫家同邊個贏，再㩒「下一輪」。';
+      if (c.seen) return c.last ? '等其他人睇完，齊人就睇總結。' : '等其他人睇完，齊人就開下一輪。';
+      return '睇吓題目、假畫家同邊個贏，睇完㩒「睇完」。';
     default:
       return '玩完喇！睇吓邊個贏同每輪發生咩事。';
   }
@@ -178,8 +180,11 @@ export function revealLines(rv, nm) {
   if (rv.guess) {
     const g = rv.guess;
     const said = g.text ? `估「${g.text}」` : '口頭估咗';
-    const by = g.by === 'match' ? '，同詞庫答案一樣' : g.by === 'auto' ? '（冇人判，當估錯）' : g.by === 'none' ? '（冇答）' : `，${nm(rv.judge)} 判：${g.correct ? '啱' : '錯'}`;
-    out.push(`${nm(rv.fake)} ${said}${by}。`);
+    if (g.by === 'away') out.push(`${nm(rv.fake)} 唔喺度，冇估到，當估錯。`);
+    else {
+      const by = g.by === 'match' ? '，同詞庫答案一樣' : g.by === 'auto' ? '（冇人判，當估錯）' : g.by === 'none' ? '（冇答）' : `，${nm(rv.judge)} 判：${g.correct ? '啱' : '錯'}`;
+      out.push(`${nm(rv.fake)} ${said}${by}。`);
+    }
   }
 
   if (rv.scoring === 'none') {
@@ -222,7 +227,7 @@ function whyShort(h, nm) {
     parts.push(h.round2 && h.round2.top.length !== 1 ? '再投都平票，都要估'
       : tied && !h.round2 ? '平票都要估，算揪到' : '揪到');
     const g = h.guess;
-    if (g) parts.push(g.by === 'none' ? '冇估' : `${g.text ? `估「${g.text}」` : '開口估'}${g.correct ? '，啱' : '，錯'}`);
+    if (g) parts.push(g.by === 'none' ? '冇估' : g.by === 'away' ? '唔喺度，冇估' : `${g.text ? `估「${g.text}」` : '開口估'}${g.correct ? '，啱' : '，錯'}`);
   }
   return `　↳ ${parts.join(' → ')}`;
 }
@@ -232,7 +237,8 @@ export function roundBlock(h, nm, total) {
   const n = `第 ${h.n}${total ? `/${total}` : ''} 輪`;
   if (h.voided) {
     const what = h.word ? `「${h.word}」（${h.theme}）· 假畫家：${nm(h.fake)}` : '未出題';
-    return [`${n}（作廢，唔計）${what}${h.qm ? ` · 出題：${nm(h.qm)}` : ''}`];
+    const why = h.why === 'absent' && h.absent ? `（${nm(h.absent)} 唔喺度）` : '';
+    return [`${n}（作廢，唔計）${what}${h.qm ? ` · 出題：${nm(h.qm)}` : ''}${why}`];
   }
   const gains = h.scoring === 'none'
     ? `${names(h.winners ?? [], nm)} 贏`

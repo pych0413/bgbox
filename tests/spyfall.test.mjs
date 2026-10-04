@@ -31,6 +31,11 @@ const readyAll = (sim) => { for (const id of ids(sim)) sim.act(id, { type: 'read
 const playing = (n, opts) => readyAll(mk(n, opts));
 const changed = (sim, pid, action) => sim.act(pid, action);
 const phase = (sim) => sim.state.phase;
+/** Every present seat taps 睇完 on the round's reveal (D3: the next round needs all of them). */
+const allSeen = (sim) => {
+  for (const id of ids(sim)) if (phase(sim) === 'roundEnd' && !sim.state.absent?.[id]) sim.act(id, { type: 'next-round' });
+  return sim;
+};
 
 /** Everyone who still has a vote casts `yes` (suspect excluded automatically by legalActions). */
 function voteAll(sim, yes, { except = [] } = {}) {
@@ -64,7 +69,7 @@ function playRounds(sim) {
   readyAll(sim);
   wrongGuess(sim);
   while (phase(sim) === 'roundEnd') {
-    sim.act('p1', { type: 'next-round' });
+    allSeen(sim);
     if (phase(sim) === 'reveal') { readyAll(sim); wrongGuess(sim); }
   }
 }
@@ -290,7 +295,7 @@ test('spyfall: dealer is random in round 1 and moves one seat clockwise each rou
   for (let i = 0; i < 4; i++) {
     dealers.push(R(sim).dealer);
     wrongGuess(sim);
-    sim.act('p2', { type: 'next-round' });
+    allSeen(sim);
     if (phase(sim) === 'reveal') readyAll(sim);
   }
   const order = ids(sim);
@@ -1017,7 +1022,17 @@ test('spyfall: next-round needs the round to be over; the last round ends the ga
   wrongGuess(sim);
   assert.equal(sim.result(), null, 'the reveal comes before the result');
   assert.equal(sim.view('p1').end.last, false);
+  // D3: 睇完 from every present seat moves the table on; one eager seat only counts itself
   assert.equal(sim.act('p3', { type: 'next-round' }), true);
+  assert.equal(phase(sim), 'roundEnd', 'one seat alone does not move everybody on');
+  assert.deepEqual(sim.view('p1').seen, { done: 1, total: 4, who: ['p3'] });
+  assert.equal(sim.view('p3').mine.seen, true);
+  assert.equal(sim.act('p3', { type: 'next-round' }), false, 'a second tap changes nothing');
+  assert.deepEqual(sim.legal('p3'), [], 'nothing left to do for a seat that has read it');
+  for (const id of ['p1', 'p2']) assert.equal(sim.act(id, { type: 'next-round' }), true);
+  assert.equal(phase(sim), 'roundEnd');
+  assert.equal(sim.view('p2').seen.done, 3);
+  assert.equal(sim.act('p4', { type: 'next-round' }), true);
   assert.equal(phase(sim), 'reveal');
   assert.equal(sim.view('p1').round.n, 2);
   assert.equal(sim.view('p1').end, null, 'last round’s reveal is gone');
@@ -1026,7 +1041,7 @@ test('spyfall: next-round needs the round to be over; the last round ends the ga
   readyAll(sim);
   wrongGuess(sim);
   assert.equal(sim.view('p1').end.last, true);
-  assert.equal(sim.act('p1', { type: 'next-round' }), true);
+  allSeen(sim);
   assert.equal(phase(sim), 'over');
   const res = sim.result();
   assert.ok(res);
@@ -1057,7 +1072,7 @@ test('spyfall: totals are the sum of every round, ties share the win', () => {
   const t = mk(3, { seed: 82, config: { rounds: 1 } });
   readyAll(t);
   wrongGuess(t);
-  t.act('p1', { type: 'next-round' });
+  allSeen(t);
   const r1 = t.result();
   assert.equal(r1.winners.length, 2, 'two non-spies tie on 1 point each');
   assert.ok(r1.summary.includes('同分'));
@@ -1069,7 +1084,7 @@ test('spyfall: one-round game is a legal quick game', () => {
   sim.act(spyOf(sim), { type: 'spy-stop' });
   sim.act(spyOf(sim), { type: 'guess', loc: R(sim).loc });
   assert.equal(sim.view('p1').end.last, true);
-  sim.act('p1', { type: 'next-round' });
+  allSeen(sim);
   assert.equal(phase(sim), 'over');
   assert.deepEqual(sim.result().winners, [spyOf(sim)]);
 });
@@ -1746,7 +1761,7 @@ test('spyfall: #10 — result lines list every round (location, spies, who score
   const e1 = sim.view('p1').end;
   assert.equal(e1.code, 'accused-innocent');
   assert.ok(e1.lines.some((l) => l.includes(`「${roleY}」`)), 'the innocent’s hidden role is explained');
-  sim.act('p1', { type: 'next-round' });
+  allSeen(sim);
   readyAll(sim);
   const spy2 = spyOf(sim);
   const [a] = nonSpies(sim);
@@ -1756,7 +1771,7 @@ test('spyfall: #10 — result lines list every round (location, spies, who score
   wrongGuess(sim);                                     // …then the spy guesses wrong
   const e2 = sim.view('p1').end;
   assert.ok(e2.lines.some((l) => l.includes('指控過佢嘅人冇額外分')), 'explains why the accuser got nothing extra');
-  sim.act('p1', { type: 'next-round' });
+  allSeen(sim);
   const res = sim.result();
   const [l1, l2] = res.lines;
   const name = (id) => sim.players.find((p) => p.id === id).name;
@@ -1920,4 +1935,574 @@ test('spyfall ui: the hands-mode buttons send verdicts the engine accepts, inclu
       handle.destroy();
     }
   });
+});
+
+// ---------- playtest fixes (docs/playtest/multi/spyfall.md) ----------
+
+/** Mount one seat's UI on the fake DOM, logging what it sends, plays and toasts. */
+function mountSpyfallSeat(ui, sim, pid, log) {
+  const root = new FEl('div');
+  const handle = ui.mount(root, {
+    me: pid, players: sim.players, isHost: pid === 'p1', meta: game.meta, config: sim.state.cfg,
+    send: (a) => log.sent.push([pid, a]), ink() {}, now: () => sim.now,
+    sfx: (n) => log.sfx.push([pid, n]), toast: (t) => log.toast.push([pid, t]), components: stubSpyfallComponents(),
+  });
+  const show = () => handle.update(sim.view(pid), { focus: null, paused: false });
+  show();
+  return { pid, root, handle, show };
+}
+/** h() sets the attribute (as the real DOM would); the fake element keeps it in attrs. */
+const isOff = (b) => b.disabled || 'disabled' in b.attrs;
+const clickEl = (b) => {
+  assert.ok(b, 'button exists');
+  assert.ok(!isOff(b), `button 「${b.textContent}」 is enabled`);
+  for (const f of b.listeners.click ?? []) f({});
+};
+const btnText = (root, text) => findEls(root, (n) => n.tag === 'button' && shown(n) && n.textContent.includes(text))[0];
+const boxOf = (root, cls) => findEls(root, (n) => n.cls.has(cls))[0];
+
+/** Timers are queued, not run, until `step()`; window.scrollTo is recorded. */
+async function withQueuedTimers(fn) {
+  const saved = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout, scrollTo: globalThis.scrollTo };
+  const queue = [];
+  let seq = 0;
+  const scrolls = [];
+  globalThis.setTimeout = (f, ms) => { const id = ++seq; queue.push({ id, f, ms }); return id; };
+  globalThis.clearTimeout = (id) => { const i = queue.findIndex((q) => q.id === id); if (i >= 0) queue.splice(i, 1); };
+  globalThis.scrollTo = (x, y) => scrolls.push([x, y]);
+  try {
+    return await fn({ step: () => { const q = queue.shift(); q?.f(); return !!q; }, pending: () => queue.length, scrolls });
+  } finally {
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+    if (saved.scrollTo === undefined) delete globalThis.scrollTo; else globalThis.scrollTo = saved.scrollTo;
+  }
+}
+
+test('spyfall ui: 🕵️ 我係間諜 is the same silent panel on every phone; only a spy’s 停鐘 sends anything', async () => {
+  await withSpyfallUi(async (ui) => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../js/games/spyfall/ui.js', import.meta.url), 'utf8');
+    assert.ok(!src.includes('你唔係間諜'), 'no screen ever says 「你唔係間諜」');
+    for (const spies of [1, 2]) {
+      const sim = playing(spies === 2 ? 7 : 5, { seed: 31 + spies, config: { spies } });
+      const spy = spyOf(sim);
+      const agent = nonSpies(sim)[0];
+      const log = { sent: [], sfx: [], toast: [] };
+      const seats = [spy, agent].map((pid) => mountSpyfallSeat(ui, sim, pid, log));
+      const acts = (s) => serializeEl(boxOf(s.root, 'sf-actions'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'the action grid is identical for the spy and a non-spy');
+      for (const s of seats) clickEl(btnText(s.root, '我係間諜'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'the confirm panel is identical for the spy and a non-spy');
+      assert.ok(seats[1].root.textContent.includes('確定要亮身分'), 'a non-spy gets the same confirmation');
+      assert.deepEqual([log.sfx, log.toast], [[], []], 'no sound and no toast for anyone');
+      // a non-spy's 停鐘 closes the panel like 取消 and sends nothing
+      clickEl(btnText(seats[1].root, '我係間諜，停鐘'));
+      assert.deepEqual(log.sent, [], 'a non-spy sends nothing');
+      assert.ok(btnText(seats[1].root, '🕵️ 我係間諜'), 'back to the main buttons');
+      // 取消 does the same for the spy; then a real 停鐘
+      clickEl(btnText(seats[0].root, '取消'));
+      assert.equal(acts(seats[0]), acts(seats[1]), 'both phones are back to the same grid');
+      clickEl(btnText(seats[0].root, '我係間諜'));
+      clickEl(btnText(seats[0].root, '我係間諜，停鐘'));
+      assert.deepEqual(log.sent, [[spy, { type: 'spy-stop' }]]);
+      assert.equal(sim.act(spy, log.sent[0][1]), true, 'the engine accepts what the spy sent');
+      assert.deepEqual([log.sfx, log.toast], [[], []], 'still silent everywhere');
+      for (const s of seats) s.handle.destroy();
+    }
+    const section = game.rules.sections.find((x) => x.title === '指控同投票');
+    assert.ok(section.body.includes('唔好俾人睇你部手機證明身分'), 'the rules sheet says not to use the phone as proof');
+  });
+});
+
+test('spyfall ui: the clock bar keeps 🙋 in reach; the list folds once when play starts; used accusations are marked', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = mk(5, { seed: 44 });
+    const log = { sent: [], sfx: [], toast: [] };
+    const seats = ids(sim).map((pid) => mountSpyfallSeat(ui, sim, pid, log));
+    const listChips = (s) => findEls(s.root, (n) => n.cls.has('sf-loc') && shown(n)).length;
+    const nm = (pid) => sim.players.find((p) => p.id === pid).name;
+    for (const s of seats) {
+      assert.ok(listChips(s) > 0, 'the list is open during the look');
+      assert.ok(!shown(boxOf(s.root, 'sf-clock')), 'no clock bar before play');
+    }
+    readyAll(sim);
+    t.scrolls.length = 0;
+    for (const s of seats) s.show();
+    assert.ok(t.scrolls.length >= 1 && t.scrolls.every(([x, y]) => x === 0 && y === 0), 'play starts at the top of the page');
+    for (const s of seats) {
+      assert.equal(listChips(s), 0, 'the list folds once when play starts');
+      const bar = boxOf(s.root, 'sf-clock');
+      assert.ok(shown(bar), 'the clock bar shows during play');
+      assert.equal(findEls(bar, (n) => n.tag === 'button')[0].textContent, '🙋 指控');
+    }
+    // the 📍 toggle reopens the list, and a later update does not fold it again
+    const s0 = seats[0];
+    clickEl(findEls(s0.root, (n) => n.cls.has('sf-list-toggle'))[0]);
+    s0.show();
+    assert.ok(listChips(s0) > 0, 'the toggle reopens the list and it stays open');
+    // the holder line: the first question, then "answer, then ask"
+    const holderText = (s) => boxOf(s.root, 'sf-holder').textContent;
+    const dealer = R(sim).dealer;
+    for (const s of seats) assert.equal(holderText(s), s.pid === dealer ? '你問第一條問題' : `${nm(dealer)} 問第一條問題`);
+    const asked = ids(sim).find((id) => id !== dealer);
+    sim.act(dealer, { type: 'ask', target: asked });
+    for (const s of seats) {
+      s.show();
+      assert.equal(holderText(s), s.pid === asked ? '你答完就問下一個' : `${nm(asked)} 答完就問下一個`);
+    }
+    // the bar's 🙋 opens the picker (the question card makes way for it)
+    const accuser = ids(sim).find((id) => id !== dealer && id !== asked);
+    const a = seats.find((s) => s.pid === accuser);
+    clickEl(findEls(boxOf(a.root, 'sf-clock'), (n) => n.tag === 'button')[0]);
+    assert.ok(shown(boxOf(a.root, 'sf-picker')), 'the accusation picker is open');
+    assert.ok(!shown(boxOf(a.root, 'sf-floor')), 'the question card makes way for it');
+    clickEl(btnText(a.root, '取消'));
+    // after a failed accusation every phone marks the accuser, and only the accuser's bar button is spent
+    const suspect = ids(sim).find((id) => id !== accuser);
+    sim.act(accuser, { type: 'accuse', target: suspect });
+    voteAll(sim, false);
+    settle(sim);
+    assert.equal(phase(sim), 'play');
+    for (const s of seats) {
+      s.show();
+      const marked = findEls(boxOf(s.root, 'sf-floor'), (n) => n.cls.has('sf-acc')).map((n) => n.parentNode.textContent);
+      assert.equal(marked.length, 1, 'exactly one seat carries 🙋✓');
+      assert.ok(marked[0].includes(nm(accuser)));
+      const b = findEls(boxOf(s.root, 'sf-clock'), (n) => n.tag === 'button')[0];
+      assert.equal(isOff(b), s.pid === accuser, 'only the accuser’s 🙋 is spent');
+      assert.equal(b.textContent, s.pid === accuser ? '🙋 用咗' : '🙋 指控');
+    }
+    assert.equal(listChips(seats[1]), 0, 'resuming play after a vote does not reopen the list');
+    for (const s of seats) s.handle.destroy();
+  }));
+});
+
+test('spyfall ui: 睇完 wakes up after a 2-second countdown, counts 睇完 n / m on every phone, and a shared phone taps once for all its seats', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = playing(5, { seed: 52, config: { rounds: 2 } });
+    wrongGuess(sim);
+    assert.equal(phase(sim), 'roundEnd');
+    // p4 and p5 share one phone (a passed-round phone); the others have their own
+    sim.players = sim.players.map((p, i) => ({ ...p, deviceId: i >= 3 ? 'devB' : `dev${i}` }));
+    const log = { sent: [], sfx: [], toast: [] };
+    const s = mountSpyfallSeat(ui, sim, 'p1', log);
+    const seenBtn = () => btnText(s.root, '睇完 ✓');
+    assert.ok(s.root.textContent.includes('睇清楚先，2 秒後先㩒得'));
+    assert.equal(isOff(seenBtn()), true);
+    assert.ok(t.step());
+    assert.ok(s.root.textContent.includes('睇清楚先，1 秒後先㩒得'));
+    assert.ok(t.step());
+    assert.ok(!s.root.textContent.includes('秒後先㩒得'), 'the countdown line goes away');
+    assert.equal(isOff(seenBtn()), false);
+    assert.equal(t.pending(), 0, 'no timer left running');
+    assert.ok(s.root.textContent.includes('睇完 0 / 5'), s.root.textContent);
+    clickEl(seenBtn());
+    assert.deepEqual(log.sent.pop(), ['p1', { type: 'next-round' }], 'a phone of its own sends just its own 睇完');
+    assert.ok(btnText(s.root, '✓ 睇完 · 等緊其他人'), 'the button says you are done');
+    assert.equal(sim.act('p1', { type: 'next-round' }), true);
+    s.show();
+    assert.ok(s.root.textContent.includes('睇完 1 / 5'));
+    assert.ok(s.root.textContent.includes('等緊：玩家2、玩家3、玩家4、玩家5'));
+    assert.ok(s.root.textContent.includes('齊人就開下一局'));
+    // the shared phone: one tap, both seats
+    const b = mountSpyfallSeat(ui, sim, 'p4', log);
+    while (t.step()) { /* run its countdown */ }
+    clickEl(btnText(b.root, '睇完 ✓'));
+    const [who, act] = log.sent.pop();
+    assert.equal(who, 'p4');
+    assert.deepEqual(act, { type: 'next-round', seats: ['p5'] });
+    assert.equal(sim.act(who, act), true);
+    assert.deepEqual(sim.view('p1').seen.who, ['p1', 'p4', 'p5']);
+    for (const id of ['p2', 'p3']) for (const x of [s, b]) { x.show(); assert.ok(x.root.textContent.includes(`睇完 3 / 5`)); }
+    sim.act('p2', { type: 'next-round' });
+    assert.equal(phase(sim), 'roundEnd');
+    sim.act('p3', { type: 'next-round' });
+    assert.equal(phase(sim), 'reveal', 'the last present seat moves everybody on');
+    s.handle.destroy();
+    b.handle.destroy();
+  }));
+});
+
+test('spyfall ui: a 睇完 the host never confirmed comes back as a button', async () => {
+  await withSpyfallUi(async (ui) => withQueuedTimers(async (t) => {
+    const sim = playing(4, { seed: 53, config: { rounds: 2 } });
+    wrongGuess(sim);
+    const log = { sent: [], sfx: [], toast: [] };
+    const s = mountSpyfallSeat(ui, sim, 'p2', log);
+    t.step(); t.step();
+    clickEl(btnText(s.root, '睇完 ✓'));
+    assert.ok(btnText(s.root, '✓ 睇完 · 等緊其他人'));
+    // the action is lost on the way: nothing reaches the engine, the retry timer fires
+    while (t.step()) { /* retry */ }
+    assert.ok(btnText(s.root, '睇完 ✓'), 'the button is back');
+    s.handle.destroy();
+  }));
+});
+
+// ============================================================
+// decisions 2026-10-04: D3 睇完 n / m, D4 absent seats, D6 secret own vote
+// ============================================================
+
+const ABSENT = (pid) => ({ type: '@absent', pid });
+const PRESENT = (pid) => ({ type: '@present', pid });
+const absentOf = (sim) => sim.view(null).absent;
+
+test('spyfall D3: the host’s 下一步 finishes the narration first, then forces the reveal on; elsewhere it only touches narration', () => {
+  const sim = playing(5, { seed: 301, config: { rounds: 2 } });
+  wrongGuess(sim);
+  assert.equal(phase(sim), 'roundEnd');
+  sim.act('p1', { type: 'next-round' });
+  assert.ok(sim.cue(), 'the reveal is being read out');
+  assert.equal(sim.host({ type: ACT.NEXT }), true);
+  assert.equal(phase(sim), 'roundEnd', 'the first 下一步 only finishes the line');
+  assert.equal(sim.host({ type: ACT.NEXT }), true);
+  assert.equal(phase(sim), 'reveal', 'the second one moves everybody on, readers or not');
+  assert.equal(sim.view('p1').round.n, 2);
+  assert.deepEqual(sim.view('p1').seen, null);
+  // a shared phone's seats: only real, present seats are marked, and junk in `seats` is ignored
+  readyAll(sim);
+  wrongGuess(sim);
+  assert.equal(sim.act('p2', { type: 'next-round', seats: ['p3', 'ghost', 7, null, 'p2'] }), true);
+  assert.deepEqual(sim.view('p1').seen.who, ['p2', 'p3']);
+  assert.deepEqual(engine.autoAct(sim.state, 'p4', { rng: mulberry32(1) }), { type: 'next-round' }, 'a stalled reader gets 代佢做');
+  assert.equal(engine.autoAct(sim.state, 'p2', { rng: mulberry32(1) }), null, 'nothing to do for a seat that has read it');
+});
+
+test('spyfall D4: @absent — ready checks, the floor and accusations skip the seat; legalActions and act agree; @present brings it back', () => {
+  const sim = mk(6, { seed: 310 });
+  const spy = spyOf(sim);
+  const gone = nonSpies(sim).find((id) => id !== R(sim).dealer);
+  for (const id of ids(sim)) if (id !== gone) sim.act(id, { type: 'ready' });
+  assert.equal(phase(sim), 'reveal', 'still waiting on the missing seat');
+  assert.deepEqual(engine.focus(sim.state).pids, [gone]);
+  assert.equal(sim.host(ABSENT(gone)), true);
+  assert.equal(phase(sim), 'play', 'marking the last missing seat absent starts the clock');
+  assert.deepEqual(absentOf(sim), [gone]);
+  for (const p of sim.players) assert.deepEqual(sim.view(p.id).absent, [gone], 'absent seats are public, the same on every phone');
+  assert.equal(sim.host(ABSENT(gone)), false, 'twice is nothing');
+  // the absent seat does nothing, and cannot be asked or accused
+  assert.deepEqual(sim.legal(gone), []);
+  assert.equal(sim.act(gone, { type: 'accuse', target: spy }), false);
+  const holder = R(sim).floor.holder;
+  assert.equal(sim.act(holder, { type: 'ask', target: gone }), false, 'nobody asks an empty chair');
+  assert.ok(!sim.legal(holder).some((a) => a.target === gone));
+  assert.ok(!sim.legal(holder).some((a) => a.type === 'accuse' && a.target === gone), 'nobody accuses an empty chair');
+  assert.ok(sim.view(gone).hint.includes('唔喺度'), 'the absent seat’s 💡 says why nothing works');
+  // the floor moves off a seat that leaves while holding it
+  const asked = nonSpies(sim).find((id) => id !== gone && id !== holder);
+  sim.act(holder, { type: 'ask', target: asked });
+  assert.equal(R(sim).floor.holder, asked);
+  assert.equal(sim.host(ABSENT(asked)), true);
+  const now = R(sim).floor.holder;
+  assert.ok(now !== asked && !sim.state.absent[now], 'the question card never rests on an empty chair');
+  assert.equal(R(sim).floor.prev, null, 'the new holder may ask anyone');
+  // back
+  assert.equal(sim.host(PRESENT(asked)), true);
+  assert.deepEqual(absentOf(sim), [gone]);
+  assert.equal(sim.host(PRESENT(asked)), false, 'already back');
+  assert.ok(sim.legal(asked).length > 0, 'a seat that is back acts again');
+});
+
+test('spyfall D4: an accusation needs the present voters only; an absent voter closes a vote that was waiting on it', () => {
+  const sim = playing(6, { seed: 320 });
+  const spy = spyOf(sim);
+  const [a, , c] = nonSpies(sim);
+  sim.act(a, { type: 'accuse', target: spy });
+  for (const id of ids(sim)) if (id !== a && id !== spy && id !== c) sim.act(id, { type: 'vote', yes: true });
+  assert.equal(phase(sim), 'vote', 'one voter is missing');
+  assert.deepEqual(engine.focus(sim.state).pids, [c]);
+  assert.equal(sim.host(ABSENT(c)), true);
+  assert.equal(phase(sim), 'tally', 'the vote closes once every PRESENT voter is in');
+  const t = sim.view('p1').tally;
+  assert.equal(t.convicted, true, 'unanimity of the present voters convicts');
+  assert.ok(!t.yes.includes(c) && !t.no.includes(c), 'the absent seat is neither yes nor no');
+  assert.equal(t.voters, 4);
+  settle(sim);
+  assert.equal(sim.view('p1').end.code, 'accused-spy');
+  assert.equal(sim.state.history[0].deltas[c], 1, 'the absent seat still scores with its side (it played the round)');
+});
+
+test('spyfall D4: an accusation of a seat that leaves is called off — the accuser keeps the one try and the clock resumes', () => {
+  const sim = playing(6, { seed: 330 });
+  const [a, x] = nonSpies(sim);
+  const left = sim.state.deadline + sim.state.clockLeft - sim.now;
+  sim.tick(10_000);
+  sim.act(a, { type: 'accuse', target: x });
+  assert.equal(phase(sim), 'vote');
+  sim.tick(5_000);
+  assert.equal(sim.host(ABSENT(x)), true);
+  assert.equal(phase(sim), 'play');
+  assert.equal(R(sim).accUsed[a], undefined, 'the accusation is given back');
+  assert.deepEqual(R(sim).accusations, []);
+  assert.equal(sim.state.deadline + sim.state.clockLeft - sim.now, left - 10_000, 'the clock resumes where it stopped');
+  assert.ok(sim.cue().text.includes('指控取消'));
+});
+
+test('spyfall D4: the final vote passes over absent seats; hands mode re-picks a reporter that left', () => {
+  const sim = playing(6, { seed: 340, config: { voteMode: 'hands' } });
+  const order = sim.state.order;
+  const dealer = R(sim).dealer;
+  const at = (k) => order[(order.indexOf(dealer) + k) % order.length];
+  const awaySeat = [at(1), at(2), at(3)].find((id) => !R(sim).spies.includes(id));
+  assert.equal(sim.host(ABSENT(awaySeat)), true);
+  timeUp(sim);
+  assert.equal(R(sim).vote.suspect, dealer);
+  const pos = sim.view('p1').vote;
+  assert.equal(pos.index, 1);
+  assert.equal(pos.of, 5, 'five present seats take a turn as suspect');
+  assert.equal(R(sim).vote.reporter, at(1) === awaySeat ? at(2) : at(1), 'the dealer is the suspect, so the next PRESENT seat reports');
+  const suspects = [];
+  for (let k = 0; k < 6 && phase(sim) === 'vote'; k++) {
+    suspects.push(R(sim).vote.suspect);
+    assert.equal(sim.view('p1').vote.index, k + 1);
+    sim.act(R(sim).vote.reporter, { type: 'verdict', no: 1 });
+    settle(sim);
+  }
+  assert.ok(!suspects.includes(awaySeat), 'the absent seat is never a suspect');
+  assert.equal(suspects.length, 5);
+  assert.equal(sim.view('p1').end.code, 'survived');
+  // a reporter who leaves mid-vote is replaced
+  const h = playing(6, { seed: 341, config: { voteMode: 'hands' } });
+  const [acc, sus] = nonSpies(h);
+  h.act(acc, { type: 'accuse', target: sus });
+  assert.equal(R(h).vote.reporter, acc);
+  assert.equal(h.host(ABSENT(acc)), true);
+  const rep = R(h).vote.reporter;
+  assert.ok(rep !== acc && rep !== sus && !h.state.absent[rep]);
+  assert.equal(h.view('p1').vote.voters.length, 4);
+  assert.ok(h.legal(rep).some((a) => a.type === 'verdict' && a.no === 4));
+  assert.ok(!h.legal(rep).some((a) => a.type === 'verdict' && a.no === 5), 'no more "no" votes than present voters');
+  assert.equal(h.act(rep, { type: 'verdict', no: 5 }), false);
+});
+
+test('spyfall D4: an absent spy voids the round — nobody scores, the same round is dealt again with a fresh location', () => {
+  for (const ph of ['reveal', 'play', 'vote', 'tally', 'guess']) {
+    const sim = mk(5, { seed: 350 + ph.length, config: { rounds: 2 } });
+    if (ph !== 'reveal') readyAll(sim);
+    const spy = spyOf(sim);
+    const [a, b] = nonSpies(sim);
+    if (ph === 'vote' || ph === 'tally') sim.act(a, { type: 'accuse', target: b });
+    if (ph === 'tally') voteAll(sim, false);
+    if (ph === 'guess') sim.act(spy, { type: 'spy-stop' });
+    assert.equal(phase(sim), ph);
+    const oldLoc = R(sim).loc;
+    const oldName = sim.state.list[oldLoc].name;
+    assert.equal(sim.host(ABSENT(spy)), true);
+    assert.equal(phase(sim), 'reveal', `${ph}: back to a fresh deal`);
+    assert.equal(R(sim).n, 1, 'the same round number');
+    assert.equal(R(sim).redo, true);
+    assert.notEqual(R(sim).loc, oldLoc, 'a fresh location');
+    assert.ok(!R(sim).spies.includes(spy), 'an absent seat is never dealt the spy');
+    assert.notEqual(sim.state.plan[1].loc, R(sim).loc, 'the fresh location is not a later round’s');
+    const h = sim.state.history[0];
+    assert.equal(h.code, 'void');
+    assert.equal(h.why, 'absent');
+    assert.ok(Object.values(h.deltas).every((d) => d === 0), 'nobody scores a void round');
+    assert.ok(Object.values(sim.state.totals).every((d) => d === 0));
+    const v = sim.view('p2');
+    assert.equal(v.locations[oldLoc].used, true, 'the voided location greys out');
+    assert.deepEqual(v.redo.spies, [spy]);
+    assert.equal(v.redo.location.name, oldName);
+    assert.ok(sim.cue().text.startsWith('上一鋪唔計'), 'the narration says it is a re-deal');
+    checkViews(sim);
+    // the re-dealt round plays out normally and the game still has its two scored rounds
+    readyAll(sim);
+    wrongGuess(sim);
+    allSeen(sim);
+    assert.equal(sim.view('p1').redo, null, 'the next round is a normal deal');
+    readyAll(sim);
+    wrongGuess(sim);
+    allSeen(sim);
+    assert.equal(phase(sim), 'over');
+    const res = sim.result();
+    assert.ok(res.lines[0].includes('作廢') && res.lines[0].includes(oldName), res.lines[0]);
+    assert.equal(sim.state.history.filter((x) => x.code !== 'void').length, 2);
+    assert.ok(sim.cue().text.startsWith('2局打完'), 'the over line counts scored rounds');
+  }
+});
+
+test('spyfall D4: the host’s 呢鋪唔計 (@void-round) re-deals a live round; canVoid explains a scored one', () => {
+  const sim = playing(5, { seed: 360, config: { rounds: 1 } });
+  assert.deepEqual(engine.canVoid(sim.state), { ok: true });
+  const loc = R(sim).loc;
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), true);
+  assert.equal(phase(sim), 'reveal');
+  assert.notEqual(R(sim).loc, loc);
+  assert.equal(sim.state.history[0].why, 'host');
+  assert.ok(sim.view('p1').redo.location.name);
+  readyAll(sim);
+  wrongGuess(sim);
+  assert.equal(engine.canVoid(sim.state).ok, false);
+  assert.ok(engine.canVoid(sim.state).message.includes('睇完'));
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), false, 'a scored round stays');
+  allSeen(sim);
+  assert.equal(phase(sim), 'over');
+  assert.equal(sim.host({ type: ACT.VOID_ROUND }), false);
+  // no spare location left: the round just does not count
+  const tiny = mk(3, { seed: 361, config: { rounds: 1 } });
+  tiny.state.spare = [];
+  assert.equal(tiny.host({ type: ACT.VOID_ROUND }), true);
+  assert.equal(phase(tiny), 'over');
+  assert.deepEqual(tiny.result().points, { p1: 0, p2: 0, p3: 0 });
+  assert.ok(tiny.result().lines.some((l) => l.includes('作廢')));
+});
+
+test('spyfall D4: @absent is refused when too few would be left, for a non-seat, and once the game is over', () => {
+  const three = playing(3, { seed: 370 });
+  assert.equal(three.host(ABSENT(nonSpies(three)[0])), false, 'three seats is the minimum');
+  const two = playing(7, { seed: 371, config: { spies: 2, twoSpyThreshold: 'n-3' } });
+  const ns = nonSpies(two);
+  assert.equal(two.host(ABSENT(ns[0])), true);
+  assert.equal(two.host(ABSENT(ns[1])), true);
+  assert.equal(two.host(ABSENT(ns[2])), true);
+  assert.equal(two.host(ABSENT(ns[3])), false, 'two spies with two dissenters allowed need four present seats');
+  const sim = mk(4, { seed: 372 });
+  for (const junk of [null, undefined, 'ghost', 5, {}]) assert.equal(sim.host(ABSENT(junk)), false);
+  assert.equal(sim.host(PRESENT('p1')), false, 'a present seat cannot come back');
+  playRounds(sim);
+  assert.equal(phase(sim), 'over');
+  assert.equal(sim.host(ABSENT('p1')), false);
+});
+
+test('spyfall D4: an absent seat is never waited on at the reveal, and a later deal never makes it the spy or the dealer', () => {
+  const sim = playing(6, { seed: 380, config: { rounds: 4 } });
+  const gone = nonSpies(sim)[0];
+  sim.host(ABSENT(gone));
+  wrongGuess(sim);
+  for (const id of ids(sim)) if (id !== gone && phase(sim) === 'roundEnd') sim.act(id, { type: 'next-round' });
+  assert.equal(phase(sim), 'reveal', 'the absent seat’s 睇完 is not needed');
+  for (let k = 0; k < 3; k++) {
+    assert.ok(!R(sim).spies.includes(gone));
+    assert.notEqual(R(sim).dealer, gone, 'the dealer rotation passes over an absent seat');
+    readyAll(sim);
+    wrongGuess(sim);
+    allSeen(sim);
+  }
+  assert.equal(phase(sim), 'over');
+  // marking the last reader absent finishes the reveal
+  const t = playing(5, { seed: 381, config: { rounds: 2 } });
+  wrongGuess(t);
+  const [x, ...rest] = ids(t);
+  for (const id of rest) t.act(id, { type: 'next-round' });
+  assert.equal(phase(t), 'roundEnd');
+  assert.equal(t.host(ABSENT(x)), true);
+  assert.equal(phase(t), 'reveal');
+});
+
+test('spyfall D4: fuzz — random @absent / @present / @void-round mid-game keep legalActions, views and points consistent', () => {
+  for (let seed = 1; seed <= 60; seed++) {
+    const n = 4 + (seed % 7);
+    const spies = n >= 6 && seed % 3 === 0 ? 2 : 1;
+    const sim = mk(n, { seed: 9000 + seed, config: { rounds: 1 + (seed % 3), spies, voteMode: seed % 2 ? 'phone' : 'hands' } });
+    const rng = mulberry32(seed);
+    let steps = 0;
+    const { result } = sim.runRandom({
+      maxSteps: 40000,
+      onStep(s) {
+        if (++steps % 9) return;
+        const x = rng();
+        const pid = ids(s)[Math.floor(rng() * n)];
+        if (x < 0.25) s.host(ABSENT(pid));
+        else if (x < 0.4) s.host(PRESENT(pid));
+        else if (x < 0.43) s.host({ type: ACT.VOID_ROUND });
+        if (s.state.phase === 'over') return;
+        if (steps % 27 === 0) checkViews(s);
+        const st = s.state;
+        for (const id of ids(s)) {
+          if (st.absent[id]) assert.deepEqual(s.legal(id), [], 'an absent seat has nothing to do');
+        }
+        if (['reveal', 'play', 'vote', 'tally', 'guess'].includes(st.phase)) {
+          assert.ok(!st.round.spies.some((id) => st.absent[id]), 'a live round never has an absent spy');
+        }
+        const f = engine.focus(st);
+        if (f) assert.ok(!f.pids.some((id) => st.absent[id]), 'focus never waits on an absent seat');
+      },
+    });
+    const s = sim.state;
+    assert.equal(s.history.filter((h) => h.code !== 'void').length, s.cfg.rounds);
+    for (const id of ids(sim)) assert.equal(s.totals[id], s.history.reduce((a, h) => a + h.deltas[id], 0));
+    assert.deepEqual(result.points, s.totals);
+    const locs = s.history.map((h) => h.loc);
+    assert.equal(new Set(locs).size, locs.length, 'no location twice, voided ones included');
+  }
+});
+
+test('spyfall D6: your own phone says 已投 ✓, never which way you voted', async () => {
+  await withSpyfallUi(async (ui) => {
+    const sim = playing(5, { seed: 390 });
+    const [a, b, c] = nonSpies(sim);
+    sim.act(a, { type: 'accuse', target: b });
+    sim.act(c, { type: 'vote', yes: false });
+    const log = { sent: [], sfx: [], toast: [] };
+    const s = mountSpyfallSeat(ui, sim, c, log);
+    const box = boxOf(s.root, 'sf-vote').textContent;
+    assert.ok(box.includes('已投 ✓'), box);
+    assert.ok(!box.includes('👎') && !box.includes('👍'), 'no 👍 / 👎 on the voter’s own phone');
+    const acc = mountSpyfallSeat(ui, sim, a, log);
+    assert.ok(boxOf(acc.root, 'sf-vote').textContent.includes('自動贊成'), 'the accuser’s automatic yes is public anyway');
+    s.handle.destroy();
+    acc.handle.destroy();
+  });
+});
+
+test('spyfall ui D4: 💤 marks absent seats; an absent phone is told why; the re-deal says what was thrown away', async () => {
+  await withSpyfallUi(async (ui) => {
+    const sim = mk(6, { seed: 395 });
+    const spy = spyOf(sim);
+    const gone = nonSpies(sim)[0];
+    sim.host(ABSENT(gone));
+    const log = { sent: [], sfx: [], toast: [] };
+    const other = nonSpies(sim)[1];
+    const s = mountSpyfallSeat(ui, sim, other, log);
+    const g = mountSpyfallSeat(ui, sim, gone, log);
+    const nm = (pid) => sim.players.find((p) => p.id === pid).name;
+    assert.ok(s.root.textContent.includes(`💤 唔喺度：${nm(gone)}`));
+    assert.ok(!boxOf(s.root, 'sf-ready').textContent.includes(`等緊 ${nm(gone)}`));
+    assert.ok(g.root.textContent.includes('房主當咗你唔喺度'));
+    assert.ok(!btnText(g.root, '準備好'), 'no ready button on an absent phone');
+    readyAll(sim);
+    s.show();
+    g.show();
+    const chip = findEls(boxOf(s.root, 'sf-floor'), (n) => n.tag === 'button' && n.textContent.includes(nm(gone)))[0];
+    assert.ok(chip && isOff(chip) && chip.textContent.includes('💤'), 'the empty chair cannot be asked');
+    assert.ok(boxOf(g.root, 'sf-actions').textContent.includes('房主當咗你唔喺度'));
+    // the spy leaves: a fresh deal, and the banner says what was thrown away
+    const oldName = sim.state.list[R(sim).loc].name;
+    sim.host(ABSENT(spy));
+    s.show();
+    const banner = boxOf(s.root, 'sf-banner-wrap').textContent;
+    assert.ok(banner.includes('上一鋪唔計') && banner.includes(`${nm(spy)} 唔喺度，佢係間諜`) && banner.includes(oldName), banner);
+    s.handle.destroy();
+    g.handle.destroy();
+  });
+});
+
+test('spyfall D4: a dealer marked away at the reveal hands the first question on (the ready line agrees); a round snapshotted before 睇完 existed still works', async () => {
+  await withSpyfallUi(async (ui) => {
+    let sim = null;
+    for (let seed = 397; !sim; seed++) { const t = mk(5, { seed }); if (!R(t).spies.includes(R(t).dealer)) sim = t; }
+    const d = R(sim).dealer;
+    const order = sim.state.order;
+    const next = order[(order.indexOf(d) + 1) % order.length];
+    assert.equal(sim.host(ABSENT(d)), true);
+    const other = order.find((id) => id !== d);
+    const s = mountSpyfallSeat(ui, sim, other, { sent: [], sfx: [], toast: [] });
+    const nm = (pid) => sim.players.find((p) => p.id === pid).name;
+    const line = boxOf(s.root, 'sf-ready').textContent;
+    assert.ok(line.includes(`由 ${nm(next)} 問第一條問題`) && !line.includes(`由 ${nm(d)} 問`), line);
+    readyAll(sim);
+    assert.equal(R(sim).floor.holder, next, 'the engine hands the first question to the same seat');
+    s.handle.destroy();
+  });
+  // a host that reloads onto a newer build mid-reveal: the old round has no `seen` yet
+  const sim = mk(5, { seed: 398 });
+  readyAll(sim);
+  wrongGuess(sim);
+  assert.equal(phase(sim), 'roundEnd');
+  delete sim.state.round.seen;
+  assert.doesNotThrow(() => { for (const id of ids(sim)) sim.view(id); });
+  assert.ok(sim.legal('p1').some((a) => a.type === 'next-round'));
+  allSeen(sim);
+  assert.equal(phase(sim), 'reveal', 'every 睇完 still moves the table on');
 });

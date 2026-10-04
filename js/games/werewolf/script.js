@@ -35,10 +35,23 @@ export const orZh = (list) => (list.length <= 1 ? (list[0] ?? '') : `${list.slic
 export const ROLE_IDS = ['werewolf', 'villager', 'seer', 'witch', 'hunter', 'guard', 'idiot'];
 export const GOD_IDS = ['seer', 'witch', 'hunter', 'guard', 'idiot'];
 
-const WIN_WOLF = '殺晒神職或者平民（屠邊），或者殺晒所有好人（屠城）— 睇設定。';
-const WIN_GOOD = '放逐晒所有狼人。';
+// The 📖 rules sheet has no table, so it states both win rules; the role card (roleCardText) prints this table's rule only.
+const WIN_WOLF = '殺晒神職或者平民（屠邊），或者殺晒所有好人（屠城）— 睇房主設定。';
+const WIN_GOOD = '所有狼人出局。';
+/** 點贏 for one side under one win rule ('edge' 屠邊 | 'city' 屠城). */
+const WIN_BY = {
+  wolf: {
+    city: '今局屠城，要殺晒所有好人（神職同平民）。',
+    edge: '今局屠邊，殺晒所有神職或者殺晒所有平民就贏。',
+  },
+  good: {
+    city: '所有狼人出局。（今局屠城：狼人要殺晒所有好人先贏）',
+    edge: '所有狼人出局。（今局屠邊：神職或者平民死晒，狼人就贏）',
+  },
+};
 
-const mk = (id, name, emoji, team, what, win) => ({ id, name, emoji, team, what, win, text: `做乜：${what} 點贏：${win}` });
+const roleText = (what, win) => `做乜：${what} 點贏：${win}`;
+const mk = (id, name, emoji, team, what, win) => ({ id, name, emoji, team, what, win, text: roleText(what, win) });
 
 export const ROLES = {
   werewolf: mk('werewolf', '狼人', '🐺', 'wolf', '夜晚同隊友一齊揀一個人殺，日頭扮好人；發言時可以自爆。', WIN_WOLF),
@@ -54,13 +67,38 @@ export const roleName = (id) => ROLES[id]?.name ?? '?';
 export const roleTag = (id) => (ROLES[id] ? `${ROLES[id].emoji} ${ROLES[id].name}` : '?');
 export const campName = (camp) => (camp === 'wolf' ? '🐺 狼人' : '✅ 好人');
 
-/** The role card's text at the deal, with a line about what this board adds for that role. */
-export function roleCardText(roleId, { hasWitch, hasGuard } = {}) {
-  const base = ROLES[roleId]?.text ?? '';
-  if (roleId === 'werewolf') return `${base} 第一晚你會知邊個係隊友。`;
-  if (roleId === 'guard' && hasWitch) return `${base} 你同女巫又守又救同一個人，個人會死。`;
-  if (roleId === 'witch' && hasGuard) return `${base} 同守衛又守又救同一個人，個人會死。`;
-  return base;
+/**
+ * The role card's text, with a line about what this board adds for that role. With `win` ('edge' | 'city') the
+ * 點贏 part states THIS table's rule only (a wolf is never told 「睇設定」 on a table that has already decided).
+ */
+export function roleCardText(roleId, { hasWitch, hasGuard, win } = {}) {
+  const r = ROLES[roleId];
+  if (!r) return '';
+  const side = r.team === 'wolf' ? 'wolf' : 'good';
+  const base = WIN_BY[side][win] ? roleText(r.what, WIN_BY[side][win]) : r.text;
+  const extra = boardExtra(roleId, { hasWitch, hasGuard });
+  return extra ? `${base} ${extra}` : base;
+}
+
+/** The line this board adds to a role (public facts only: the board and the role itself). */
+function boardExtra(roleId, { hasWitch, hasGuard } = {}) {
+  if (roleId === 'werewolf') return '第一晚你會知邊個係隊友。';
+  if (roleId === 'guard' && hasWitch) return '你同女巫又守又救同一個人，個人會死。';
+  if (roleId === 'witch' && hasGuard) return '同守衛又守又救同一個人，個人會死。';
+  return '';
+}
+
+/**
+ * The 💡 sheet's role box for THIS table (view.hintRoleText → { what, win }): the same words as the role card, with the
+ * board's extra line under 做乜 and only this table's rule under 點贏. Built from the role, the board and the win rule —
+ * so every seat holding the same card gets exactly the same text, and nothing in it depends on a hidden fact.
+ */
+export function roleHintText(roleId, { hasWitch, hasGuard, win } = {}) {
+  const r = ROLES[roleId];
+  if (!r) return null;
+  const side = r.team === 'wolf' ? 'wolf' : 'good';
+  const extra = boardExtra(roleId, { hasWitch, hasGuard });
+  return { what: extra ? `${r.what} ${extra}` : r.what, win: WIN_BY[side][win] ?? r.win };
 }
 
 // ---------- rules (the shell's 規則 sheet) ----------
@@ -488,15 +526,22 @@ export function cueExplode(who, role) {
   return `${who}自爆！佢係${role ?? '狼人'}。今日即刻完結，直接入夜。`;
 }
 
-/** The first speaker gets the order and the clock read out; after that a speaker is just called. */
-export function cueSpeech({ who, idx, total, pk, secs, dirUp, tied }) {
+/**
+ * The first speaker gets the order and the clock read out; after that a speaker is just called. The order is said by
+ * NAMING the next speakers: 「按座位號由大到細，由阿聰開始」 sounds wrong when 阿聰 is seat 1 and the order wraps
+ * round to 6, 5, 4 … (playtest p3), while 「跟住係阿珍、阿強」 is right whatever the start.
+ */
+export function cueSpeech({ who, idx, total, pk, secs, dirUp, tied, next = [] }) {
   const timer = secs > 0 ? `每人 ${secs} 秒。` : '';
   if (pk) {
     return idx === 0
       ? `${andZh(tied)}平票，要 PK 發言。${who}先講。${timer}`
       : `到${who} PK 發言。`;
   }
-  if (idx === 0) return `而家開始發言，按座位號${dirUp ? '由細到大' : '由大到細'}，由${who}開始。${timer}`;
+  if (idx === 0) {
+    const more = total > next.length + 1 ? `，之後按座位號${dirUp ? '順數' : '倒數'}落去` : '';
+    return `而家開始發言，由${who}開始${next.length ? `，跟住係${next.join('、')}${more}` : ''}。${timer}`;
+  }
   if (idx === total - 1) return `最後一位，${who}請發言。`;
   return `${who}請發言。`;
 }
@@ -529,6 +574,19 @@ export function cueMinMs(text) {
   return Math.max(1800, Math.min(7000, String(text).length * 160));
 }
 
+/**
+ * The dawn result is THE public fact of the night and, in 靜音, the only place it is said: people pick their phones up
+ * at different moments, so it stays on screen at least this long (playtest: ≈3 s was missed by half the table).
+ */
+export const DAWN_MIN_MS = 8000;
+
+/**
+ * The 票型 (who voted whom) is read ballot by ballot and argued over: it stays up 4 s plus 0.8 s per voter, at most 15 s
+ * (decision D7). The text's own reading time still counts when it is longer.
+ */
+export const TALLY_MIN_MS = Object.freeze({ base: 4000, perVoter: 800, max: 15000 });
+export const tallyMinMs = (voters) => Math.min(TALLY_MIN_MS.max, TALLY_MIN_MS.base + TALLY_MIN_MS.perVoter * Math.max(0, Math.floor(Number(voters) || 0)));
+
 // ---------- private night panels (what ONE phone shows; decoys use the same slots) ----------
 
 export const PANEL = {
@@ -540,6 +598,8 @@ export const PANEL = {
     '想㩒就㩒：揀個人、㩒確定，扮有嘢做都得。',
   ],
   decoyHint: '大家都要㩒，咁就冇人聽得出邊個真係醒咗。',
+  /** Every seat, during a step's opening line: the chips are grey until the narrator has finished. */
+  cueWait: '準備緊…旁白讀完先㩒得。',
   dead: ['你已經出局，今晚冇得揀。', '照㩒都得，唔會有任何效果。'],
   guard: {
     hint: '被你守住嘅人，今晚唔會被狼人殺死（但擋唔到毒藥）。',
@@ -566,7 +626,23 @@ export const PANEL = {
     victimHidden: '解藥已經用咗，唔會再知道邊個被襲擊。',
     noSelfSave: '呢個規則你唔可以自救。',
     potions: (save, poison) => `解藥：${save ? '有' : '冇'}　毒藥：${poison ? '有' : '冇'}`,
+    // the hint follows what she can still do tonight
     hint: '㩒被襲擊嗰位＝用解藥救佢；㩒其他人＝用毒藥。同一晚淨係用得一支。',
+    hintPoison: '㩒一個人＝用毒藥毒佢。唔想用就㩒「唔用藥」。',
+    hintSave: '㩒被襲擊嗰位＝用解藥救佢。毒藥已經用咗。',
+    hintNone: '今晚冇藥用得，㩒「唔用藥」就得。',
+    // her 確定 button and a line on her own panel name the potion a tap would spend
+    okSave: (who) => `💊 用解藥救 ${who}`,
+    okPoison: (who) => `☠️ 用毒藥毒 ${who}`,
+    pickedSave: (who) => `💊 揀咗救 ${who}：時間到都會用，再㩒佢一次取消。`,
+    pickedPoison: (who) => `☠️ 揀咗毒 ${who}：時間到都會用，再㩒佢一次取消。`,
+    lockedSave: (who) => `💊 已確定：用解藥救 ${who}`,
+    lockedPoison: (who) => `☠️ 已確定：用毒藥毒 ${who}`,
+    lockedNone: '已確定：今晚唔用藥',
+    // the closing line: what she actually did
+    didSave: (who) => `💊 今晚你用咗解藥救 ${who}。`,
+    didPoison: (who) => `☠️ 今晚你用咗毒藥毒 ${who}。`,
+    didNone: '今晚你冇用藥。',
     save: '💊 救',
     poison: '☠️ 毒',
     empty: '兩支藥都用晒喇，今晚冇嘢做。',
@@ -586,12 +662,11 @@ export const PANEL = {
   },
   begin: ['🌙 天黑，閉眼', '部手機放低，唔好偷望。'],
   tail: ['😴 閉返眼', '等下一步。'],
+  // The dead player's own panel by DAY, while the table watches: the SAME words for a hunter, a poisoned hunter and
+  // anybody else (「你係獵人」 on a face-up phone would out a hunter who holds fire). He knows his own card.
   final: {
     skip: '唔開槍',
-    skipDecoy: '知道喇',
-    hunter: ['🏹 你係獵人，可以開槍', '揀一個人帶走，或者唔開槍。時間到就當唔開。'],
-    poisoned: ['你被毒死，開唔到槍。', '照㩒都得，唔會有任何效果。'],
-    other: ['最後行動時間', '你冇最後技能，等時間過。照㩒都得，唔會有任何效果。'],
+    info: ['🏹 最後行動時間', '獵人可以揀一個人開槍帶走（被毒死就開唔到）。其他人等時間過，照㩒都冇效果。'],
   },
 };
 
@@ -619,24 +694,30 @@ export const HINT = {
     mod: '你係上帝：用口讀旁白、睇住面板，夠鐘就㩒「下一步」。',
     table: '夜晚：大家閉埋眼，等手機逐個角色叫。',
   },
+  // By day the 💡 sheet's 「而家要做咩」 is plain text (only its role box is covered) and a phone lies face-up, so no
+  // day line depends on the seat's card: each is worded to serve BOTH sides (a wolf is not told to hunt wolves, and
+  // nobody's line says 「扮好人」 or 「你係獵人」 for a neighbour to read).
   day: {
     dawn: '睇下昨晚邊個出局（唔會講點死），然後準備發言。',
     words: { me: '輪到你講遺言：講完㩒「我講完」。', other: '安靜聽佢講遺言，記低有用嘅資料。' },
     final: {
-      hunter: '你係獵人：揀一個人開槍，或者㩒「唔開槍」；時間到就當唔開。',
-      poisoned: '你被毒死，開唔到槍：等時間過就得，照㩒都冇效果。',
-      other: '你出局喇，冇最後技能：等時間過，照㩒都冇效果。',
+      // the dead player's own window: one line for a hunter, a poisoned hunter and anybody else (like the panel)
+      me: '最後行動：獵人揀一個人開槍（被毒死除外），其他人等時間過。',
       table: '最後行動時間：有技能嘅人而家用，其他人等住。',
     },
     shot: '獵人開槍帶走咗一個人，繼續。',
-    tally: '投票結果公開：睇邊個投邊個，推斷邊個係狼。',
+    tally: '投票結果公開：睇清楚邊個投邊個，記住用嚟推理。',
     flip: '白痴翻牌：佢唔出局，但以後冇票。',
     explode: '狼人自爆：今日完結，直接入夜。',
-    speech: { me: '輪到你發言：講你嘅分析，想報身份都得；講完㩒「我講完」。', other: '聽人發言，揾出講大話嘅人。' },
-    vote: '揀一個你覺得係狼人嘅人，再㩒確定；唔想投就棄權。',
+    speech: {
+      me: '輪到你發言：講你嘅分析，想報身份都得；講完㩒「我講完」。',
+      other: '聽人發言：記低邊個講咩，諗吓邊個似狼、邊個似神職。',
+    },
+    vote: '揀一個你想放逐嘅人，再㩒確定；唔想投就棄權。',
     voted: '投咗喇，等其他人；投晒之前仲可以改。',
     cannotFlip: '你翻咗牌，冇投票權，睇住大家投。',
     cannotPk: '你係 PK 嘅人，今次唔投，等結果。',
+    absent: '房主當咗你暫時離開：今次唔使投，返嚟就同房主講聲。',
     watchVote: '大家投緊票，等結果。',
     pk: '平票：PK 嘅人逐個發言，之後其他人再投一次。',
     dead: '你已經出局：可以睇，但唔好出聲。',
@@ -688,6 +769,8 @@ export const UI = {
     voteNo: '你冇票（白痴翻咗牌），睇住大家投。',
     voteNoPk: '你係 PK 嘅人，今次唔可以投。',
     voteDead: '你已經出局，唔可以投。',
+    // the host marked this seat 💤 (D4): it casts no ballot until the host marks it back
+    voteAbsent: '💤 房主當咗你暫時離開，今次唔使投票。返嚟咗就同房主講聲。',
     votePick: '揀一個你覺得係狼人嘅人，或者棄權。',
     shotHead: '最後行動',
     shotWho: (who) => `${who} 出局，最後行動時間`,
@@ -701,6 +784,13 @@ export const UI = {
     tallyNoExile: (who) => `${who} 得票最多`,
     tallyTie: (names) => `${names} 同票 → PK`,
     tallyPeace: '今日平安日，冇人出局',
+    tallyTie2: '第二次都平票：今日平安日',
+    tallyNobody: '除咗同票嘅人冇人可以投：今日平安日',
+    // public facts kept on the day screens (the dawn card and the tally are up for seconds only)
+    lastNightPeace: '🌅 昨晚：平安夜',
+    lastNightDead: (names) => `🌅 昨晚出局：${names}`,
+    voteLogHead: '🗳 之前嘅投票（票型）',
+    voteLogRound: (d, round) => `第 ${d} 日・${round === 1 ? '投票' : 'PK 投票'}`,
     abstain: '棄權',
     continue: '下一步',
     waitHost: '等主持繼續…',
@@ -709,6 +799,9 @@ export const UI = {
     head: '我嘅身份',
     mates: (names) => `🐺 隊友：${names}`,
     notesHead: '我嘅記錄',
+    notesBack: '㩒住睇我嘅記錄',
+    notesLocked: '記錄鎖咗，要先解鎖身份牌',
+    notesNone: '冇夜晚記錄。',
     seer: (n, who, camp) => `第 ${n} 夜驗 ${who}：${campName(camp)}`,
     witchSave: (n, who) => `第 ${n} 夜用解藥救咗 ${who}`,
     witchPoison: (n, who) => `第 ${n} 夜用毒藥毒咗 ${who}`,
@@ -724,6 +817,7 @@ export const UI = {
     alive: (a, t) => `生存 ${a}/${t}`,
     dead: '💀',
     flipped: '🤡',
+    absent: '💤',
     me: '（你）',
   },
   god: {
@@ -791,7 +885,11 @@ export function summaryLine(win, why) {
   }
 }
 
-export function explainLines(win, why, rule) {
+/**
+ * @param both  the wolves won with the same deaths that took out their last wolf (狼刀優先): the roles list shows
+ *              every wolf dead, so without this line the win reads like a bug (playtest p5).
+ */
+export function explainLines(win, why, rule, { both = false } = {}) {
   const out = [];
   if (win === 'draw') {
     out.push('連續幾個日夜都冇人出局，今場打和。');
@@ -806,6 +904,7 @@ export function explainLines(win, why, rule) {
     : '屠城：所有好人（神職同平民）都出局，狼人先贏。');
   if (why === 'gods') out.push('今次係神職先俾殺晒。');
   else if (why === 'villagers') out.push('今次係平民先俾殺晒。');
+  if (both) out.push('最後一隻狼同一晚都出咗局，不過狼人嘅條件同時達成：兩邊一齊達成，算狼人贏（狼刀優先）。');
   return out;
 }
 
@@ -850,9 +949,8 @@ export function recapNight(rec, nm, rl) {
   return L;
 }
 
-export function recapVote(rec, nm) {
-  const label = rec.round === 1 ? '投票' : 'PK 投票';
-  // grouped by target, most votes first (票型): 「7號阿G 3 票（1號、2號、5號）」, then the abstainers
+/** 票型 grouped by target, most votes first: 「7號阿G 3 票（1號阿A、2號阿B）」, then the abstainers. */
+export function voteParts(rec, nm) {
   const by = new Map();
   const abstain = [];
   for (const v of rec.votes) {
@@ -863,16 +961,24 @@ export function recapVote(rec, nm) {
   const parts = [...by.entries()].sort((a, b) => b[1].length - a[1].length)
     .map(([t, vs]) => `${nm(t)} ${vs.length} 票（${vs.map(nm).join('、')}）`);
   if (abstain.length) parts.push(by.size ? `棄權：${abstain.map(nm).join('、')}` : '全部棄權');
-  const L = [`　🗳 ${label}：${parts.join('；') || '（冇人投）'}`];
+  return parts;
+}
+
+/** What a vote decided, in one line. */
+export function voteOutcome(rec, nm) {
   switch (rec.outcome) {
-    case 'exile': L.push(`　　➜ ${nm(rec.pid)} 被放逐`); break;
-    case 'flip': L.push(`　　➜ ${nm(rec.pid)} 係白痴，翻牌，唔出局`); break;
-    case 'tie': L.push(`　　➜ ${rec.tied.map(nm).join('、')} 同票，PK`); break;
-    case 'tie2': L.push('　　➜ 第二次都平票，平安日'); break;
-    case 'nobody': L.push('　　➜ 平票但冇人可以再投，平安日'); break;
-    default: L.push('　　➜ 冇人得票，平安日'); break;
+    case 'exile': return `${nm(rec.pid)} 被放逐`;
+    case 'flip': return `${nm(rec.pid)} 係白痴，翻牌，唔出局`;
+    case 'tie': return `${rec.tied.map(nm).join('、')} 同票，PK`;
+    case 'tie2': return '第二次都平票，平安日';
+    case 'nobody': return '平票但冇人可以再投，平安日';
+    default: return '冇人得票，平安日';
   }
-  return L;
+}
+
+export function recapVote(rec, nm) {
+  const label = rec.round === 1 ? '投票' : 'PK 投票';
+  return [`　🗳 ${label}：${voteParts(rec, nm).join('；') || '（冇人投）'}`, `　　➜ ${voteOutcome(rec, nm)}`];
 }
 
 export const recapDay = (d) => section(`☀️ 第 ${d} 日`);

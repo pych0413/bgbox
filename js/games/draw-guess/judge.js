@@ -1,9 +1,11 @@
 // ============================================================
 // judge.js — the typed-guess checker for 你畫我猜 (pure, no DOM, Node-importable).
 //
-//   analyse(text, entry, strictness) → { kind, rule, g }
+//   analyse(text, entry, strictness, revealed?) → { kind, rule, g }
 //     kind: 'right' | 'close' | 'near' | 'wrong'
 //     entry: { w, alt?: string[], near?: string[] }
+//     revealed: the characters the hint mask has made public so far (mask cells; empty cells ignored)
+//   maskAnswer(text, entry, revealed) → the drawer's on-screen copy of a private guess (answer characters → ＊)
 //
 // What it does (docs/research/draw-guess.md, "Voting & resolution A"):
 //  1. normalise the guess: NFKC (full-width letters/digits), lower-case, drop whitespace,
@@ -17,10 +19,13 @@
 //  4. any candidate equals an answer → right. A message listing several answers never matches
 //     (no tokenising) — but it contains one, so it lands in `close` and stays hidden from the table.
 //  5. else `close` when (i) answer ≥ 3 chars and edit distance is exactly 1, (ii) a 2-char
-//     answer and the guess shares a character in the same place or is the answer reversed,
-//     (iii) answer ≥ 3 chars, ≥ 60% of its characters are present and the length differs by
-//     ≤ 1 (scrambled), (iv) the guess contains the answer, or is a ≥ 2-char piece of it;
-//     `near` when the guess is in the entry's own `near` list ("right direction").
+//     answer reversed, (iii) answer ≥ 3 chars, ≥ 60% of its characters are present and the
+//     length differs by ≤ 1 (scrambled), (iv) the guess contains the answer, or is a ≥ 2-char
+//     piece of it; `near` when the guess is in the entry's own `near` list ("right direction").
+//     User decision 2026-10-04 (D9): a 2-char guess sharing one character in the same place is NOT
+//     close — hidden, that hands out half the word; revealed, it is public and only misleads. And
+//     every hit but "contains the answer" must share a character the hints have not revealed yet,
+//     or it says nothing new and is `wrong`.
 //
 // Strictness:
 //   strict    only exact matches (NFKC, case, spaces, punctuation) count as right. Everything that
@@ -110,6 +115,33 @@ export function answersOf(entry) {
   return [...set];
 }
 
+// ---------- the drawer's copy of a private guess ----------
+
+const STAR = '＊';
+
+/**
+ * A near-miss guess as the DRAWER's feed shows it. The drawer's phone sits on the table (typed + paper play) or is
+ * held out while drawing, so a private (close / near) text must not spell the answer to whoever glances at it: every
+ * character that occurs in the word or an alias (compared after the fold, the ambiguous groups expanded) becomes ＊,
+ * unless the hint mask already made it public (`revealed`: the revealed characters). The drawer knows the word, so
+ * 「＊龍化石」 still reads as the near miss it was and can still be ✔'d.
+ *
+ * Only for private texts. A WRONG guess is shown verbatim on every phone, so masking it on the drawer's phone alone
+ * would let anyone compare the two screens and read off which characters are in the answer.
+ */
+export function maskAnswer(text, entry, revealed = []) {
+  const s = String(text ?? '');
+  const secret = new Set();
+  for (const a of answersOf(entry)) for (const c of cp(a)) secret.add(c);
+  const pub = publicChars(revealed);
+  let out = '';
+  for (const c of s) {
+    const n = cp(normalise(c));
+    out += n.some((x) => secret.has(x) && !pub.has(x)) ? STAR : c;
+  }
+  return out;
+}
+
 // ---------- distance helpers ----------
 
 export function editDistance(a, b) {
@@ -139,23 +171,39 @@ function overlap(x, y) {
   return n;
 }
 
-/** Which closeness rule (if any) says `c` is a near miss of the answer `a`. */
-function closeRule(c, a) {
+/** The public characters: what the hint mask has revealed, every spelling of an ambiguous one included. */
+function publicChars(revealed) {
+  const pub = new Set();
+  for (const r of Array.isArray(revealed) ? revealed : []) {
+    for (const c of cp(normalise(String(r ?? '')))) for (const v of GROUP_OF.get(c) ?? [c]) pub.add(v);
+  }
+  return pub;
+}
+
+/**
+ * Which closeness rule (if any) says `c` is a near miss of the answer `a`. `pub` = the characters the hints made public.
+ * A guess containing the whole answer is always close (it must never be public text). Any other hit counts only if it
+ * shares a character with the answer that is not public yet — otherwise the 好接近 tells nobody anything (D9).
+ */
+function closeRule(c, a, pub) {
   if (c === a) return '';
+  if (c.includes(a)) return 'contains';
   const x = cp(c);
   const y = cp(a);
   const L = y.length;
-  if (L >= 3 && editDistance(x, y) === 1) return 'edit';
-  if (L === 2 && x.length === 2 && (x[0] === y[0] || x[1] === y[1] || (x[0] === y[1] && x[1] === y[0]))) return 'pair';
-  if (L >= 3 && Math.abs(x.length - L) <= 1 && overlap(x, y) / L >= 0.6) return 'scramble';
-  if (c.includes(a)) return 'contains';
-  if (x.length >= 2 && a.includes(c)) return 'part';
-  return '';
+  let rule = '';
+  if (L >= 3 && editDistance(x, y) === 1) rule = 'edit';
+  // (ii) a 2-character answer: only the answer reversed — never one character in the same place (D9, 2026-10-04)
+  else if (L === 2 && x.length === 2 && x[0] === y[1] && x[1] === y[0]) rule = 'pair';
+  else if (L >= 3 && Math.abs(x.length - L) <= 1 && overlap(x, y) / L >= 0.6) rule = 'scramble';
+  else if (x.length >= 2 && a.includes(c)) rule = 'part';
+  if (!rule) return '';
+  return x.some((ch) => y.includes(ch) && !pub.has(ch)) ? rule : '';
 }
 
 // ---------- the checker ----------
 
-export function analyse(text, entry, strictness = 'standard') {
+export function analyse(text, entry, strictness = 'standard', revealed = []) {
   const g = normalise(text);
   const out = { kind: 'wrong', rule: '', g };
   if (!g) return out;
@@ -170,7 +218,7 @@ export function analyse(text, entry, strictness = 'standard') {
       .filter((x) => typeof x === 'string').map((x) => normalise(x, { fold: false }));
     if (raw && exact.includes(raw)) return { kind: 'right', rule: 'exact', g };
     // everything the standard checker would let through is only "close" here (and stays hidden)
-    const std = analyse(text, entry, 'standard');
+    const std = analyse(text, entry, 'standard', revealed);
     return std.kind === 'wrong' ? std : { kind: 'close', rule: std.rule || 'folded', g };
   }
 
@@ -185,9 +233,10 @@ export function analyse(text, entry, strictness = 'standard') {
       }
     }
   }
+  const pub = publicChars(revealed);
   for (const c of cands) {
     for (const a of answers) {
-      const rule = closeRule(c, a);
+      const rule = closeRule(c, a, pub);
       if (rule) return { kind: 'close', rule, g };
     }
   }

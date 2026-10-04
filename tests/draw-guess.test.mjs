@@ -16,7 +16,7 @@ import bankFile from '../js/data/draw-words.js';
 import { roleParts, teamStyle, roleFor, resultSections } from '../js/ui/logic.js';
 
 const { engine, config, meta, rules, CATEGORIES, scoreEntry, teamSizes, teamRoundsFor, cyclesFor, topicMatch } = game;
-const { analyse, normalise, answersOf, editDistance, AMBIGUOUS } = judgeMod;
+const { analyse, normalise, answersOf, editDistance, AMBIGUOUS, maskAnswer } = judgeMod;
 
 // ---------- fixtures ----------
 
@@ -333,7 +333,7 @@ test('judge: close, near and wrong', () => {
   assert.equal(analyse('', wheel).kind, 'wrong');
   assert.equal(analyse('！！', wheel).kind, 'wrong');
   const tiger = { w: '老虎', alt: [] };
-  assert.equal(analyse('老鼠', tiger).kind, 'close', 'two-character answer: shares a character in the same place');
+  assert.equal(analyse('老鼠', tiger).kind, 'wrong', 'D9: one character in the same place is not close (it would hand out half the word)');
   assert.equal(analyse('虎老', tiger).kind, 'close', 'reversed');
   assert.equal(analyse('獅子', tiger).kind, 'wrong');
   assert.equal(analyse('馬', tiger).kind, 'wrong');
@@ -342,6 +342,28 @@ test('judge: close, near and wrong', () => {
   // `near`: a related answer from the entry itself
   assert.equal(analyse('獅子', { w: '老虎', alt: [], near: ['獅子', '豹'] }).kind, 'near');
   assert.equal(analyse('豹', { w: '老虎', alt: [], near: ['獅子', '豹'] }).kind, 'near');
+});
+
+test('judge: maskAnswer stars every answer character the hints have not made public, in any script', () => {
+  const wheel = { w: '摩天輪', alt: ['摩天轮', 'Ferris wheel'] };
+  assert.equal(maskAnswer('摩天大樓', wheel), '＊＊大樓', 'the word’s own characters');
+  assert.equal(maskAnswer('摩天轮机', wheel), '＊＊＊机', 'a Simplified spelling folds onto the word');
+  assert.equal(maskAnswer('摩天大樓', wheel, ['天']), '＊天大樓', 'a revealed character is public already');
+  assert.equal(maskAnswer('摩天大樓', wheel, ['', '天', '']), '＊天大樓', 'empty mask cells are ignored');
+  assert.equal(maskAnswer('FERRIS 輪', wheel), '＊＊＊＊＊＊ ＊', 'Latin aliases: case-insensitive, spaces kept');
+  assert.equal(maskAnswer('太空船', wheel), '太空船', 'nothing to hide');
+  assert.equal(maskAnswer('', wheel), '');
+  // the ambiguous groups (麵/面…) are never folded, so the answer's spellings are expanded instead
+  const noodles = { w: '炒麵', alt: [] };
+  assert.equal(maskAnswer('炒面', noodles), '＊＊');
+  assert.equal(maskAnswer('湯麪', noodles, ['麵']), '湯麪', 'revealed 麵 makes every spelling of it public');
+  // property over the real bank: a close guess, starred, never shows an unrevealed answer character
+  for (const e of FLAT.slice(0, 400)) {
+    const chars = Array.from(e.w).filter((c) => !/\s/.test(c));
+    const masked = maskAnswer(`${e.w}嘅嘢`, e);
+    for (const c of chars) assert.ok(!masked.includes(c), `${e.w}: ${masked}`);
+    assert.ok(masked.endsWith('嘅嘢') || answersOf(e).some((a) => /[嘅嘢]/.test(a)));
+  }
 });
 
 test('judge: strictness', () => {
@@ -990,6 +1012,46 @@ test('draw-guess: the reveal lasts 7 s for every turn (the last one too); a 5 s 
 
 // ============================================================
 // typed mode
+test('judge: D9 (user, 2026-10-04) — 2-character words: no 好接近 from a same-position match, hidden or revealed', () => {
+  const fish = { w: '魚龍', alt: ['鱼龙'] };
+  // before any hint: 恐龍 used to be 好接近 14 s before 龍 was revealed — half the word for free
+  for (const g of ['恐龍', '恐龙', '金魚', '魚蛋']) assert.equal(analyse(g, fish).kind, 'wrong', g);
+  // after the hint revealed 龍: X龍 says nothing new (and steered a whole table into pen types with 筆)
+  for (const g of ['恐龍', '飛龍', '魚蛋']) assert.equal(analyse(g, fish, 'standard', ['', '龍']).kind, 'wrong', `${g} / 龍 public`);
+  const chalk = { w: '粉筆', alt: ['粉笔', 'chalk'] };
+  for (const g of ['鉛筆', '毛筆', '蠟筆', '炭筆', '原子筆']) assert.equal(analyse(g, chalk, 'standard', ['', '筆']).kind, 'wrong', g);
+  // still close: the answer reversed, the answer inside a longer guess, the entry's own `near` list
+  assert.equal(analyse('龍魚', fish).kind, 'close');
+  assert.equal(analyse('龍魚', fish, 'standard', ['', '龍']).kind, 'close', 'shares the hidden 魚');
+  assert.equal(analyse('魚龍化石', fish, 'standard', ['', '龍']).kind, 'close', 'contains the whole answer: never public');
+  assert.equal(analyse('粉筆', chalk, 'standard', ['', '筆']).kind, 'right');
+  assert.equal(analyse('白板筆', { ...chalk, near: ['白板筆'] }, 'standard', ['', '筆']).kind, 'near');
+  // strict: what standard would call wrong stays wrong (public), the rest stays hidden
+  assert.equal(analyse('恐龍', fish, 'strict').kind, 'wrong');
+  assert.equal(analyse('鱼龙', fish, 'strict').kind, 'right', 'an alt spelled exactly');
+});
+
+test('judge: D9 — for every length, a near miss that shares only revealed characters is not 好接近', () => {
+  const idiom = { w: '守株待兔', alt: [] };
+  assert.equal(analyse('守株', idiom).kind, 'close', 'a piece, nothing revealed');
+  assert.equal(analyse('守株', idiom, 'standard', ['守', '株', '', '']).kind, 'wrong', 'a piece made of public characters only');
+  assert.equal(analyse('守株待', idiom, 'standard', ['守', '株', '', '']).kind, 'close', 'shares the hidden 待');
+  const wheel = { w: '摩天輪', alt: ['摩天轮'] };
+  assert.equal(analyse('摩地輪', wheel, 'standard', ['', '', '輪']).kind, 'close', 'edit distance 1: shares the hidden 摩');
+  assert.equal(analyse('摩天', wheel, 'standard', ['摩', '', '']).kind, 'close', 'shares the hidden 天');
+  assert.equal(analyse('天摩輪', wheel, 'standard', ['', '天', '']).kind, 'close', 'scrambled');
+  // an ambiguous character revealed in one spelling is public in every spelling
+  const noodles = { w: '炒麵', alt: [] };
+  assert.equal(analyse('湯麪', noodles, 'standard', ['', '麵']).kind, 'wrong');
+  // property over the real bank: whatever is revealed, a guess that contains the word is never public text
+  let n = 0;
+  for (const e of FLAT) {
+    if (n++ % 4) continue;
+    const cells = Array.from(e.w).map((c, i) => (i % 2 ? c : ''));
+    for (const g of [`${e.w}嘅嘢`, `係咪${e.w}同老虎`]) assert.notEqual(analyse(g, e, 'standard', cells).kind, 'wrong', `${e.w} / ${g}`);
+  }
+});
+
 // ============================================================
 
 const mkTyped = (n = 5, seed = 3, over = {}) => {
@@ -998,6 +1060,25 @@ const mkTyped = (n = 5, seed = 3, over = {}) => {
   return sim;
 };
 const say = (sim, pid, text, dt = 800) => { sim.now += dt; return sim.act(pid, { type: 'guess', text }); };
+
+test('draw-guess typed: D9 — the engine passes the revealed characters: X龍 is 好接近 neither before nor after 龍 shows', () => {
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const sim = mk(5, seed, typedCfg, bankOf([{ w: '魚龍', alt: [], level: 1, cat: '海洋生物' }, TRIO[1], TRIO[2]]));
+    pick(sim, '魚龍');
+    const [a, b, c] = guessers(sim);
+    const kindOf = (pid) => T(sim).guesses.filter((g) => g.pid === pid).at(-1).kind;
+    say(sim, a, '恐龍');
+    assert.equal(kindOf(a), 'wrong', 'before any reveal: one character in the same place is wrong');
+    while (!view(sim, null).play.mask.cells.some(Boolean) && sim.state.phase === 'play') sim.advance();
+    const shown = view(sim, null).play.mask.cells.find(Boolean);
+    assert.ok(shown, 'the 50 % hint revealed one character');
+    const other = shown === '魚' ? '魚蛋' : '恐龍';
+    say(sim, b, other);
+    assert.equal(kindOf(b), 'wrong', `after ${shown} shows, ${other} says nothing new`);
+    say(sim, c, '龍魚');
+    assert.equal(kindOf(c), 'close', 'the answer reversed is still 好接近');
+  }
+});
 
 test('draw-guess typed: right, close and wrong guesses land in the feed the way each seat may see them', () => {
   const sim = mkTyped(5, 3);
@@ -2323,8 +2404,11 @@ test('draw-guess ui: every phase renders on every seat and the table, idempotent
             const own = (v.feed ?? []).filter((g) => g.pid === seat.pid && g.text).map((g) => g.text).join('');
             for (const c of secretsFor(sim, seat.pid)) if (!own.includes(c)) assert.ok(!text.includes(c), `${seat.pid ?? 'table'} reads ${c} on screen (${s.phase})`);
           }
-          if (s.phase === 'play' && isDrawer && s.cfg.guessMode === 'shout') {
-            assert.ok(!text.includes(t.word.w), 'the drawer’s screen keeps the word hidden until asked (a shared phone lies on the table)');
+          if (s.phase === 'play' && isDrawer) {
+            assert.ok(!text.includes(t.word.w), `the drawer’s screen keeps the word hidden until asked (${s.cfg.guessMode}: a shared phone lies on the table)`);
+            // typed: a solve never echoes the word into the drawer's feed
+            const right = findEls(seat.root, (n) => n.cls.has('dg-feed-row') && n.cls.has('right')).map(visibleText).join('');
+            for (const ch of t.word.w) assert.ok(!right.includes(ch), 'a right guess shows no text on the drawer’s phone');
           }
           if (s.phase === 'play' && v.role === 'guesser' && s.cfg.guessMode === 'typed') {
             const input = findEls(seat.root, (n) => n.cls.has('dg-input'))[0];
@@ -2426,4 +2510,100 @@ test('draw-guess ui: taps send what the engine accepts — pick, peek, name chip
     assert.equal(plog.canvases.length, 0);
     for (const seat of pseats) seat.handle.destroy();
   });
+});
+
+test('draw-guess ui: typed — the drawer’s feed never spells the word, the late ✔ keeps its own clock, the next drawer is named', async () => {
+  await withUi(async (ui) => {
+    const log = { covers: [], canvases: [], sfx: [], timers: 0 };
+    const sim = mk(4, 3, { ...typedCfg }, bankOf(TRIO));
+    const seats = mountAll(ui, sim, log);
+    const ctx = () => ({ paused: false, ink: { epoch: sim.state.inkEpoch, strokes: [] } });
+    const render = () => { for (const seat of seats) seat.handle.update(sim.view(seat.pid), ctx()); };
+    const seatOf = (pid) => seats.find((x) => x.pid === pid);
+    render();
+    // the pick: the drawer's screen announces itself (typed play is silent); the others see how long they may wait
+    const drawer = seatOf(D(sim));
+    assert.equal(findEls(drawer.root, (n) => n.cls.has('dg-pick-now')).length, 1, 'the drawer’s pick screen flashes');
+    for (const seat of seats.filter((x) => x !== drawer)) {
+      assert.equal(findEls(seat.root, (n) => n.cls.has('dg-pick-now')).length, 0);
+      assert.ok(visibleText(seat.root).includes('最遲 20 秒後開始畫'), `${seat.pid ?? 'table'} sees the pick clock`);
+    }
+    pick(sim, '摩天輪');
+    const word = T(sim).word;
+    const [a, b, c] = guessers(sim);
+    assert.ok(say(sim, a, '摩天輪'));       // right
+    assert.ok(say(sim, b, '摩天大樓'));     // close (private)
+    assert.ok(say(sim, c, '天空'));         // wrong (public text)
+    render();
+    const rowsText = (root, kind) => findEls(root, (n) => n.cls.has('dg-feed-row') && n.cls.has(kind)).map(visibleText).join('|');
+    const screen = () => visibleText(drawer.root);
+    assert.ok(!screen().includes(word.w), 'the word is not on the drawer’s screen after a solve');
+    assert.ok(rowsText(drawer.root, 'right').includes('✅ 估中（已計）'));
+    for (const ch of word.w) {
+      assert.ok(!rowsText(drawer.root, 'right').includes(ch), `a right guess shows no text (${ch})`);
+      assert.ok(!rowsText(drawer.root, 'close').includes(ch), `a near miss is starred (${ch})`);
+    }
+    assert.ok(rowsText(drawer.root, 'close').includes('＊＊大樓'), 'the drawer still reads the near miss');
+    const wrongTexts = (root) => findEls(root, (n) => n.cls.has('dg-feed-row') && n.cls.has('wrong'))
+      .map((r) => visibleText(findEls(r, (n) => n.cls.has('dg-feed-text'))[0]));
+    assert.deepEqual(wrongTexts(drawer.root), wrongTexts(seatOf(a).root), 'a wrong text reads the same on the drawer’s phone as on everybody’s');
+    assert.ok(rowsText(drawer.root, 'wrong').includes('天空'));
+    // the word chip sits in a fixed-height slot: opening it never moves the canvas
+    const slot = findEls(drawer.root, (n) => n.cls.has('dg-word-slot'))[0];
+    assert.ok(slot && findEls(slot, (n) => n.cls.has('dg-word-chip')).length === 1);
+    // a revealed character is public: the starred copy shows it again
+    while (!view(sim, null).play.mask.cells.some((x) => x && x !== ' ') && T(sim).pending.length) sim.advance();
+    const shown = view(sim, null).play.mask.cells.filter((x) => x && x !== ' ');
+    assert.equal(shown.length, 1);
+    render();
+    assert.ok(rowsText(drawer.root, 'close').includes(maskAnswer('摩天大樓', word, shown)));
+    assert.ok(!screen().includes(word.w));
+    // the reveal: the drawer's late ✔ counts its own 5 s down, near misses first, and folds away when it closes
+    toReveal(sim);
+    render();
+    const rv = view(sim, D(sim)).reveal;
+    assert.equal(rv.outcome, 'solved');
+    const late = findEls(drawer.root, (n) => n.cls.has('dg-late'))[0];
+    assert.ok(late && shownEl(late));
+    assert.ok(visibleText(late).includes('剩 5 秒'), visibleText(late));
+    assert.ok(findEls(late, (n) => n.cls.has('dg-feed-row'))[0].cls.has('close'), 'the likely misses come first');
+    sim.now = rv.lateUntil - 2500;
+    render();
+    assert.ok(visibleText(late).includes('剩 3 秒'));
+    sim.now = rv.lateUntil + 1;
+    render();
+    assert.ok(!shownEl(late), 'the block goes once the window is over');
+    assert.equal(findEls(drawer.root, (n) => n.cls.has('dg-feed-ok')).length, 0);
+    // who draws next, in bold on their own phone
+    const nextPid = view(sim, null).upNext[0];
+    assert.ok(nextPid);
+    const nextName = sim.players.find((p) => p.id === nextPid).name;
+    for (const seat of seats) {
+      const line = findEls(seat.root, (n) => n.cls.has('dg-next'))[0];
+      assert.ok(line && shownEl(line), `${seat.pid ?? 'table'} sees who draws next`);
+      assert.ok(line.textContent.includes(`下一個畫：${nextName}`));
+      assert.equal(line.cls.has('mine'), seat.pid === nextPid);
+      assert.equal(line.textContent.includes('（你）'), seat.pid === nextPid);
+    }
+    assert.ok(!visibleText(drawer.root).includes('幾秒後自動下一位'), 'no second countdown line');
+    for (const seat of seats) seat.handle.destroy();
+    assert.deepEqual(log.sfx, [], 'typed play stays silent');
+  });
+});
+
+test('draw-guess result: ranking lines get their own heading, and a highlight shared by most of the table is left out', () => {
+  const sim = mk(4, 3, { ...typedCfg, cycles: 1 }, bankOf(TRIO));
+  const g = guessers(sim);
+  // turn 1: the hard word, solved by three of the four seats
+  pick(sim, '守株待兔');
+  for (const p of g) assert.ok(say(sim, p, '守株待兔'));
+  toNext(sim);
+  while (sim.state.phase !== 'over') {
+    if (sim.state.phase === 'choose') pick(sim, 1);
+    sim.advance();
+  }
+  const res = sim.result();
+  assert.equal(res.linesTitle, '分數點嚟');
+  assert.ok(!res.lines.some((l) => l.includes('最多困難詞')), '3 of 4 share it: it highlights nobody');
+  assert.ok(res.lines.some((l) => l.includes('最快反應')));
 });

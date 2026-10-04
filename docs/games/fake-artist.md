@@ -161,7 +161,8 @@ Tested in a real browser with `Input.imeSetComposition`.
 | QM | the same shape: 「🧑‍🎨 你係出題者」, theme, word, 「假畫家：阿明」; no button |
 | Table / spectator | 「大家睇緊自己張卡…」 + progress |
 
-Drawing does not start until every artist has tapped 睇完喇 (research: block start until all have acknowledged). The fake's card
+Drawing does not start until every artist at the table has tapped 睇完喇 (research: block start until all have acknowledged; an artist
+the host marked absent is not waited on, §3.9). The fake's card
 and a real artist's card have the same keys in the view, the same four lines, the same peek animation and sound.
 
 **Narration (cue `r{n}:deal`):** 「第 N 輪。阿B出題。主題係「動物」。有一個人係假畫家，佢唔知題目。每個人㩒住張卡睇自己嘅，睇完㩒睇完喇。」
@@ -206,12 +207,17 @@ Paper: also every turn, 「輪到阿B。」 (the phone is the referee while eyes
 
 ### 3.5 vote → tally → [revote]
 
-All artists (fake included) vote at once on their own phone: VotePanel, pick then 「確定投俾 X」 (two taps on purpose), ballots **locked at
-submit** (no 改票), no self vote, no abstain button, QM not a candidate and does not vote. During voting everyone sees only 「已投 3/6」.
-The picture (phone mode) stays on screen above the ballot (small, so the ballot fits without scrolling); in paper mode: 「望住張紙，諗吓邊個畫得唔似。」
+All artists (fake included) vote at once on their own phone: VotePanel with `secretChoice` (decision D6: pick, then 「確定投票」 — two taps on
+purpose — and your own phone then says 「已投 ✓」, never whom), ballots **locked at submit** (no 改票), no self vote, no abstain button, QM not
+a candidate and does not vote. During voting everyone sees only 「已投 3/6」.
+The picture (phone mode) stays on screen above the ballot at **full size** (this is when the table matches small strokes to people; a
+240 px picture was too small in the playtest), and the ballot is a dense two-column grid under it. Every dot in the ballot and in the
+tally is the seat's **pen** colour (the colour of its strokes), not its lobby colour: the UI hands VotePanel players carrying `color: pen`
+(plus `colorOf: pen`). In paper mode: 「望住張紙，諗吓邊個畫得唔似。」
 When the last ballot is in → `tally`.
 
-**tally** (lingers 4.5 s, then moves on by itself; host 下一步 skips): the simultaneous reveal — a bar per artist, who voted for whom — and a verdict:
+**tally** (lingers **7 s** — decision D12 — then moves on by itself, with a bar that empties over those 7 s; host 下一步 skips): the
+simultaneous reveal — a bar per artist, who voted for whom — and a verdict:
 `🎯 揪到假畫家：阿明！` (only when caught — otherwise the fake is **not** named yet), `😏 假畫家逃過一劫…`, `⚖️ 平票！冇被指嘅人再投一次`.
 Notes under it: 「平票，但假畫家喺最高票入面，所以算揪到。」 / 「舊版規則：平票一律當冇揪到。」
 
@@ -236,12 +242,16 @@ Then a second tally (「再投結果」).
 
 ### 3.6 guess — the caught fake's one guess
 
-Everyone sees 「🕶️ 阿明 係假畫家！有一次機會估題目」 (the identity is public now) and the picture (for the fake to look at).
+Everyone sees 「🕶️ 阿明 係假畫家！有一次機會估題目」 (the identity is public now) and the full-size picture (for the fake to look at).
 
 | Mode | Fake | Judge | Others |
 |---|---|---|---|
-| 開口講 | 「🎤 你被揪出喇。大聲講出你估嘅題目，等判斷嗰個人㩒啱或者錯。」 | the word large + 「✅ 啱」「❌ 錯」, each needs a second tap (「確定「啱」？再㩒一下」) | 「阿明 大聲講緊佢估嘅題目，等 阿B 判斷…」 |
-| 打字 | a field + 「就係呢個！」 + 「我唔知」; typing handled like the QM's (IME-safe) | waits | waits; the typed guess is public once sent |
+| 開口講 | 「🎤 你被揪出喇。大聲講出你估嘅題目，等判斷嗰個人㩒啱或者錯。」 | the word large **behind a hold-to-peek cover** (「㩒住睇答案」, closes on release) + 「✅ 啱」「❌ 錯」 outside the cover, each needs a second tap (「確定「啱」？再㩒一下」) | 「阿明 大聲講緊佢估嘅題目，等 阿B 判斷…」 |
+| 打字 | a field + 「就係呢個！」 + 「我唔知」; typing handled like the QM's (IME-safe) | waits; in `judge` the typed guess is locked, so the word shows uncovered | waits; the typed guess is public once sent |
+
+**Why the cover (spoken):** the fake is still thinking while the judge waits, and in app-QM mode the judge is the host seat, whose phone often
+lies in the middle of the table for narration. One glance at a 2.25 rem title would win the round, so the answer is covered like every other
+secret in this game. The judge already knows the word (a real artist or the QM); the peek is only for checking synonyms.
 
 **Who is the judge:** the QM in player mode; otherwise the host seat if it is a real artist, else the next artist after the fake in seat order
 (`engine.setup` receives `hostPid` from the session). The judge is never the fake.
@@ -266,12 +276,21 @@ Shown to everyone, no secrets left:
 - 📱 **the picture with every stroke's owner:** legend chips (colour dot + name, 🕶️ on the fake); tapping a chip greys out everybody else's strokes;
   「▶ 重播」 redraws the strokes one by one in the order they were drawn
 - 📝 the drawing order per lap (the paper itself is on the table), skipped strokes marked 「（放棄）」
+- 「🗳️ 邊個投邊個」: who pointed at whom, one row per accused (● 阿明 🕶️ 2 票 ← ● 阿B、● 阿C), pen colours, abstentions listed; after a revote
+  both ballots (「第一次投票」, 「再投」). The tally lingers 7 s (D12), and the accuse-and-defend talk needs it for longer, so the result keeps
+  it (public: every ballot was revealed at the tally).
 - the explanation lines (§5.6): the ballots, why the fake was or was not caught (including the tie rule), the guess and who ruled, the points
   (唔計分: who won the round)
 - every artist's (and the QM's) +points and running total (唔計分: 「贏」 and rounds won, 「3 勝」)
-- 「下一輪」 / 「睇總結」 (when this round decided the game), enabled 2.5 s after the screen appears so a stray tap cannot skip it; any artist or the QM may press it
+- **睇完 (decision D3, 2026-10-04; playtest finding #5):** every artist and the QM at the table has 「睇完 ✓」, enabled 2.5 s after the
+  screen appears so a stray tap cannot skip it; after the tap it reads 「✓ 睇完 · 等緊其他人」. Every phone shows the same 「睇完 3 / 5 · 等緊：
+  阿明、小美 · 齊人就開下一輪」 (「…齊人就睇總結」 when this round decided the game). The next round comes when **every present seat of the
+  round** has tapped; the host's ⏭ forces it (the first press finishes the narration line). One eager friend no longer cuts everyone's
+  reveal short.
 
 **Narration (cue `r{n}:result`, 4 s):** 「假畫家被揪出，但估中題目，所以假畫家贏。題目係大象，假畫家係阿明。阿明，出題者阿B各得 2 分。」
+With the app as question master there is one scorer, so no 各: 「…假畫家係阿明。阿明得 2 分。」 The scoring texts follow the QM mode too: the
+quick rule reads 「假畫家贏 +2（有出題者，佢都 +2）；真畫家贏每人 +1。」 and the lobby's 計分 help names the 出題者 only in player-QM mode.
 
 ### 3.8 over
 
@@ -282,6 +301,26 @@ A voided round gets one line: 「第 3 輪（作廢，唔計）「雪櫃」（�
 `result.points` = the game's totals (唔計分: `{}`, nothing reaches the evening scoreboard's points); winners = the highest total, equal totals share
 (「阿明、阿B 同分奪冠，各 6 分」); 唔計分: the most rounds won (「阿明 贏得最多輪（3 輪）」).
 `result.carry = { lastFake, nextQm }` (host only, never in a view) hands the QM rotation and the anti-streak to the next game of 假畫家.
+
+### 3.9 Absent seats (D4, decision 2026-10-04)
+
+The host can mark a seat absent (`@absent`; the shell offers it for a phone that stopped answering) and back (`@present`). Absent seats are
+public (`view.absent`, 💤 on the order chips and the score strip) and are never waited on for the rest of the game:
+
+- **deal**: the drawing starts once every artist at the table has looked.
+- **draw**: an absent artist's turn is skipped — when its turn comes, or at once if it is drawing — and recorded as `kind: 'away'`
+  (「（唔喺度）」 in the paper-mode drawing order); its laps count as used, so the round still has `artists × laps` slots.
+- **vote / revote**: it does not vote (a ballot already cast stays) and it is no candidate — were it the fake, the round would have been voided.
+  A voter that leaves while its ballot is missing closes the vote if everyone else is in.
+- **the fake, before the round is decided** (anything up to the tally that names it, except a tally where it already escaped), or **the
+  question master**: the round is voided exactly like 呢鋪唔計 (no points, recorded as 「（作廢，唔計）…（阿明 唔喺度）」), and a fresh
+  round is dealt under the same number without the absent seat (a QM is replaced by the next present seat in order).
+- **a caught fake** that leaves before its guess gives no answer: a wrong guess, 「阿明 唔喺度，冇估到，當估錯。」 (`guess.by: 'away'`). A judge
+  who leaves is replaced (the next present artist after the fake).
+- **result**: its 睇完 is not needed.
+- **later rounds**: it sits out — not an artist, never the fake, never the QM — until it is marked back.
+- Refused (state unchanged → the shell says this game cannot) when fewer than 3 artists (plus the QM in player mode) would be left.
+- Unavoidable and by decision: when the round goes on after a seat is marked absent, the table learns that seat was not the fake.
 
 ## 4. Single-device play and paper mode
 
@@ -296,6 +335,9 @@ device taps 畫完 (the shell's seat switcher), or the QM keeps the table moving
 **Paper mode in general.** Needs a sheet and one pen per artist (colour = the seat colour; names and order numbers are shown too). The picture is not stored,
 so the result shows the drawing order instead of a replay.
 
+**睇完 on a shared phone.** The 「睇完」 tap sends `seats: [the other seats on this phone]`, so a phone that holds several seats reads the result
+once for all of them (a phone holding the whole table moves on with one tap).
+
 ## 5. Engine
 
 ### 5.1 State (PRIVATE marked)
@@ -308,19 +350,22 @@ phase, deadline, timerLabel                             qmPtr        index of th
 roundNo, started, totalRounds (0 = open target game), ending          lastFake     previous scored round's fake (or carry.lastFake)
 scores {pid:n}, wins {pid:n} (rounds won), stats {pid:{fake,fakeWins,caught,qm,spotted}}
 history[]          finished rounds (public once finished): { n, qm, fake, word, theme, outcome, fakeSide, caught, tieRule, judge, scoring,
-                   winners, round1, round2, guess, deltas } — or a voided one { n, voided: true, qm, word, theme, fake, phase }
+                   winners, round1, round2, guess, deltas } — or a voided one { n, voided: true, qm, word, theme, fake, phase,
+                   why: 'host' | 'absent', absent: pid | null }
+absent {pid:true}  PUBLIC: seats the host marked absent (D4)
 round: {
   n, key, redo            n = the round number shown; key = rounds started (cue ids); redo = dealt again after 呢鋪唔計
   qm, artists[]           artists in seat order starting left of the QM (all seats without a QM)
   theme                   PUBLIC once dealt          word, alt[]   PRIVATE
   fake                    PRIVATE until caught / the round is over
   draft {seq,theme,word,alt}   PRIVATE to the QM        acks {pid:true}
-  turnOrder[], turn, strokes[{pid,lap,kind}]     kind: ink | paper | forfeit
+  turnOrder[], turn, strokes[{pid,lap,kind}]     kind: ink | paper | forfeit | away (an absent artist's skipped turn)
   vote {round, voters[], candidates[], votes{pid:target|null}}      votes PRIVATE until the tally
   tally1, tally2 {round, counts, top, votes, abstained}             public after the reveal
   caught (null while a second ballot is pending), revotePending, next ('revote' | 'guess' | 'score')
-  judge, guess {text, mode, correct, by}      by: judge | match | none | auto
+  judge, guess {text, mode, correct, by}      by: judge | match | none | auto | away (the caught fake left)
   rv                      the reveal object (public)
+  seen {pid:true}         result: who has tapped 睇完 (public, D3)
 }
 ```
 
@@ -343,37 +388,43 @@ All from a seat (`pid` must be one of the players); anything else is ignored and
 | `{type:'vote', target}` | vote / revote | sender is in `vote.voters`, has not voted, target ∈ candidates and ≠ self (or `null` = abstain, used by the host) | record; all voted → tally |
 | `{type:'guess', text}` | guess (typed) | sender is the fake, text a string | match → result; empty → wrong; else → judge |
 | `{type:'verdict', correct}` | guess (spoken) / judge | sender is the judge, `correct` a boolean | result |
-| `{type:'next'}` | result | an artist or the QM | next round, or `over` |
+| `{type:'next', seats?}` | result | an artist or the QM at the table who has not tapped yet | 睇完: mark it (and `seats`, the other seats of a passed-round phone); every present artist + QM → next round, or `over` |
 | `@cue-done {id}` / `@next` (host) | any | id matches the current cue / — | `@next` first acknowledges the cue, then skips the step (below) |
-| `@void-round` (host, 呢鋪唔計) | any before `result` | — | the round is thrown away (no points, wins or stats; its fake does not count for anti-streak), recorded as voided for the recap; a fresh round under the same number: new word, new fake, the next QM (research: a QM who drops is replaced by the next in order), a new picture, the redo cue 「上一鋪唔計，重新嚟過。」. In `result`/`over` nothing happens (the round is already scored) |
+| `@void-round` (host, 呢鋪唔計) | any before `result` | — | the round is thrown away (no points, wins or stats; its fake does not count for anti-streak), recorded as voided for the recap; a fresh round under the same number: new word, new fake, the next QM (research: a QM who drops is replaced by the next in order), a new picture, the redo cue 「上一鋪唔計，重新嚟過。」. In `result`/`over` nothing happens (the round is already scored); `engine.canVoid(state)` says so with a reason (§8.3) |
 
 `@next` (host 下一步, second press) per phase: `qm-input` deal a bank word; `deal` everybody counts as having looked; `first` random first drawer; `draw`
 give the stroke up (paper: counts as done); `vote`/`revote` missing ballots become abstentions (flagged in the reveal, never convict); `tally` move on;
-`guess`/`judge` the guess counts as wrong; `result` next round.
+`guess`/`judge` the guess counts as wrong; `result` next round (whoever has not tapped 睇完 yet).
+
+| host action | when | effect |
+|---|---|---|
+| `@absent {pid}` (D4) | any before `over`; refused (unchanged) when fewer than 3 artists (+ the QM in player mode) would be left | §3.9 |
+| `@present {pid}` | the seat is absent | back: waited on again; in an open ballot it belongs to it votes again; from the next round it is dealt in again |
 
 ### 5.3 advance / deadline
 
 - `draw` with `turnSecs`: the stroke is given up, the next drawer gets `now + turnSecs`.
-- `tally`: 4.5 s, then `revote` / `guess` / score.
+- `tally`: 7 s (`TALLY_MS`, D12), then `revote` / `guess` / score.
 - All other phases have no deadline. A timer that fires early is ignored.
 
 ### 5.4 view (whitelist), focus, canInk
 
-- `view(state, pid)` builds a fresh object: `me, phase, title, subtitle, round {n, total, key, redo}, mode {…, scoring}, qm, artists, seats, pens, scores, wins, theme, fake` (null until caught / round over),
+- `view(state, pid)` builds a fresh object: `me, phase, title, subtitle, round {n, total, key, redo}, mode {…, scoring}, qm, artists, seats, pens, scores, wins, absent` (D4, 💤), `theme, fake` (null until caught / round over),
   `myRole` (`artist` / `fake` / `question-master`, own role only), `mine` (the card: `{role, theme, word}` — `word: null` for the fake — and `fake` only for the QM),
   `draft` (QM), `ready`, `first`, `draw` (`current, lap, laps, total, turn, order, counts, canDraw, canDone, minLen`), `vote` (`candidates, voters, done, total, canVote`, and `myVote` only the viewer's own),
-  `tally` (after the reveal), `guess` (`judge, stage, text, canGuess, canJudge`, `word` for the judge only), `reveal`, `last`, `deadline`, `hint`.
+  `tally` (after the reveal), `guess` (`judge, stage, text, canGuess, canJudge`, `word` for the judge only), `reveal`, `seen` (result: `{ who, total }`, D3), `last`, `deadline`, `hint`.
 - `focus`: `qm-input`/`first` → QM; `deal` → artists not yet looked; `draw` → the drawer; `vote`/`revote` → voters not yet voted; `guess` → the judge (spoken) or the fake (typed);
   `judge` → the judge; otherwise `null`.
-- `blocking(state, pid)` (stall detection): exactly the seats in `focus`; nobody during the tally linger or on the result screen (anyone may
-  press 下一輪 there, so a dead phone holds nothing up). Tested: whenever there is no deadline and no result, somebody is blocking, has a legal
-  action, and 代佢做 moves the game.
+- `blocking(state, pid)` (stall detection): the seats in `focus`, and on the result a present artist / QM that has not tapped 睇完 (so a dead
+  phone there gets 代佢做 = 睇完); nobody during the tally linger; never an absent seat. Tested: whenever there is no deadline and no result,
+  somebody is blocking, has a legal action, and 代佢做 moves the game.
 - `canInk(state, pid)`: phase `draw`, phone mode, `pid` is the current drawer.
 
 ### 5.5 autoAct (a stalled seat)
 
 `qm-input` → `qm-auto`; `deal` → `ready`; `first` → the first artist; `draw` → `skip` (phone) / `done` (paper); `vote`/`revote` → abstain; typed `guess` → an empty guess;
-spoken guess and `judge` → 「錯」; `result` → `next`. An automatic action never convicts and never hands the fake a win.
+spoken guess and `judge` → 「錯」; `result` → `next` (a seat that has not tapped 睇完). An automatic action never convicts and never hands the fake
+a win. An absent seat gets nothing.
 
 ### 5.6 Results and explanation
 
@@ -405,7 +456,9 @@ every other seat's hint (and every public cue) is unchanged. Roles are explained
 | draw | drawer (phone) 「輪到你：喺畫板一筆過畫完，放手就算一筆。」, (paper) 「…畫完再㩒「畫完」。」 / others 「睇住阿明畫；留意邊個畫得唔似。」 / QM 「你唔使畫，睇住大家畫；假畫家贏，你都贏。」 |
 | vote | 「揀你覺得係假畫家嘅人再確定；唔可以投自己。」 |
 | guess | fake 「你被揪出：打出你估嘅題目，只有一次機會。」 / judge 「聽佢估咗乜，啱就㩒「啱」，唔啱㩒「錯」。」 |
-| result | 「睇吓題目、假畫家同邊個贏，再㩒「下一輪」。」 |
+| tally | 「睇吓邊個投邊個，幾秒後自動繼續。」 |
+| result | 「睇吓題目、假畫家同邊個贏，睇完㩒「睇完」。」 / after the tap 「等其他人睇完，齊人就開下一輪。」 (「…睇總結。」) |
+| any (absent seat) | 「房主當咗你唔喺度；返咗嚟就叫房主加返你。」 |
 
 ## 6. Edge cases → tests (`tests/fake-artist.test.mjs`)
 
@@ -443,7 +496,16 @@ every other seat's hint (and every public cue) is unchanged. Roles are explained
 | 唔計分 (none-v2): no points, round winners, most rounds wins, fields | `唔計分 (none-v2, the current print)…` |
 | distinct pens for any lobby colours, contrast, same map everywhere | `pens — every seat gets its own pen…` |
 | random voids × both scorings × every head-count | `fuzz with 唔計分 and the host voiding rounds at random…` |
-| the UI (fake DOM): every phase × seat × 3 set-ups, no early word for the fake / table, no junk text; every control sends what the engine accepts (ready, stroke after `onStrokeEnd` only once per turn, nothing on `onShort`, vote, judge's two taps, typed guess, 畫完 / 幫佢㩒, QM entry refused when the theme names the word, 下一輪 locked for a beat) | `UI (fake DOM) renders every phase…` |
+| the UI (fake DOM): every phase × seat × 3 set-ups, no early word for the fake / table, no junk text; every control sends what the engine accepts (ready, stroke after `onStrokeEnd` only once per turn, nothing on `onShort`, vote, judge's two taps, typed guess, 畫完 / 幫佢㩒, QM entry refused when the theme names the word, 睇完 locked for a beat) | `UI (fake DOM) renders every phase…` |
+| spoken guess: the judge's answer under hold-to-peek, 啱 / 錯 outside it; typed: visible (playtest #7) | `#7 spoken guess — the judge’s answer is behind hold-to-peek…` |
+| full-size picture on vote and guess; pen colours in ballot and tally (playtest #27) | `#27 the vote and guess screens keep the full-size picture…` |
+| who voted for whom on the result screen, both ballots after a revote | `the result screen keeps who voted for whom…` |
+| scoring text and narration per QM mode, 「得 2 分」 for one scorer (playtest #28) | `#28 scoring text and narration fit the QM mode…` |
+| `engine.canVoid` agrees with `@void-round` and gives the reason | `呢鋪唔計 explains itself…` |
+| D12: the tally stays 7 s; the result keeps every ballot | `D12: who voted for whom stays 7 s…` |
+| D3: 睇完 from every present seat of the round, one tap is not enough, `seats` for a shared phone, host forces | `D3: the result moves on once every seat…` |
+| D4: absent artist not waited on, strokes skipped (also mid-turn), no vote / no candidate, ballot closes; absent fake / QM voids; caught fake gives no answer; an escaped fake keeps its win; judge replaced; refusals; fuzz | `D4: …` (6 tests) |
+| UI: 睇完 n / m after the lock, `secretChoice`, 💤, `seats` from a shared phone, the absent phone's note | `fake-artist UI D3/D4/D6…` |
 
 Browser checks done (own headless Chrome via CDP, iPhone-size viewport, the real app in local mode): deal with peek (fake vs artist), pass gates, ten strokes drawn on the
 real Canvas with the mouse (an accidental tap on turn 3 was discarded and did not advance the turn), vote/tally/guess/result in both draw modes, the typed-guess and
@@ -460,6 +522,8 @@ the UI for three seats through 14 complete games (3 741 renders: no exception, n
 - Host 代佢做 never decides a vote and never gives the fake a win.
 - Draw-start cue is short and non-blocking; paper mode announces every turn because eyes are on the sheet.
 - All sound is shared SFX (`lock`, `deal`, `reveal`, `deny`); nothing differs between the fake and the others.
+- Nobody's reveal is cut short: who voted for whom stays 7 s and stays on the result, which waits for everyone's 睇完.
+- A friend who wanders off does not stall the picture: the host marks them 💤 and their strokes are skipped.
 
 ## 8. Framework requests
 
@@ -474,5 +538,13 @@ Still open:
    results screen (after `over`) cannot, because the session stops. If a keepsake picture is wanted there, the shell would need to keep `ink` and render a view-only Canvas.
 2. **Narrator bar over the board.** On the host's phone the fixed NarratorBar can cover the lower part of the Canvas while a cue is unacknowledged (the page scrolls, but
    a drawer who is also the host loses the bottom of the sheet). A compact bar (or auto-collapse after the cue is spoken) while a Canvas can draw would help.
-3. **A 「呢鋪唔計」 button.** `app.hostCtl.voidRound()` exists but no screen calls it yet. The host ⋯ menu needs it (two taps, it throws a round away);
-   when it returns false (here: on the result screen, where the round is already scored) a toast such as 「呢輪已經計咗分，㩒下一輪就得」 instead of silence.
+3. **呢輪作廢 on a scored round says 「呢個遊戲唔支援」.** The host ⋯ menu now has 🗑️ 呢輪作廢 (`js/ui/screens/play.js` `voidRound`), but when
+   `app.hostCtl.voidRound()` returns false it always toasts 「呢個遊戲唔支援」, which is untrue here: on the result screen the round is already
+   scored, so it is left alone on purpose. The engine now says so: `engine.canVoid(state)` → `{ ok: true }` | `{ ok: false, message }`
+   (the shape of a refused lobby op), e.g. `{ ok: false, message: '呢輪已經計咗分，大家㩒「睇完」就得' }` on `result`. It agrees with `@void-round`
+   in every phase (tested). The shell should ask it (through the room, host only) before confirming, and toast `message` instead of 「唔支援」.
+   Until it does, the 📖 rules section 「有人部手機冇電」 says that a scored round cannot be voided and 「睇完」 is the way on.
+5. **Absent seats (D4).** The engine takes `{ type: '@absent', pid }` / `{ type: '@present', pid }` as HOST (§3.9) and publishes
+   `view.absent: [pid]` (the same in every view); `blocking`, `legalActions` and `autoAct` are empty for an absent seat.
+4. **VotePanel `colorOf`.** Ballot and tally dots must be pen colours. The UI passes players with `color` overridden by the pen and also
+   `colorOf: pen`, which VotePanel now reads (#15); either alone gives pen-coloured dots.

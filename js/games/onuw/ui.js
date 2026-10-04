@@ -12,8 +12,12 @@
 //    live differs: a seat with nothing to do sees the same boxes, greyed out.
 //  - nothing here makes a sound at night (no api.sfx, no PlayerPicker, no Timer):
 //    their taps and ticks would tell the room who is awake.
-//  - what a seat LEARNED sits behind a hold-to-peek cover; the big button is the
-//    decoy for everybody ("ack") and also the confirm button for whoever has a choice.
+//  - what a seat LEARNED sits behind ONE hold-to-peek 📓 cover that every phone has
+//    at every step, holding everything it learned tonight so far (a sleeper's says
+//    「今晚未見過嘢」); the big button is the decoy for everybody ("ack") and also the
+//    confirm button for whoever has a choice.
+//  - a Doppelgänger's copy (a hidden team change) and its instructions are only ever
+//    behind that cover; her plain line and her confirm labels never name the role.
 //  - the day screen never shows a current card: only what you were dealt and what
 //    you learned, with a warning that it may be out of date.
 //
@@ -72,7 +76,20 @@ function makeEnv(api, local, refresh) {
   const players = () => api.players ?? [];
   const nameOf = (pid) => players().find((p) => p.id === pid)?.name ?? '?';
   const colorOf = (pid) => players().find((p) => p.id === pid)?.color ?? 'var(--accent)';
-  return { api, C: api.components, local, refresh, players, nameOf, colorOf };
+  /** The players for a VotePanel: an absent seat's name carries the public 💤 (D4). */
+  const markedPlayers = (view) => {
+    const away = new Set(view?.absent ?? []);
+    return players().map((p) => (away.has(p.id) ? { ...p, name: `${p.name} ${T.absentMark}` } : p));
+  };
+  /** One public line naming the 💤 seats, or '' when nobody is away. */
+  const awayText = (view) => (view?.absent?.length ? T.absentLine(view.absent.map(nameOf).join('、')) : '');
+  return { api, C: api.components, local, refresh, players, nameOf, colorOf, markedPlayers, awayText };
+}
+
+/** A small public line under a count: 「💤 暫時離開（唔使等）：阿明」 while anybody is marked absent. */
+function makeAway(E) {
+  const el = h('p', { class: 'on-count on-away', hidden: true });
+  return { el, update(view) { setText(el, E.awayText(view)); setHidden(el, !el.textContent); } };
 }
 
 /** The public role list ("今局角色"): the official tokens that sit next to the centre. */
@@ -159,8 +176,9 @@ function buildDeal(E) {
   const list = makeRoleList();
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg on-ready', type: 'button', onclick: () => { api.sfx('lock'); api.send({ type: 'ready' }); } });
   const count = h('p', { class: 'on-count' });
+  const away = makeAway(E);
   const tip = h('details', { class: 'on-tip' }, h('summary', { text: '夜晚點玩？' }), h('p', { text: T.dealTip }));
-  const el = h('div', { class: 'on-screen on-deal' }, lead, roleCard.el, list.el, readyBtn, count, tip);
+  const el = h('div', { class: 'on-screen on-deal' }, lead, roleCard.el, list.el, readyBtn, count, away.el, tip);
   return {
     el,
     update(view) {
@@ -170,6 +188,7 @@ function buildDeal(E) {
       readyBtn.disabled = done;
       setText(readyBtn, done ? T.dealReadyDone : T.dealReady);
       setText(count, T.dealCount(view.ready.done, view.ready.total));
+      away.update(view);
     },
     destroy() { roleCard.destroy(); el.remove(); },
   };
@@ -223,8 +242,9 @@ function buildNight(E) {
   const lines = h('div', { class: 'on-lines' });
   const peekFront = h('div', { class: 'on-peekfront' });
   const peekCover = C.Cover({ front: peekFront, backArt: T.nightPeekBack, backLabel: T.nightPeekLabel, lockMode: 'none', locked: false, openSound: 'none' });
-  // always in the layout (invisible when there is nothing to show) so every seat's card has the same height
-  const peekWrap = h('div', { class: 'on-peekwrap is-empty' }, peekCover.el);
+  // the same 📓 cover on every phone at every step, all night: a result stays peekable after its window closes
+  // (playtest #11), and a seat with nothing behind it looks exactly like one with something
+  const peekWrap = h('div', { class: 'on-peekwrap' }, peekCover.el);
   const panel = h('div', { class: 'on-panel' }, lines, peekWrap);
 
   const players = makeChips('on-grid');
@@ -288,6 +308,11 @@ function buildNight(E) {
 
   function labelFor(a) {
     const nm = E.nameOf;
+    // a Doppelgänger acting as her copy: the label names the pick only — 🔮 / 🗡️ / 🌪️ / 🍺 would name the copied role
+    if (a.type !== 'copy' && current?.step?.k === 'doppelganger') {
+      const picks = a.target ? [nm(a.target)] : a.a ? [nm(a.a), nm(a.b)] : (a.cards ?? [a.card]).map((i) => S.slotName(i));
+      return S.confirmNeutral(picks);
+    }
     switch (a.type) {
       case 'copy': return T.confirmCopy(nm(a.target));
       case 'look-player': return T.confirmLookPlayer(nm(a.target));
@@ -323,16 +348,12 @@ function buildNight(E) {
       lines.replaceChildren(...ls.map(([cls, text]) => h('p', { class: `on-line ${cls}`, text })));
     }
 
-    // what I learned: behind a cover, so a neighbour with open eyes cannot read it
-    const learned = awake ? night.info.map((n) => S.noteLine(n, E.nameOf)).filter(Boolean) : [];
-    peekWrap.classList.toggle('is-empty', !learned.length);
-    if (learned.length) {
-      const k = sig(learned);
-      if (peekFront.dataset.key !== k) {
-        peekFront.dataset.key = k;
-        peekFront.replaceChildren(h('ul', {}, learned.map((t) => h('li', { text: t }))));
-      }
-      peekCover.update({ front: peekFront, backArt: T.nightPeekBack, backLabel: T.nightPeekLabel, lockMode: 'none', locked: false, openSound: 'none' });
+    // what I learned tonight: behind the cover, so a neighbour with open eyes cannot read it
+    const book = S.nightBook(step, night, E.nameOf);
+    const bk = sig(book);
+    if (peekFront.dataset.key !== bk) {
+      peekFront.dataset.key = bk;
+      peekFront.replaceChildren(h('ul', {}, book.map(([t, cls]) => h('li', { class: cls || null, text: t }))));
     }
 
     // the seats and the centre: live only while I have a choice
@@ -401,8 +422,9 @@ function buildDay(E) {
   let mine = false;
   const readyBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'ready-vote', on: !mine }) });
   const count = h('p', { class: 'on-count' });
+  const away = makeAway(E);
   const hostNote = h('p', { class: 'on-count', text: T.hostSkip, hidden: !api.isHost });
-  const el = h('div', { class: 'on-screen on-day' }, banner, timerSlot, lead, recap.el, list.el, readyBtn, count, hostNote);
+  const el = h('div', { class: 'on-screen on-day' }, banner, timerSlot, lead, recap.el, list.el, readyBtn, count, away.el, hostNote);
   return {
     el,
     update(view, ctx) {
@@ -413,6 +435,7 @@ function buildDay(E) {
       readyBtn.classList.toggle('btn-locked', mine);
       setText(readyBtn, mine ? T.readyVoteDone : T.readyVote);
       setText(count, T.readyVoteCount(view.dayReady.done, view.dayReady.total, view.deadline != null));
+      away.update(view);
     },
     destroy() { timer.destroy(); recap.destroy(); el.remove(); },
   };
@@ -426,6 +449,7 @@ function buildVote(E) {
   const { api, C } = E;
   const lead = h('p', { class: 'on-lead', text: T.voteLead });
   const panel = C.VotePanel({ players: [], candidates: [], me: api.me, progress: { done: 0, total: 0 }, reveal: null, onVote: () => {} });
+  const away = makeAway(E);
   const ringTitle = h('h3', { class: 'on-h', text: T.ringTitle });
   const ringHelp = h('p', { class: 'on-note', text: T.ringHelp });
   let ringMine = false;
@@ -434,17 +458,24 @@ function buildVote(E) {
   const ringStuck = h('p', { class: 'on-warn', text: T.ringStuck });
   const ring = h('div', { class: 'on-ring' }, ringTitle, ringHelp, ringBtn, ringCount, ringStuck);
   const recap = makeRecap(E, { compact: true });
-  const el = h('div', { class: 'on-screen on-vote' }, lead, panel.el, ring, recap.el);
+  const el = h('div', { class: 'on-screen on-vote' }, lead, panel.el, away.el, ring, recap.el);
   return {
     el,
     update(view) {
+      // 💤 an absent seat casts no vote (D4): its phone says so instead of offering a ballot or the circle
+      const benched = !!view.my?.absent && view.myVote === undefined;
+      setText(lead, benched ? T.absentSelf : T.voteLead);
+      setHidden(panel.el, benched);
       panel.update({
-        players: E.players(), candidates: view.candidates ?? [], me: api.me,
+        players: E.markedPlayers(view), candidates: view.candidates ?? [], me: api.me,
         myVote: view.myVote, allowAbstain: false, allowChange: true,
+        // your own phone never prints whom you picked (D6): 「已投 ✓」 until the reveal
+        secretChoice: true,
         progress: view.progress, reveal: null, title: T.voteTitle,
         onVote: (pid) => { if (pid) api.send({ type: 'vote', target: pid }); },
       });
-      setHidden(ring, !view.ring.on);
+      away.update(view);
+      setHidden(ring, !view.ring.on || benched);
       ringMine = !!view.ring.mine;
       ringBtn.classList.toggle('btn-locked', ringMine);
       setText(ringBtn, ringMine ? T.ringOn : T.ringOff);
@@ -472,7 +503,8 @@ function buildReveal(E) {
   let done = false;
   const doneBtn = h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => api.send({ type: 'done' }) });
   const count = h('p', { class: 'on-count' });
-  const el = h('div', { class: 'on-screen on-reveal' }, banner, summary, votesBox, deadBox, cardsBox, whyBox, recapBox, doneBtn, count);
+  const away = makeAway(E);
+  const el = h('div', { class: 'on-screen on-reveal' }, banner, summary, votesBox, deadBox, cardsBox, whyBox, recapBox, doneBtn, count, away.el);
   let chime = null;       // the reveal fanfare plays once, only for a screen that was there when the cards turned over
 
   const dot = (pid) => h('span', { class: 'dot', style: { '--seat': E.colorOf(pid) } });
@@ -524,7 +556,7 @@ function buildReveal(E) {
         h('h3', { class: 'on-h', text: T.revealCards }),
         h('div', { class: 'on-cardlist' }, rv.cards.map((c) => h('div', { class: `on-fcard ${c.won ? 'win' : 'lose'}${c.dead ? ' dead' : ''}` },
           h('div', { class: 'on-fhead' }, dot(c.pid), h('b', { text: E.nameOf(c.pid) + (c.pid === me ? '（你）' : '') }), c.dead ? h('span', { text: '☠️' }) : null,
-            h('span', { class: `on-win ${c.won ? 'ok' : 'no'}`, text: c.won ? '✅' : '❌' })),
+            h('span', { class: `on-win ${c.won ? 'ok' : 'no'}`, text: c.won ? T.revealWon : T.revealLost })),
           h('div', { class: 'on-ftrail' }, h('span', { text: `${T.revealDealt} ${S.roleTag(c.orig)}` }), h('span', { class: 'arrow', text: '→' }), h('b', { text: `${T.revealFinal} ${S.roleTag(c.face)}` })),
           c.face === 'doppelganger' ? h('div', { class: 'on-fnote', text: c.copied ? `複製咗 ${S.roleName(c.copied)}` : '冇複製過，當村民' }) : null,
           h('div', { class: 'on-fteam', text: c.final === 'minion' ? (rv.cards.some((x) => x.final === 'werewolf') ? S.TEAM_LABEL.minion : S.TEAM_LABEL.minionSolo) : S.TEAM_LABEL[c.team] })))),
@@ -547,6 +579,7 @@ function buildReveal(E) {
       doneBtn.disabled = done;
       setText(doneBtn, done ? T.revealDoneAck : T.revealDone);
       setText(count, T.revealCount(view.revealDone?.done ?? 0, view.revealDone?.total ?? 0));
+      away.update(view.phase === 'reveal' ? view : null);
     },
     destroy() { clearTimeout(chime); el.remove(); },
   };
@@ -577,7 +610,8 @@ function buildTable(E) {
   const timerSlot = h('div', { class: 'on-timer', hidden: true });
   const timer = makeTimer(E, timerSlot);
   const list = makeRoleList();
-  const el = h('div', { class: 'on-screen on-table' }, title, body, bar, timerSlot, count, list.el);
+  const away = makeAway(E);
+  const el = h('div', { class: 'on-screen on-table' }, title, body, bar, timerSlot, count, away.el, list.el);
   let current = null;
   let total = 1;
   let seen = null;
@@ -606,9 +640,10 @@ function buildTable(E) {
           setText(count, T.dealCount(view.ready.done, view.ready.total));
           break;
         case 'night':
+          // no tap counter at night (playtest #18): actions count as taps, so it would say how many seats are awake
           setText(title, T.tableNightTitle(view.subtitle));
           setText(body, T.tableNightBody);
-          setText(count, T.tableAcks(view.acks.done, view.acks.total));
+          setText(count, '');
           break;
         case 'day':
           setText(title, T.tableDay);
@@ -622,6 +657,8 @@ function buildTable(E) {
           break;
         default: break;
       }
+      setHidden(count, !count.textContent);
+      away.update(view.phase === 'night' ? null : view);
       timer.update(view.phase === 'day' ? view : { deadline: null }, ctx);
       tick();
     },
